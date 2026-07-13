@@ -161,11 +161,102 @@ not deletes.
 
 ---
 
+## Deploying to Railway
+
+The repo is set up to run as **three services in one Railway project**:
+
+| Service | Source | Notes |
+|---------|--------|-------|
+| **Postgres** | Railway database plugin | Injects `DATABASE_URL` into the backend. |
+| **backend** | `backend/` (`Dockerfile` + `railway.json`) | Runs `prisma migrate deploy` then boots the API. Health check: `/api/health`. |
+| **frontend** | `frontend/` (`Dockerfile` + `railway.json`) | Builds the Vite bundle and serves it as a static SPA. |
+
+Both services build from a committed `Dockerfile`, so the build is identical on
+Railway, in CI, and locally.
+
+### Option A — connect GitHub (recommended)
+
+Railway watches the repo and redeploys on every push to `main`. This is a
+one-time setup in the browser:
+
+1. Create a project at [railway.app](https://railway.app) → **Deploy from GitHub
+   repo** → authorize Railway's GitHub app → pick `tausicapital-afk/VFW`.
+2. Add a **PostgreSQL** database to the project (**+ New → Database → Postgres**).
+3. Add the **backend** service from the repo and set its **Root Directory** to
+   `backend`. Add the **frontend** service and set its root to `frontend`.
+4. Set the environment variables below.
+5. Generate a public domain for each service (**Settings → Networking → Generate
+   Domain**), then fill `CORS_ORIGIN` and `VITE_API_BASE` with those URLs.
+
+CD is then automatic — no GitHub Actions secret needed. (`.github/workflows/ci.yml`
+still runs to gate builds on every push/PR.)
+
+### Option B — deploy from the terminal
+
+The Railway CLI is the alternative. Because login is browser-based, run it
+yourself in this session so the CLI is authenticated for the rest of the work:
+
+```
+! railway login
+```
+
+Then, from the repo root:
+
+```bash
+railway init                       # create/link a project
+railway add --database postgres    # provision Postgres
+railway up --service backend       # deploy backend/ (run from backend/, or pass --path)
+railway up --service frontend      # deploy frontend/
+railway variables --set KEY=VALUE  # set env vars per service
+```
+
+`.github/workflows/deploy.yml` wraps the same `railway up` calls for CI-driven
+deploys; it needs a `RAILWAY_TOKEN` repo secret and is disabled by default so it
+doesn't collide with Option A.
+
+### Environment variables
+
+**backend**
+
+| Variable | Value |
+|----------|-------|
+| `DATABASE_URL` | Reference the Postgres service: `${{ Postgres.DATABASE_URL }}`. |
+| `JWT_SECRET` | A long random string — `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`. |
+| `NODE_ENV` | `production` — required so the session cookie is `Secure` + `SameSite=None`. |
+| `CORS_ORIGIN` | The frontend's public URL, exactly (e.g. `https://vfw-console.up.railway.app`). |
+| `PORT` | Provided by Railway — do not set. |
+
+**frontend**
+
+| Variable | Value |
+|----------|-------|
+| `VITE_API_BASE` | The backend's public URL (e.g. `https://vfw-api.up.railway.app`). Inlined at **build** time, so a change requires a redeploy. |
+
+### First-run seed
+
+Migrations apply automatically on every backend boot. Load the catalog and demo
+data once, after the first deploy:
+
+```bash
+railway run --service backend npm run seed
+```
+
+> **Cookie note.** The API deliberately issues a cross-site session cookie
+> (`SameSite=None; Secure`) so the SPA and API can live on separate domains.
+> Browsers that block third-party cookies may drop it. If sign-in fails only in
+> the browser, the robust fix is to put both services behind one domain (serve
+> the SPA and reverse-proxy `/api` to the backend) — ask and I'll wire that up.
+
+---
+
 ## Tech stack
 
-- **Frontend** — single-file vanilla JavaScript, no framework or build step.
+- **Frontend** — `frontend/`: React 18 + Vite + TypeScript SPA (React Router,
+  TanStack Query), served static. `vfw-console.html` is the original
+  single-file vanilla-JS prototype the SPA is being built out from.
   Archivo / IBM Plex Sans / IBM Plex Mono; money and IDs always set in mono.
-- **Backend** — NestJS 10, Prisma 5, Argon2 password hashing, JWT sessions.
+- **Backend** — NestJS 10, Prisma 5, Argon2 password hashing, JWT sessions
+  in an httpOnly cookie.
 - **Database** — PostgreSQL 16.
 
 ---
