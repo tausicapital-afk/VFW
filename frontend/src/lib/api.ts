@@ -13,8 +13,13 @@ export class ApiError extends Error {
   }
 }
 
+// In production the SPA and the API live on separate Railway domains, so calls
+// need an absolute base. In dev this is empty and Vite proxies /api to the
+// backend (see vite.config.ts), which keeps the session cookie same-site.
+const API_BASE = import.meta.env.VITE_API_BASE ?? '';
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetch(API_BASE + path, {
     ...init,
     credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },

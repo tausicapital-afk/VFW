@@ -54,7 +54,8 @@ export function Shell() {
   const pending = queue?.filter((s) => s.status === 'PENDING').length ?? 0;
 
   return (
-    <div id="app" style={{ display: 'flex' }}>
+    // .on is what makes #app visible and lays out the rail + main grid.
+    <div id="app" className="on">
       <aside className="rail">
         <div className="brand">
           <div className="mk">VFW</div>

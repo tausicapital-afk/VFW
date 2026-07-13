@@ -1,0 +1,39 @@
+name: Deploy to Railway
+
+# OPTIONAL. Only use this if you want GitHub Actions to drive deploys.
+#
+# The simpler path is Railway's built-in GitHub integration: connect the repo
+# once in the Railway dashboard and it redeploys each service on every push to
+# main automatically — no secret, no workflow. Pick ONE of the two, not both,
+# or every push deploys twice.
+#
+# To use this workflow instead:
+#   1. Railway → Project → Settings → Tokens → create a Project Token.
+#   2. GitHub → repo → Settings → Secrets and variables → Actions →
+#      add RAILWAY_TOKEN with that value.
+#   3. Make sure the service names below match your Railway services.
+on:
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    if: ${{ github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install Railway CLI
+        run: npm i -g @railway/cli
+      - name: Deploy backend
+        run: railway up --service backend --ci
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      - name: Deploy frontend
+        run: railway up --service frontend --ci
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}

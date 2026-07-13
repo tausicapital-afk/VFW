@@ -23,7 +23,7 @@ export function Login() {
   }
 
   return (
-    <section id="login" style={{ display: 'grid' }}>
+    <section id="login">
       <div className="stage">
         <div className="mark">VFW</div>
         <div>
