@@ -29,9 +29,13 @@ const NAV: NavItem[] = [
   { to: '/qbo', label: 'QuickBooks', ic: '⇪', roles: ['ACCT', 'ADMIN'] },
   { grp: 'People' },
   { to: '/board', label: 'Leaderboard', ic: '★', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
+  { to: '/feedback', label: 'Designer feedback', ic: '☆', roles: ['ACCT', 'MGR', 'ADMIN'] },
+  { to: '/internal', label: 'Internal notes', ic: '✎', roles: ['ACCT', 'MGR', 'ADMIN'] },
   { grp: 'Insight' },
   { to: '/reports', label: 'Reports', ic: '▦', roles: ['ACCT', 'MGR', 'ADMIN'] },
   { to: '/audit', label: 'Audit trail', ic: '◷', roles: ['ACCT', 'MGR', 'ADMIN'] },
+  { grp: 'System' },
+  { to: '/admin', label: 'Administration', ic: '⚙', roles: ['ADMIN'] },
 ];
 
 function Avatar({ user }: { user: User }) {

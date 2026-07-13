@@ -37,6 +37,45 @@ jobs:
       - name: Compile
         run: npm run build
 
+  backend-tests:
+    name: Backend · test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vfw
+        ports:
+          - 5432:5432
+        # The job must not start hitting the DB before it is accepting connections.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # globalSetup derives <db>_test from this and `prisma db push` creates it,
+      # so nothing has to be provisioned by hand. JWT secret is a throwaway.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/vfw?schema=public
+      JWT_SECRET: ci-test-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - name: Generate Prisma client
+        run: npx prisma generate
+      - name: Run tests (pricing · ACL · lifecycle)
+        run: npm test
+
   frontend:
     name: Frontend · build
     runs-on: ubuntu-latest

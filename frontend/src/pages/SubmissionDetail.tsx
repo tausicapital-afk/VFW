@@ -5,8 +5,11 @@ import { useAuth } from '../auth/AuthContext';
 import { can } from '../lib/acl';
 import { api } from '../lib/api';
 import { fmtDate, fmtDateTime, money, PAY_LABEL } from '../lib/format';
-import type { AuditEntry, Catalog, Submission } from '../lib/types';
+import type { AuditEntry, Catalog, DesignerFeedback, Submission } from '../lib/types';
 import { Page } from '../shell/Shell';
+import { DocumentsCard } from './DocumentsCard';
+import { FeedbackModal, Stars } from './Feedback';
+import { InternalCard } from './Internal';
 import { StatusPill } from './Submissions';
 
 const PAYMENT_METHODS = [
@@ -210,6 +213,8 @@ export function SubmissionDetail() {
             </div>
           </div>
 
+          <DocumentsCard submissionId={sub.id} />
+
           <div className="card" style={{ marginTop: 16 }}>
             <div className="hd">
               <h3>Audit trail</h3>
@@ -279,6 +284,18 @@ export function SubmissionDetail() {
             </div>
           </div>
 
+          {/* Confidential. Rendered only for internal.view roles — and the server
+              refuses it outright for the rep on this record, whatever their role.
+              The submission payload itself carries no comments at all. */}
+          {can('internal.view', user?.role) && (
+            <InternalCard
+              submissionId={sub.id}
+              canComment={can('internal.comment', user?.role)}
+            />
+          )}
+
+          {can('feedback.view', user?.role) && <FeedbackCard sub={sub} />}
+
           {isAcct ? (
             <AccountingCard sub={sub} catalog={catalog} onSaved={refresh} />
           ) : (
@@ -301,6 +318,65 @@ export function SubmissionDetail() {
 
       {payOpen && <PaymentModal sub={sub} onClose={() => setPayOpen(false)} onDone={() => { setPayOpen(false); refresh(); }} />}
     </Page>
+  );
+}
+
+/**
+ * Designer feedback is recorded against the CONTACT, not the submission — a
+ * brand that comes back for a second show is the same customer, and their view
+ * of the company is not reset by a new sale. So this card shows the feedback for
+ * this submission's brand.
+ */
+function FeedbackCard({ sub }: { sub: Submission }) {
+  const { user } = useAuth();
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+
+  const { data } = useQuery({
+    queryKey: ['feedback'],
+    queryFn: () => api.get<{ feedback: DesignerFeedback[] }>('/api/feedback'),
+  });
+
+  const mine = (data?.feedback ?? []).filter((f) => f.contact.id === sub.contact.id);
+
+  return (
+    <div className="card" style={{ marginTop: 16 }}>
+      <div className="hd">
+        <h3>Designer feedback</h3>
+        <div className="sp" />
+        {can('feedback.record', user?.role) && (
+          <button className="btn sm" onClick={() => setOpen(true)}>+ Record</button>
+        )}
+      </div>
+      <div className="bd">
+        {!mine.length ? (
+          <p className="sm mut">Nothing recorded for {sub.contact.brand} yet.</p>
+        ) : (
+          <div className="log">
+            {mine.map((f) => (
+              <div className="e" key={f.id}>
+                <div className="t"><Stars n={f.rating} /> {f.body}</div>
+                <div className="m">{f.recordedBy.name} · {fmtDateTime(f.createdAt)}</div>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="note lock" style={{ marginTop: 12 }}>
+          A coaching signal, not a compensation input — it does not move the leaderboard.
+        </div>
+      </div>
+
+      {open && (
+        <FeedbackModal
+          contactId={sub.contact.id}
+          onClose={() => setOpen(false)}
+          onDone={() => {
+            setOpen(false);
+            void qc.invalidateQueries({ queryKey: ['feedback'] });
+          }}
+        />
+      )}
+    </div>
   );
 }
 

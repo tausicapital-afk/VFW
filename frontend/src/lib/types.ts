@@ -32,7 +32,7 @@ export interface PackageRow {
 }
 export interface AddonRow {
   id: string; brand: string; name: string; price: Money;
-  currency: Currency; note: string | null; forBrands: string[];
+  currency: Currency; note: string | null; forBrands: string[]; glCode: string;
 }
 export interface TaxProfile { code: string; label: string; rate: Money; note: string | null }
 export interface GlAccount { code: string; name: string }
@@ -65,6 +65,19 @@ export interface ContactDetail {
   // Lifetime value is per-currency — currencies are never summed together.
   lifetimeValue: Record<string, Money>;
   submissions: ContactSubmission[];
+}
+
+export type DocumentType = 'contract' | 'po' | 'receipt' | 'other';
+
+/** A file attached to a submission. The bytes live in R2; this is the pointer. */
+export interface SubmissionDocument {
+  id: string;
+  type: DocumentType;
+  filename: string;
+  contentType: string | null;
+  size: number | null;
+  uploadedAt: string;
+  uploadedBy: { id: string; name: string } | null;
 }
 
 export type DiscountType = 'PCT' | 'AMT';
@@ -205,4 +218,97 @@ export interface AuditPage {
   limit: number;
   offset: number;
   entries: AuditRow[];
+}
+
+// --- People: administration, feedback, internal comments ---------------------
+
+export type UserStatus = 'PENDING' | 'ACTIVE' | 'REJECTED' | 'DISABLED';
+export type InvitationStatus = 'ACTIVE' | 'USED' | 'REVOKED' | 'EXPIRED';
+
+export interface AdminUser extends User {
+  phone: string | null;
+  status: UserStatus;
+  employeeId: string | null;
+  commissionPct: Money;
+  target: Money;
+  createdAt: string;
+}
+
+export interface Invitation {
+  id: string;
+  code: string;
+  role: Role;
+  department: string | null;
+  email: string | null;
+  status: InvitationStatus;
+  createdAt: string;
+  expiresAt: string;
+  usedAt: string | null;
+  createdBy: string;
+  /** Only on the create response: whether the invite actually got mailed. */
+  emailed?: boolean;
+  emailError?: string | null;
+}
+
+export interface Settings {
+  company: string;
+  fiscalYear: number;
+  invoicePrefix: string;
+  nextInvoiceSeq: number;
+  discountApprovalPct: Money;
+  qbRealmId: string | null;
+  fxRates: Record<string, number>;
+  scoreWeights: ScoreWeights;
+}
+
+/** The rate card as the admin screen edits it: prices carry their own id and city. */
+export interface AdminPackagePrice extends PackagePrice {
+  id: string;
+  city: City;
+}
+export interface AdminPackage {
+  id: string; brand: string; name: string; looks: number; blurb: string | null;
+  taxCode: string; glCode: string;
+  prices: AdminPackagePrice[];
+}
+export interface AdminTaxProfile extends TaxProfile {
+  gst: Money; pst: Money; hst: Money;
+}
+
+export interface AdminCatalogue {
+  packages: AdminPackage[];
+  addons: AddonRow[];
+  taxes: AdminTaxProfile[];
+  glAccounts: GlAccount[];
+  cities: City[];
+  events: EventRow[];
+}
+
+export interface DesignerFeedback {
+  id: string;
+  rating: number;
+  body: string | null;
+  createdAt: string;
+  contact: { id: string; brand: string; designer: string };
+  recordedBy: { id: string; name: string };
+}
+
+/**
+ * Confidential. Served only from /api/internal-comments and
+ * /api/submissions/:id/comments, both guarded with 'internal.view' — never as
+ * part of a submission payload. See backend/src/internal/internal.controller.ts.
+ */
+export interface InternalComment {
+  id: string;
+  department: string;
+  body: string;
+  createdAt: string;
+  author: { id: string; name: string; role: Role };
+  submission: {
+    id: string;
+    ref: string;
+    repId: string;
+    rep: { id: string; name: string };
+    contact: { brand: string };
+  };
 }

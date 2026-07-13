@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 
 export function Login() {
@@ -81,6 +82,11 @@ export function Login() {
             />
             <span className="t">Keep me signed in for 30 days</span>
           </label>
+
+          <div className="rowflex" style={{ marginTop: 12, justifyContent: 'space-between' }}>
+            <Link className="sm" to="/forgot">Forgot password?</Link>
+            <Link className="sm" to="/signup">Have an invitation code?</Link>
+          </div>
 
           {error && (
             <div className="note bad" style={{ marginTop: 12 }}>

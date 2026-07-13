@@ -348,6 +348,66 @@ submission over the API receives NO internal comments in the JSON. Prove that la
 one with an actual API response, not a screenshot of a hidden UI element.
 ```
 
+### ✅ Built — 2026-07-13
+
+No schema change, as predicted. `backend/src/{admin,feedback,internal}/`,
+`common/email.ts`, the three new auth routes, and
+`frontend/src/pages/{Admin,Feedback,Internal,Signup,ResetPassword}.tsx`.
+
+**The prompt said "stop and ask" about email. It stopped and asked.** No API key
+was given, so there is no working mail transport. What exists instead:
+
+- `common/email.ts` — a real Resend adapter (its REST API, no SDK; one POST does
+  not need one). Unconfigured, `send()` **throws** and the endpoint answers 503.
+- It **never** logs the reset link and calls it done. That fallback looks like it
+  works right up until a real user cannot get into their account.
+- `DEV_ECHO_LINKS=true` returns the token in the response body instead — off by
+  default, ignored outright when `NODE_ENV=production`, named in the response so
+  it cannot be mistaken for a working mail setup. The mockup already anticipated
+  this flag (line 755). It is how the reset flow is exercised today.
+- Invitations still work without email: the code is created regardless, and the
+  UI reports `emailed: false` with the reason and shows the code to pass on by
+  hand. It does not claim a message went out that did not.
+
+**Decisions worth not re-litigating**
+
+- **Internal comments are not in the submission payload for anyone**, not even
+  ACCT — they are served only from their own two guarded routes. A conditional
+  include keyed on role would have worked too, and would have been one refactor
+  away from leaking. There is no field to forget to strip.
+- **"Never the rep it is about" is enforced separately from the ACL**, because
+  the ACL is about roles and the rule is not. MGR and ADMIN both hold
+  `internal.view` *and* can carry deals. `notAboutMe()` covers that gap.
+- **The signup role comes from the invitation.** The form posts one (the mockup's
+  does); it is discarded. Otherwise a SALES invite is an ADMIN account.
+- **Invitation status is derived, never stored** — a stored one goes stale the
+  moment an invitation expires with nobody touching the row.
+- **Reset single-use is a conditional `updateMany`, not read-then-write.** The
+  window between the check and the write is exactly where a link gets used twice.
+- **Feedback attaches to the Contact, not the Submission** — the model says so,
+  and a returning brand is the same customer.
+
+**How it was proven** (all against a live API and a real browser, in that order):
+
+| Claim | Evidence |
+|---|---|
+| Invite → sign up → approve → log in | Playwright, 18 screenshots. Sign-in before approval is refused with "awaiting administrator approval"; after approval it succeeds. |
+| Signup cannot escalate | Posted `role: ADMIN` against a SALES invitation → account created as **SALES**. |
+| A code is single-use | Second redemption of the same code → 400. |
+| Reset works once | `POST /reset-password` → 200; **the same token again → 400**. Old password 401s, new one 201s. |
+| Expiry is enforced, not just stored | A row minted unused-but-expired → 400, and it is left unconsumed. |
+| No enumeration | `forgot-password` returns the identical body for a real and a fake address; the transport is checked *before* the account lookup. |
+| **A SALES rep gets no internal comments** | `GET /api/submissions/:id` as the rep who owns it: 2,099 bytes, 51 top-level keys, **no `comments` key**, no trace of the canary planted in a comment on that exact record. The three comment routes 403 her. Accounting reads the same comment fine. |
+| Catalogue edits do not move history | Add-on tripled £760 → £2,391; the sale that bought it kept £760/£760 and its **£32,572.80** total. |
+
+`npm test` in `backend/`: **34 passing**, including the new
+`admin/catalog.spec.ts`.
+
+**Known follow-up:** set `RESEND_API_KEY` + `EMAIL_FROM` and delete
+`DEV_ECHO_LINKS` from the environment. Until then, self-service password reset is
+not usable by a real user, and this is the only part of Phase 4 that is not
+finished.
+
 ---
 
 ## Phase 5 — Harden before real users

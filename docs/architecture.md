@@ -160,20 +160,45 @@ The session is a JWT in an **httpOnly cookie**. There is no token in
 `localStorage` and nothing for a script on the page to steal; the SPA sends it
 automatically with `credentials: "include"`.
 
-Cookie attributes are centralized in `backend/src/common/cookie.ts`, and there is
-a deployment trap encoded there worth understanding:
+Cookie attributes are centralized in `backend/src/common/cookie.ts`.
 
-> `up.railway.app` is on the **Public Suffix List**. Browsers therefore treat
-> `vfw-console.up.railway.app` and `vfw-api.up.railway.app` as **different
-> sites**, which makes the session a *third-party* cookie. It works today under
-> `SameSite=None; Secure`, but Safari's ITP already blocks that shape and Chrome
-> is phasing it out — so sign-in would begin failing **in the browser only**,
-> while the API kept working fine under `curl`.
->
-> **The fix is a custom domain.** Serve the SPA from `app.example.com` and the
-> API from `api.example.com`, then set `COOKIE_DOMAIN=.example.com`. Both are now
-> the same site, the cookie downgrades to `SameSite=Lax`, and nothing is
-> third-party. Get a domain before going live.
+### The cookie is first-party, because there is only one origin
+
+The browser never talks to the API's domain. The frontend service serves the SPA
+*and* reverse-proxies `/api/*` to the backend (`frontend/nginx.conf.template`),
+so every request — assets and API alike — goes to the frontend origin. The
+session cookie is therefore **first-party**, and `SameSite=Lax` is correct.
+
+Verified in a real Chromium against production (2026-07-13), signing in as
+`marielle@vanfashionweek.com`. `POST /api/auth/login` → `201` returned:
+
+```
+Set-Cookie: vfw_session=<JWT>; Max-Age=86400; Path=/; Expires=Tue, 14 Jul 2026 08:00:59 GMT;
+            HttpOnly; Secure; SameSite=Lax
+```
+
+The browser stored it host-only on `frontend-production-b4a4.up.railway.app`
+(there is no `Domain=` attribute, because `COOKIE_DOMAIN` is unset and should
+stay that way). `GET /api/auth/me` then returned `200`, and `document.cookie`
+read back empty — `HttpOnly` is doing its job.
+
+> **This section used to say the opposite.** It described the session as a
+> third-party cookie on `SameSite=None`, doomed by Safari's ITP and Chrome's
+> third-party phase-out, and prescribed a custom domain as the fix. That was true
+> of an earlier two-origin deployment. The nginx proxy removed the second origin,
+> which removed the problem. **A custom domain is now a nice-to-have (branding),
+> not a prerequisite for shipping.** Do not "fix" the cookie again.
+
+`COOKIE_SAMESITE=none` remains as an escape hatch for a genuinely cross-site
+deployment (SPA and API on different sites, no proxy). It forces `Secure`,
+because browsers ignore `SameSite=None` without it. Nothing sets it today.
+
+**The one thing still worth doing:** the backend also has its own public Railway
+domain (`backend-production-8dcb.up.railway.app`), so the API is reachable
+*without* going through the nginx proxy. Nothing depends on that path — it is
+only an extra front door. Removing the backend's public domain and pointing
+nginx's `BACKEND_URL` at `RAILWAY_PRIVATE_DOMAIN` would close it, and would also
+make the rate limiter's client-IP detection unspoofable (see §10).
 
 ---
 
@@ -191,6 +216,7 @@ a deployment trap encoded there worth understanding:
 │   │   └── seed.ts         catalogue, transcribed from the decks. Idempotent.
 │   └── src/
 │       ├── common/         acl.ts · auth.guard.ts · cookie.ts
+│       │                   throttler.ts · logging.ts · sentry.ts   (§10)
 │       ├── pricing/        the single pricing engine
 │       ├── audit/          append-only log
 │       ├── auth/           login, lockout, sessions
@@ -287,3 +313,101 @@ Boundaries probed directly against the API:
   instance. The `Document` model stores a `storageKey`, not a file.
 - **QuickBooks export starts synchronous.** Add Redis and a job queue when it
   actually needs retries, not before.
+- **The cookie is settled.** It is first-party `SameSite=Lax` behind the nginx
+  proxy. Do not re-fix it; see §5.
+
+---
+
+## 10. Hardening
+
+### 10.1 Rate limiting
+
+`backend/src/common/throttler.ts`. Two buckets, both keyed by client IP; a
+request must satisfy every bucket that applies to it.
+
+| Bucket | Applies to | Limit | On breach |
+|---|---|---|---|
+| `auth` | `POST /api/auth/*` | 10 / min | **429 for 15 min** |
+| `global` | everything else | 300 / min | 429 until the window rolls |
+
+`GET /api/health` is exempt — Railway probes it every few seconds and throttling
+it would fail the deploy.
+
+The limits live in one table rather than in `@Throttle()` decorators on each
+controller, so a new endpoint cannot be born unlimited by someone forgetting to
+decorate it. The throttler guard is registered **before** the auth guard, so a
+flood is turned away before it costs a JWT verification, a database round-trip or
+an argon2 hash.
+
+This **layers with**, and does not replace, the per-email lockout in
+`AuthService`. They stop different attacks, and you can watch both fire:
+
+```
+# same email, wrong password, 14 times
+attempts 1–5    401 Email or password is incorrect
+attempts 6–10   401 Too many attempts. Try again in 15 minute(s).   <- per-email lockout
+attempts 11+    429 Too many requests.                              <- IP throttle
+
+# attacker rotates the email each time, dodging the per-email lockout entirely
+victim1–10      401 Email or password is incorrect   (lockout never fires)
+victim11+       429 Too many requests.               <- only the IP throttle stops this
+```
+
+> **`TRUST_PROXY_HOPS` is the load-bearing setting here.** The limiter keys on
+> `req.ip`, and behind a proxy that value is only as good as the hop count.
+> Set it too low and every user shares the proxy's IP — one bucket for the whole
+> company, and real people start getting 429s. Set it to `true`/too high and the
+> app believes a caller-supplied `X-Forwarded-For`, which an attacker simply
+> rotates to get unlimited buckets. It is a **number**, counted from the right of
+> the header, past the hops our own infrastructure appended.
+>
+> `GET /api/health/ip` exists to tune it: call it through the real front door and
+> confirm the `ip` it returns is your own address.
+
+> **Known gap.** The backend still has its own public Railway domain, so an
+> attacker can skip nginx, hit the API directly, and forge `X-Forwarded-For`.
+> Closing it — remove the backend's public domain, point nginx's `BACKEND_URL` at
+> `RAILWAY_PRIVATE_DOMAIN` — makes the client IP unforgeable and is the single
+> highest-value change left in this section.
+
+### 10.2 Logging and error tracking
+
+`common/logging.ts` (pino) and `common/sentry.ts`. One rule governs both:
+
+> **A secret must never reach a log line or an error report.** Logs get shipped,
+> tailed and pasted into tickets; Sentry is read by more people than are allowed
+> to sign in to an ERP. A session cookie in either is a session anyone holding it
+> can replay.
+
+So, in both sinks: no `cookie` / `set-cookie` header, no `authorization` header,
+and **no request body at all** — a body is where a password lives, and there is
+no redaction rule to get wrong if it is never serialized. Sentry additionally
+runs with `sendDefaultPii: false`; the user is attached as `{id, role}`, never an
+email. Its default integrations would happily send all of the above, so the
+scrubbing in `beforeSend` is not belt-and-braces — it is the whole belt.
+
+Every request carries a `request_id`, logged by pino and set as a Sentry tag, so
+one incident joins up across the two.
+
+Sentry is **optional**: with no `SENTRY_DSN`, `initSentry()` returns false and the
+app runs normally. An observability vendor being unconfigured must never stop the
+API from booting.
+
+Verified by taking Postgres down under a live authenticated request. The
+resulting `PrismaClientKnownRequestError` arrived with
+`transaction: GET /api/submissions`, `user: {id, role}` and the request id — and
+with `request.headers` containing only `host`, `user-agent` and `accept`, even
+though the request that produced it carried the session cookie.
+
+### 10.3 Secrets
+
+`JWT_SECRET` in Railway was checked on 2026-07-13: 96 hex characters, uniformly
+distributed — a real `randomBytes(48)` value, not the `.env.example` placeholder.
+It was **not** rotated, and should not be casually: **rotating `JWT_SECRET`
+invalidates every session and signs everyone out**, because it is the key the
+session JWTs are verified with. Rotate it deliberately (on suspected compromise,
+or on staff departure), not as routine hygiene.
+
+### 10.4 Backups
+
+See `docs/runbook-backups.md`.
