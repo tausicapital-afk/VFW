@@ -1,0 +1,475 @@
+// VFW Console — domain schema.
+//
+// Money is NUMERIC(14,2) everywhere and surfaces as Prisma Decimal. No float
+// ever touches a price, a tax amount or a commission.
+//
+// Records in this system are financial evidence: submissions are never deleted,
+// only moved through their status lifecycle, and every transition appends to
+// AuditEntry.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// People & access
+// ---------------------------------------------------------------------------
+
+enum Role {
+  SALES
+  INTERN
+  ACCT
+  MGR
+  ADMIN
+}
+
+// Signup is invitation-only and still requires an admin to approve the account,
+// so a user exists in PENDING before they can authenticate.
+enum UserStatus {
+  PENDING
+  ACTIVE
+  REJECTED
+  DISABLED
+}
+
+model User {
+  id            String     @id @default(cuid())
+  employeeId    String?    @unique
+  name          String
+  email         String     @unique
+  phone         String?
+  passwordHash  String
+  role          Role
+  department    String?
+  status        UserStatus @default(PENDING)
+  commissionPct Decimal    @default(0) @db.Decimal(5, 2)
+  target        Decimal    @default(0) @db.Decimal(14, 2)
+  colour        String     @default("#0E0E11")
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  submissions       Submission[]     @relation("SubmissionRep")
+  approvals         Submission[]     @relation("SubmissionApprover")
+  contactsCreated   Contact[]
+  paymentsRecorded  Payment[]
+  documentsUploaded Document[]
+  comments          InternalComment[]
+  feedbackRecorded  DesignerFeedback[]
+  auditEntries      AuditEntry[]
+  invitationsIssued Invitation[]     @relation("InvitationIssuer")
+  passwordResets    PasswordReset[]
+
+  @@index([role, status])
+}
+
+model Invitation {
+  id         String    @id @default(cuid())
+  code       String    @unique
+  role       Role
+  department String?
+  email      String?
+  expiresAt  DateTime
+  usedAt     DateTime?
+  usedById   String?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  createdById String
+  createdBy   User   @relation("InvitationIssuer", fields: [createdById], references: [id])
+
+  @@index([code])
+}
+
+// Brute-force lockout, keyed by the email that was tried rather than by user —
+// a failed login against an address that does not exist must not reveal that.
+model LoginAttempt {
+  email     String    @id
+  count     Int       @default(0)
+  lockUntil DateTime?
+  updatedAt DateTime  @updatedAt
+}
+
+model PasswordReset {
+  token     String    @id
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Catalog — admin-editable reference data, seeded from the sales decks
+// ---------------------------------------------------------------------------
+
+enum Currency {
+  USD
+  CAD
+  GBP
+  EUR
+  JPY
+}
+
+model TaxProfile {
+  code  String  @id
+  label String
+  rate  Decimal @db.Decimal(6, 3)
+  gst   Decimal @default(0) @db.Decimal(6, 3)
+  pst   Decimal @default(0) @db.Decimal(6, 3)
+  hst   Decimal @default(0) @db.Decimal(6, 3)
+  note  String?
+
+  cities      City[]
+  packages    Package[]
+  submissions Submission[]
+}
+
+model City {
+  id       String   @id
+  name     String
+  country  String
+  currency Currency
+
+  taxCode String
+  tax     TaxProfile @relation(fields: [taxCode], references: [code])
+
+  events      Event[]
+  prices      PackagePrice[]
+  submissions Submission[]
+}
+
+model Event {
+  id     String   @id
+  brand  String
+  name   String
+  season String
+  venue  String?
+  start  DateTime @db.Date
+  end    DateTime @db.Date
+
+  cityId String
+  city   City   @relation(fields: [cityId], references: [id])
+
+  submissions Submission[]
+
+  @@index([brand])
+}
+
+model GlAccount {
+  code String @id
+  name String
+
+  packages    Package[]
+  addons      Addon[]
+  submissions Submission[]
+}
+
+model Package {
+  id    String  @id
+  brand String
+  name  String
+  looks Int
+  blurb String?
+  // Sponsored packages are billed at a nominal fee; listValue records the
+  // revenue that was forgone so reporting can show it.
+  listValue Decimal? @db.Decimal(14, 2)
+  // Some packages are capped per event (VKFW VIP: only 2 exist).
+  cap       Int?
+
+  taxCode String
+  tax     TaxProfile @relation(fields: [taxCode], references: [code])
+  glCode  String
+  gl      GlAccount  @relation(fields: [glCode], references: [code])
+
+  prices      PackagePrice[]
+  submissions Submission[]
+
+  @@index([brand])
+}
+
+// A package has a different price and currency in every city it is sold in,
+// so price cannot live on Package itself.
+model PackagePrice {
+  id        String   @id @default(cuid())
+  packageId String
+  package   Package  @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  cityId    String
+  city      City     @relation(fields: [cityId], references: [id])
+  currency  Currency
+  price     Decimal  @db.Decimal(14, 2)
+
+  @@unique([packageId, cityId])
+}
+
+model Addon {
+  id       String   @id
+  brand    String
+  name     String
+  price    Decimal  @db.Decimal(14, 2)
+  currency Currency
+  note     String?
+  // Which brands may buy this add-on.
+  forBrands String[]
+
+  glCode String
+  gl     GlAccount @relation(fields: [glCode], references: [code])
+
+  lines SubmissionAddon[]
+
+  @@index([brand])
+}
+
+// ---------------------------------------------------------------------------
+// Customers
+// ---------------------------------------------------------------------------
+
+model Contact {
+  id       String  @id @default(cuid())
+  brand    String
+  designer String
+  company  String?
+  email    String?
+  phone    String?
+  country  String?
+  type     String  @default("Designer")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id])
+
+  submissions Submission[]
+  feedback    DesignerFeedback[]
+
+  // One contact per brand name — the mockup auto-creates a contact the first
+  // time a sale is submitted for a brand it has not seen.
+  @@unique([brand])
+  @@index([designer])
+}
+
+// ---------------------------------------------------------------------------
+// Submissions — the core record
+// ---------------------------------------------------------------------------
+
+enum SubmissionStatus {
+  DRAFT
+  PENDING
+  RETURNED
+  APPROVED
+  REJECTED
+  EXPORTED
+}
+
+enum PayStatus {
+  UNPAID
+  PARTIAL
+  PAID
+}
+
+enum DiscountType {
+  PCT
+  AMT
+}
+
+model Submission {
+  id     String           @id @default(cuid())
+  ref    String           @unique
+  status SubmissionStatus @default(DRAFT)
+
+  repId String
+  rep   User   @relation("SubmissionRep", fields: [repId], references: [id])
+
+  contactId String
+  contact   Contact @relation(fields: [contactId], references: [id])
+
+  eventId String
+  event   Event  @relation(fields: [eventId], references: [id])
+  cityId  String
+  city    City   @relation(fields: [cityId], references: [id])
+
+  packageId String
+  package   Package @relation(fields: [packageId], references: [id])
+
+  showDate DateTime? @db.Date
+  notes    String?
+
+  // --- Money. All of it is computed server-side by PricingService; the client
+  // --- sends inputs (package, addons, discount) and never sends a total.
+  currency     Currency
+  packagePrice Decimal      @db.Decimal(14, 2)
+  addonTotal   Decimal      @default(0) @db.Decimal(14, 2)
+  subtotal     Decimal      @db.Decimal(14, 2)
+  discountType DiscountType @default(PCT)
+  discountValue Decimal     @default(0) @db.Decimal(14, 2)
+  discountAmount Decimal    @default(0) @db.Decimal(14, 2)
+  taxable      Decimal      @db.Decimal(14, 2)
+  taxRate      Decimal      @db.Decimal(6, 3)
+  taxAmount    Decimal      @db.Decimal(14, 2)
+  total        Decimal      @db.Decimal(14, 2)
+  deposit      Decimal      @default(0) @db.Decimal(14, 2)
+  paidAmount   Decimal      @default(0) @db.Decimal(14, 2)
+  balance      Decimal      @db.Decimal(14, 2)
+  payStatus    PayStatus    @default(UNPAID)
+
+  // Commission is struck on net revenue (taxable), never on tax.
+  commissionPct    Decimal @default(0) @db.Decimal(5, 2)
+  commissionAmount Decimal @default(0) @db.Decimal(14, 2)
+
+  paymentMethod String?
+  paymentTerms  String?
+
+  taxCode String
+  tax     TaxProfile @relation(fields: [taxCode], references: [code])
+
+  // Accounting classification, set at approval time.
+  glCode     String?
+  gl         GlAccount? @relation(fields: [glCode], references: [code])
+  costCentre String?
+  department String?
+
+  submittedAt DateTime?
+  approvedAt  DateTime?
+  approvedById String?
+  approvedBy   User?     @relation("SubmissionApprover", fields: [approvedById], references: [id])
+  rejectedAt  DateTime?
+  rejectReason String?
+  returnNote  String?
+  exportedAt  DateTime?
+  qbDocNumber String?
+  invoiceNo   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  addons   SubmissionAddon[]
+  payments Payment[]
+  documents Document[]
+  comments InternalComment[]
+  audit    AuditEntry[]
+
+  @@index([status])
+  @@index([repId, status])
+  @@index([eventId])
+}
+
+// Add-on price is copied onto the line at submission time. If Accounting
+// later changes the catalog price, historical submissions must not move.
+model SubmissionAddon {
+  id           String     @id @default(cuid())
+  submissionId String
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  addonId      String
+  addon        Addon      @relation(fields: [addonId], references: [id])
+  qty          Int        @default(1)
+  unitPrice    Decimal    @db.Decimal(14, 2)
+  currency     Currency
+  amount       Decimal    @db.Decimal(14, 2)
+
+  @@unique([submissionId, addonId])
+}
+
+model Payment {
+  id           String     @id @default(cuid())
+  submissionId String
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  date         DateTime   @db.Date
+  amount       Decimal    @db.Decimal(14, 2)
+  currency     Currency
+  method       String
+  reference    String?
+  createdAt    DateTime   @default(now())
+
+  recordedById String
+  recordedBy   User   @relation(fields: [recordedById], references: [id])
+
+  @@index([submissionId])
+}
+
+model Document {
+  id           String     @id @default(cuid())
+  submissionId String
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  type         String
+  filename     String
+  // Object-storage key (R2/S3). The file itself never lives on the app disk.
+  storageKey   String
+  contentType  String?
+  size         Int?
+  uploadedAt   DateTime   @default(now())
+
+  uploadedById String
+  uploadedBy   User   @relation(fields: [uploadedById], references: [id])
+
+  @@index([submissionId])
+}
+
+// Confidential: visible to ACCT/MGR/ADMIN only. Never shown to the rep and
+// explicitly excluded from the leaderboard score.
+model InternalComment {
+  id           String     @id @default(cuid())
+  submissionId String
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  department   String
+  body         String
+  createdAt    DateTime   @default(now())
+
+  authorId String
+  author   User   @relation(fields: [authorId], references: [id])
+
+  @@index([submissionId])
+}
+
+model DesignerFeedback {
+  id        String   @id @default(cuid())
+  contactId String
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  rating    Int
+  body      String?
+  createdAt DateTime @default(now())
+
+  recordedById String
+  recordedBy   User   @relation(fields: [recordedById], references: [id])
+
+  @@index([contactId])
+}
+
+// Append-only. Nothing in this table is ever updated or deleted — the UI
+// advertises that guarantee and Accounting relies on it.
+model AuditEntry {
+  id           String     @id @default(cuid())
+  submissionId String?
+  submission   Submission? @relation(fields: [submissionId], references: [id])
+  action       String
+  detail       String?
+  // Before/after payloads for money-affecting changes.
+  payload      Json?
+  createdAt    DateTime   @default(now())
+
+  actorId String?
+  actor   User?   @relation(fields: [actorId], references: [id])
+
+  @@index([submissionId, createdAt])
+  @@index([createdAt])
+}
+
+// Single-row table (id is pinned to 1).
+model Settings {
+  id                  Int     @id @default(1)
+  company             String  @default("VFW Management Inc.")
+  fiscalYear          Int     @default(2026)
+  invoicePrefix       String  @default("VFW-")
+  nextInvoiceSeq      Int     @default(2041)
+  // Discounts above this percentage need explicit accounting sign-off.
+  discountApprovalPct Decimal @default(15) @db.Decimal(5, 2)
+  qbRealmId           String?
+  // FX rates to CAD, the reporting currency. Held here so Accounting can
+  // update them without a deploy.
+  fxRates             Json    @default("{\"CAD\":1,\"USD\":1.37,\"GBP\":1.74,\"EUR\":1.49,\"JPY\":0.0092}")
+  scoreWeights        Json    @default("{\"revenue\":30,\"approved\":20,\"collection\":30,\"retention\":20}")
+  updatedAt           DateTime @updatedAt
+}

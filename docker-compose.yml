@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: vfw-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: vfw
+      POSTGRES_PASSWORD: vfw
+      POSTGRES_DB: vfw
+    ports:
+      - "5434:5432"
+    volumes:
+      - vfw-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vfw -d vfw"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  vfw-pgdata:
