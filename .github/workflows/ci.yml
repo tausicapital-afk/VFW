@@ -30,7 +30,10 @@ jobs:
       - name: Generate Prisma client
         run: npx prisma generate
       - name: Validate Prisma schema
+        # A URL only has to be parseable here — no database is contacted.
         run: npx prisma validate
+        env:
+          DATABASE_URL: postgresql://user:pass@localhost:5432/vfw
       - name: Compile
         run: npm run build
 
