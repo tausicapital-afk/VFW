@@ -2,11 +2,13 @@ import { Controller, Get, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
+import { AdminModule } from './admin/admin.controller';
 import { AuditModule } from './audit/audit.controller';
 import { AuthController } from './auth/auth.controller';
 import { AuthService } from './auth/auth.service';
 import { CatalogModule } from './catalog/catalog.controller';
 import { AuthGuard, Public } from './common/auth.guard';
+import { EmailModule } from './common/email';
 import { ContactsModule } from './contacts/contacts.controller';
 import { PrismaModule } from './prisma/prisma.service';
 import { ReportsModule } from './reports/reports.controller';
@@ -30,11 +32,13 @@ class HealthController {
       signOptions: { expiresIn: '30d' },
     }),
     PrismaModule,
+    EmailModule,
     AuditModule,
     CatalogModule,
     SubmissionsModule,
     ContactsModule,
     ReportsModule,
+    AdminModule,
   ],
   controllers: [HealthController, AuthController],
   providers: [

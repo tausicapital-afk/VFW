@@ -21,18 +21,19 @@ everything below — read it before starting a task.
 | `contacts` — Contacts list | `/contacts` | ❌ Not built |
 | `contact` — Contact detail | `/contacts/:id` | ❌ Not built |
 | `qbo` — QuickBooks export | `/qbo` | ❌ Not built |
-| `board` — Leaderboard | `/board` | ❌ Not built |
-| `feedback` — Designer feedback | `/feedback` | ❌ Not built |
-| `internal` — Internal notes | `/internal` | ❌ Not built |
-| `reports` — Reports | `/reports` | ❌ Not built |
-| `audit` — Audit trail (global) | `/audit` | ❌ Not built |
+| `board` — Leaderboard | `/board` | ✅ Built |
+| `feedback` — Designer feedback | `/feedback` | ❌ Not built (the *report* over it is) |
+| `internal` — Internal notes | `/internal` | ❌ Not built (the *report* over it is) |
+| `reports` — Reports | `/reports` | ✅ Built (all ten report types) |
+| `audit` — Audit trail (global) | `/audit` | ✅ Built |
 | `admin` — Administration | `/admin` | ❌ Not built |
 
-**Backend endpoints still unimplemented:** `PATCH /api/submissions/:id`,
-`POST /api/submissions/:id/export`, `/api/contacts`, `/api/contacts/:id`,
-`/api/reports/summary`, `/api/invitations`, `/api/invitations/:id/revoke`,
-`/api/users/pending`, `/api/users/:id/approve`, `/api/users/:id/reject`,
-`/api/auth/signup`, `/api/auth/forgot-password`, `/api/auth/reset-password`.
+**Backend endpoints still unimplemented:** `/api/invitations`,
+`/api/invitations/:id/revoke`, `/api/users/pending`, `/api/users/:id/approve`,
+`/api/users/:id/reject`, `/api/auth/signup`, `/api/auth/forgot-password`,
+`/api/auth/reset-password`, and the write paths for `InternalComment` /
+`DesignerFeedback` (Phase 4 — the Phase 3 reports read them, nothing writes them
+yet).
 
 The database schema **already covers all of this** — `Payment`, `Document`,
 `InternalComment`, `DesignerFeedback`, `Invitation`, `PasswordReset` and
@@ -114,33 +115,38 @@ opened.
 
 ---
 
-## Phase 3 — Insight
+## Phase 3 — Insight ✅ **Done**
 
-All of these are **read-only over data that already exists**, so they are safe to
-build in parallel once Phase 1 lands.
+All read-only over data that already existed; no schema change was needed.
 
-### 3.1 Reports (`VIEWS.reports`, `GET /api/reports/summary`)
-The mockup defines **ten** report types (`REPORTS`, line 2776): `revenue`,
-`event`, `city`, `package`, `retention`, `ar`, `collection`, `rep`, `feedback`,
-`internal`.
+### 3.1 Reports (`VIEWS.reports`, `GET /api/reports/summary`) ✅
+All ten report types from the mockup's `REPORTS` object (line 2776) —
+`revenue`, `event`, `city`, `package`, `retention`, `ar`, `collection`, `rep`,
+`feedback`, `internal` — in `backend/src/reports/reports.service.ts`.
 
-- Aggregate in **SQL**, not in JavaScript. This is what Postgres window functions
-  are for.
-- Every consolidated figure converts to **CAD** (the reporting currency) using
-  `Settings.fxRates` before being summed. Never add two currencies.
+- Aggregated in **SQL** (`$queryRaw`, `FILTER`, CTEs), not reduced in Node.
+- Consolidated figures convert to **CAD** *inside* the `SUM()`, using the rates
+  read from `Settings.fxRates` on every request. Two currencies are never added.
+- Guarded with `reports.view` (ACCT/MGR/ADMIN).
 
-### 3.2 Leaderboard (`VIEWS.board`)
-Weighted score (mockup line 1120), weights in `Settings.scoreWeights`:
-`revenue 30 · approved 20 · collection 30 · retention 20`.
+> **Receivables age from `approvedAt` + 30 days.** `Submission` has no `dueDate`
+> column, so Net 30 from approval is the assumption; `NET_TERMS_DAYS` in
+> `reports.service.ts` is the one line to change if terms ever become per-deal.
 
-> The mockup is emphatic about this and the UI says so out loud: internal
-> comments and designer feedback are **coaching inputs**. They never touch the
-> score, the ranking, or anyone's commission. Do not let them leak in.
+### 3.2 Leaderboard (`VIEWS.board`) ✅
+Weighted score in `backend/src/reports/score.ts`, weights from
+`Settings.scoreWeights` (`revenue 30 · approved 20 · collection 30 ·
+retention 20`). Guarded with `leaderboard.view` — every role sees it.
 
-### 3.3 Global audit trail (`VIEWS.audit`)
-`AuditEntry` is populated and only exposed per-submission today.
+> Internal comments and designer feedback are **coaching inputs** and cannot
+> reach the score: `RepStats` has no field for them, so a caller has nowhere to
+> put one. `score.spec.ts` holds that line, including a test that smuggles the
+> fields in at runtime and asserts nothing moves.
 
-- `GET /api/audit` with filters and pagination. Read-only, forever.
+### 3.3 Global audit trail (`VIEWS.audit`) ✅
+`GET /api/audit` — filter by free text / action / date, paginated.
+`GET /api/audit/actions` lists the actions on record. Read-only forever: the
+controller has no POST, PATCH or DELETE, for any role.
 
 ---
 
@@ -179,17 +185,22 @@ The largest remaining screen. Guard everything with `admin.manage`.
 ## Cross-cutting — do not skip
 
 ### Tests
-There are currently **no automated tests**. The end-to-end flow was verified with
-a throwaway Playwright script, which is not the same thing.
+`npm test` in `backend/` runs two unit suites:
 
-Highest value first:
-1. **`PricingService` unit tests.** It is pure, it is the heart of the system, and
-   every figure the company reports comes out of it. Test discounts, mixed
-   currencies, zero-rated tax, sponsored packages, commission-on-net.
-2. **ACL integration tests.** One test per role per guarded endpoint. The matrix
-   in `common/acl.ts` is a table — the test can be too.
-3. **Approval lifecycle.** Illegal transitions must fail (double-approve,
+- ✅ **`pricing.service.spec.ts`** — the pricing engine.
+- ✅ **`score.spec.ts`** — the leaderboard score, including the tests that hold
+  the coaching-inputs line (a scathing comment and a one-star review must not
+  move a score by a point).
+
+Still missing, highest value first:
+1. **ACL integration tests.** One test per role per guarded endpoint. The matrix
+   in `common/acl.ts` is a table — the test can be too. The boundaries are
+   currently only probed by hand against a running API.
+2. **Approval lifecycle.** Illegal transitions must fail (double-approve,
    approving a rejected record).
+3. **Reports.** The SQL aggregates and the FX consolidation have no test yet;
+   they were verified against seeded data in the browser, which is not the same
+   thing.
 
 ### Rate limiting
 Login has brute-force lockout per email, but the API has **no global rate limit**.
@@ -210,10 +221,9 @@ discover the problem in production.
 
 ## Suggested order
 
-1. **Phase 1** — payments, `PATCH`, invoices, QBO export, edit/resubmit.
-   Nothing downstream is trustworthy until money can complete its round trip.
-2. **`PricingService` tests** — before more code depends on it.
-3. **Phase 2** — contacts, documents.
-4. **Phase 3** — reports, leaderboard, audit. Parallelisable.
-5. **Phase 4** — admin, feedback, internal notes, self-service auth.
+1. ✅ **Phase 1** — payments, `PATCH`, invoices, QBO export, edit/resubmit.
+2. ✅ **`PricingService` tests** — before more code depends on it.
+3. ✅ **Phase 2** — contacts, documents.
+4. ✅ **Phase 3** — reports, leaderboard, audit.
+5. **Phase 4** — admin, feedback, internal notes, self-service auth. ← next
 6. **Rate limiting + custom domain** — before any real user touches it.

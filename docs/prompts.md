@@ -236,6 +236,65 @@ comment about a rep does not move their score by a single point. Show me that
 last one explicitly.
 ```
 
+### ✅ Built — 2026-07-13
+
+What actually landed, and the decisions a future session should not re-litigate.
+No schema change was needed, as predicted.
+
+**Backend — `backend/src/reports/`**
+
+| File | What it is |
+|---|---|
+| `reports.service.ts` | The ten reports, plus `repRows()` — the single definition of a rep's numbers |
+| `score.ts` | The leaderboard score. **Pure**, so it is testable |
+| `score.spec.ts` | 22 tests, including the ones that hold the coaching-inputs line |
+| `reports.controller.ts` | `GET /api/reports/{types,summary,leaderboard}` |
+| `dto.ts` | Query validation for reports, leaderboard and audit |
+| `../audit/audit.controller.ts` | `GET /api/audit`, `GET /api/audit/actions` |
+
+- **Aggregation is in SQL** (`$queryRaw`: `COUNT(*) FILTER`, CTEs, `array_agg`).
+  Nothing pulls submissions into Node to `reduce()` them.
+- **FX conversion happens inside the `SUM()`.** The rates from `Settings.fxRates`
+  are joined in as a `(VALUES …) AS fx(cur, rate)` relation, so each row is
+  multiplied by its own currency's rate before anything is added. Two currencies
+  are never summed. The rates are read on every request — never hardcoded.
+- **Guards:** reports and the audit trail are `reports.view` (ACCT/MGR/ADMIN);
+  the leaderboard is `leaderboard.view` (everyone — a rep is meant to see where
+  they stand). The audit controller has **no POST, PATCH or DELETE**, for any
+  role; all three verbs 404.
+
+**Frontend** — `pages/Reports.tsx` (ten tabs, period/event/city filters, CSV +
+JSON + print export), `pages/Board.tsx`, `pages/Audit.tsx`; nav groups
+People/Insight in `shell/Shell.tsx`. Only classes `console.css` already defines.
+
+**How the coaching-inputs promise is kept.** `RepStats` — the only input to
+`score()` — has **no field** for internal comments or designer feedback, so a
+caller has nowhere to put one. The leaderboard query joins only Submission, User
+and Contact. `score.spec.ts` also attacks it at runtime: it smuggles
+`internalComments` / `feedbackRating` into the stats object and asserts the score,
+the parts, the rank and the rating are all byte-identical. Verified live, too — a
+scathing Operations comment plus a 1-star review written against the top rep's
+deal moved her score by **0** (72 → 72), while both rows showed up in the
+`internal` and `feedback` reports, proving the data really was there.
+
+**Decisions worth keeping**
+
+- **Receivables age from `approvedAt` + 30 days.** `Submission` has no `dueDate`
+  column and the mockup's AR report wants one. Net 30 from approval is the
+  assumption, isolated in `NET_TERMS_DAYS` — that constant is the only line to
+  change if terms ever become per-deal.
+- **Money columns are tagged `money: true`** and always render to 2dp. An
+  accountant reading `21,459` where the figure is `21,459.00` is a bug. Counts,
+  scores and day-counts stay whole.
+- **No charts.** The mockup's reports are tables; fidelity beat decoration, so
+  the dataviz skill was not needed.
+- **`feedback` and `internal` reports read Phase 4's tables.** They are correct
+  and guarded, and render empty until Phase 4 builds the write paths.
+
+**Known follow-up:** `frontend/src/pages/Dashboard.tsx` still hardcodes FX rates
+and sums money in the client — its own comment says it should read them from the
+server "once /api/reports lands". It has landed.
+
 ---
 
 ## Phase 4 — People and administration

@@ -1,22 +1,9 @@
 import { Body, Controller, Get, Post, Res } from '@nestjs/common';
-import { IsBoolean, IsEmail, IsOptional, IsString, MinLength } from 'class-validator';
 import { Response } from 'express';
 import { AuthUser, CurrentUser, Public } from '../common/auth.guard';
 import { SESSION_COOKIE, sessionCookie } from '../common/cookie';
 import { AuthService } from './auth.service';
-
-class LoginDto {
-  @IsEmail()
-  email: string;
-
-  @IsString()
-  @MinLength(1)
-  password: string;
-
-  @IsOptional()
-  @IsBoolean()
-  remember?: boolean;
-}
+import { ForgotDto, LoginDto, ResetDto, SignupDto } from './dto';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -46,5 +33,29 @@ export class AuthController {
   @Get('me')
   async me(@CurrentUser() user: AuthUser) {
     return { user: await this.auth.me(user.id) };
+  }
+
+  /**
+   * Invite-only signup. Public by necessity — the caller has no account yet —
+   * but not open: it is guarded by the invitation code, and what it creates is a
+   * PENDING account that cannot log in until an administrator approves it. No
+   * session cookie is issued here.
+   */
+  @Public()
+  @Post('signup')
+  async signup(@Body() dto: SignupDto) {
+    return { user: await this.auth.signup(dto) };
+  }
+
+  @Public()
+  @Post('forgot-password')
+  async forgot(@Body() dto: ForgotDto) {
+    return this.auth.forgot(dto);
+  }
+
+  @Public()
+  @Post('reset-password')
+  async reset(@Body() dto: ResetDto) {
+    return this.auth.reset(dto);
   }
 }
