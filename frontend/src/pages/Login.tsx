@@ -79,7 +79,7 @@ export function Login() {
               checked={remember}
               onChange={(e) => setRemember(e.target.checked)}
             />
-            Keep me signed in for 30 days
+            <span className="t">Keep me signed in for 30 days</span>
           </label>
 
           {error && (
@@ -88,7 +88,11 @@ export function Login() {
             </div>
           )}
 
-          <button className="btn pri" style={{ marginTop: 16, width: '100%' }} disabled={busy}>
+          <button
+            className="btn primary"
+            style={{ marginTop: 16, width: '100%', justifyContent: 'center' }}
+            disabled={busy}
+          >
             {busy ? 'Signing in…' : 'Sign in'}
           </button>
 

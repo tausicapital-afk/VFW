@@ -14,6 +14,11 @@ const REJECT_REASONS = [
   'Customer not credit-approved',
 ];
 
+const COST_CENTRES = ['CC-100 Vancouver', 'CC-200 Kids', 'CC-300 Global', 'CC-400 Media'];
+
+// Above this, the discount needs explicit sign-off (Settings.discountApprovalPct).
+const DISCOUNT_THRESHOLD = 15;
+
 type Action = { kind: 'approve' | 'reject' | 'return'; sub: Submission };
 
 export function Queue() {
@@ -45,7 +50,7 @@ export function Queue() {
       <div className="card">
         <div className="hd">
           <h3>Pending accounting approval</h3>
-          <div className="sp" style={{ flex: 1 }} />
+          <div className="sp" />
           <span className="sm mut">{pending.length} waiting</span>
         </div>
 
@@ -58,7 +63,7 @@ export function Queue() {
           </div>
         ) : (
           <div className="tbl-wrap">
-            <table className="tbl">
+            <table>
               <thead>
                 <tr>
                   <th>Ref</th>
@@ -73,8 +78,8 @@ export function Queue() {
               </thead>
               <tbody>
                 {pending.map((s) => {
-                  // Surface an unusually deep discount here rather than making
-                  // Accounting open the record to find it.
+                  // Surface a deep discount here rather than making Accounting
+                  // open the record to find it.
                   const pct = Number(s.subtotal) > 0
                     ? (Number(s.discountAmount) / Number(s.subtotal)) * 100
                     : 0;
@@ -87,19 +92,21 @@ export function Queue() {
                       </td>
                       <td>
                         <span className={'tag ' + s.event.brand}>{s.event.brand}</span>{' '}
-                        {s.event.city.name}
+                        <span className="sm">{s.event.city.name}</span>
                       </td>
-                      <td>{s.rep.name}</td>
-                      <td className="num mono">
+                      <td className="sm">{s.rep.name}</td>
+                      <td className="num">
                         {pct > 0 ? (
-                          <span className={pct > 15 ? 'pill REJECTED' : ''}>{pct.toFixed(1)}%</span>
+                          pct > DISCOUNT_THRESHOLD
+                            ? <span className="pill REJECTED">{pct.toFixed(1)}%</span>
+                            : pct.toFixed(1) + '%'
                         ) : '—'}
                       </td>
-                      <td className="num mono">{money(s.total, s.currency)}</td>
+                      <td className="num">{money(s.total, s.currency)}</td>
                       <td className="sm mut">{fmtDate(s.submittedAt)}</td>
                       <td>
-                        <div className="rowflex" style={{ gap: 6, justifyContent: 'flex-end' }}>
-                          <button className="btn sm pri" onClick={() => setAction({ kind: 'approve', sub: s })}>
+                        <div className="rowflex" style={{ justifyContent: 'flex-end' }}>
+                          <button className="btn sm primary" onClick={() => setAction({ kind: 'approve', sub: s })}>
                             Approve
                           </button>
                           <button className="btn sm" onClick={() => setAction({ kind: 'return', sub: s })}>
@@ -123,7 +130,7 @@ export function Queue() {
         <div className="card" style={{ marginTop: 16 }}>
           <div className="hd"><h3>Returned to sales</h3></div>
           <div className="tbl-wrap">
-            <table className="tbl">
+            <table>
               <thead>
                 <tr><th>Ref</th><th>Brand</th><th>Rep</th><th>Note</th></tr>
               </thead>
@@ -132,7 +139,7 @@ export function Queue() {
                   <tr key={s.id}>
                     <td className="mono">{s.ref}</td>
                     <td>{s.contact.brand}</td>
-                    <td>{s.rep.name}</td>
+                    <td className="sm">{s.rep.name}</td>
                     <td className="sm mut">{s.returnNote}</td>
                   </tr>
                 ))}
@@ -165,7 +172,7 @@ function ActionModal({
   const { kind, sub } = action;
   // Default to the GL account the package is mapped to; Accounting can override.
   const [gl, setGl] = useState(sub.package.glCode);
-  const [costCentre, setCostCentre] = useState('CC-100 Vancouver');
+  const [costCentre, setCostCentre] = useState(COST_CENTRES[0]);
   const [reason, setReason] = useState(REJECT_REASONS[0]);
   const [note, setNote] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -190,23 +197,24 @@ function ActionModal({
     : `Return ${sub.ref} to sales`;
 
   return (
-    <div className="modal-bg" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className="modal" onClick={onClose}>
+      <div className="box" onClick={(e) => e.stopPropagation()}>
         <div className="hd">
           <h3>{title}</h3>
           <div className="sp" style={{ flex: 1 }} />
           <button className="btn sm" onClick={onClose}>Close</button>
         </div>
+
         <div className="bd">
           <div className="totals" style={{ marginBottom: 16 }}>
-            <div><span>{sub.contact.brand}</span><b>{sub.package.name}</b></div>
-            <div><span>Net revenue</span><b className="mono">{money(sub.taxable, sub.currency)}</b></div>
-            <div><span>Tax ({sub.taxRate}%)</span><b className="mono">{money(sub.taxAmount, sub.currency)}</b></div>
-            <div className="big"><span>Total</span><b className="mono">{money(sub.total, sub.currency)}</b></div>
+            <div className="r"><span>{sub.contact.brand}</span><span>{sub.package.name}</span></div>
+            <div className="r"><span>Net revenue</span><span>{money(sub.taxable, sub.currency)}</span></div>
+            <div className="r"><span>Tax ({sub.taxRate}%)</span><span>{money(sub.taxAmount, sub.currency)}</span></div>
+            <div className="r big"><span>Total</span><span>{money(sub.total, sub.currency)}</span></div>
           </div>
 
           {kind === 'approve' && (
-            <>
+            <div className="fields">
               <div className="f">
                 <label>GL account</label>
                 <select value={gl} onChange={(e) => setGl(e.target.value)}>
@@ -215,15 +223,13 @@ function ActionModal({
                   ))}
                 </select>
               </div>
-              <div className="f" style={{ marginTop: 10 }}>
+              <div className="f">
                 <label>Cost centre</label>
                 <select value={costCentre} onChange={(e) => setCostCentre(e.target.value)}>
-                  {['CC-100 Vancouver', 'CC-200 Kids', 'CC-300 Global', 'CC-400 Media'].map((c) => (
-                    <option key={c}>{c}</option>
-                  ))}
+                  {COST_CENTRES.map((c) => <option key={c}>{c}</option>)}
                 </select>
               </div>
-            </>
+            </div>
           )}
 
           {kind === 'reject' && (
@@ -254,17 +260,17 @@ function ActionModal({
           )}
 
           {error && <div className="note bad" style={{ marginTop: 12 }}>{error}</div>}
+        </div>
 
-          <div className="rowflex" style={{ marginTop: 16, gap: 10 }}>
-            <button
-              className={'btn ' + (kind === 'reject' ? 'dgr' : 'pri')}
-              disabled={run.isPending || (kind === 'return' && !note.trim())}
-              onClick={() => { setError(null); run.mutate(); }}
-            >
-              {run.isPending ? 'Working…' : title}
-            </button>
-            <button className="btn" onClick={onClose}>Cancel</button>
-          </div>
+        <div className="ft">
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button
+            className={'btn ' + (kind === 'reject' ? 'dgr' : 'primary')}
+            disabled={run.isPending || (kind === 'return' && !note.trim())}
+            onClick={() => { setError(null); run.mutate(); }}
+          >
+            {run.isPending ? 'Working…' : title}
+          </button>
         </div>
       </div>
     </div>

@@ -9,6 +9,7 @@ import { Submissions } from './pages/Submissions';
 import { SubmissionDetail } from './pages/SubmissionDetail';
 import { Guard, Shell } from './shell/Shell';
 import './styles/console.css';
+import './styles/additions.css';
 
 const qc = new QueryClient({
   defaultOptions: {

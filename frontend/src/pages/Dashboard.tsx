@@ -14,12 +14,19 @@ import { SubmissionsTable } from './Submissions';
 const FX: Record<string, number> = { CAD: 1, USD: 1.37, GBP: 1.74, EUR: 1.49, JPY: 0.0092 };
 const toCAD = (v: string, cur: string) => Number(v) * (FX[cur] ?? 1);
 
-function Kpi({ label, value, sub }: { label: string; value: string; sub?: string }) {
+function Kpi({
+  label, value, sub, accent,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  accent?: 'accent' | 'ok' | 'amber' | 'red';
+}) {
   return (
-    <div className="kpi">
+    <div className={'kpi' + (accent ? ' ' + accent : '')}>
       <div className="lb">{label}</div>
-      <div className="vl mono">{value}</div>
-      {sub && <div className="sb">{sub}</div>}
+      <div className="vl">{value}</div>
+      {sub && <div className="dt">{sub}</div>}
     </div>
   );
 }
@@ -48,7 +55,7 @@ export function Dashboard() {
       title="Dashboard"
       actions={
         can('submission.create', user?.role) ? (
-          <Link className="btn pri" to="/new">New submission</Link>
+          <Link className="btn primary" to="/new">New submission</Link>
         ) : null
       }
     >
@@ -57,16 +64,19 @@ export function Dashboard() {
           label="Net revenue (approved)"
           value={shortMoney(revenue, 'CAD')}
           sub={`${approved.length} approved · CAD`}
+          accent="accent"
         />
         <Kpi
           label="Outstanding balance"
           value={shortMoney(outstanding, 'CAD')}
           sub="Approved but not collected"
+          accent={outstanding > 0 ? 'amber' : 'ok'}
         />
         <Kpi
           label={isAccounting ? 'Awaiting your approval' : 'Awaiting accounting'}
           value={String(pending.length)}
           sub={pending.length ? 'Needs review' : 'Queue is clear'}
+          accent={pending.length ? 'red' : 'ok'}
         />
         <Kpi
           label="Commission on net"
@@ -77,8 +87,8 @@ export function Dashboard() {
 
       <div className="card" style={{ marginTop: 16 }}>
         <div className="hd">
-          <h3>{isAccounting ? 'Approval queue' : 'My submissions'}</h3>
-          <div className="sp" style={{ flex: 1 }} />
+          <h3>{isAccounting ? 'Awaiting approval' : 'My submissions'}</h3>
+          <div className="sp" />
           {isAccounting && pending.length > 0 && (
             <Link className="btn sm" to="/queue">Open queue</Link>
           )}

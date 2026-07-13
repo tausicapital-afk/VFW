@@ -1,0 +1,23 @@
+/* The only additions to the ported design system.
+   console.css is the mockup's stylesheet, kept verbatim so the look stays
+   faithful. It has .note and .note.lock but no success/error variant, because
+   the mockup had nowhere to show a failed API call. These follow its pattern
+   and use its existing tokens — nothing new is invented. */
+
+.note.good {
+  background: var(--green-soft);
+  border-color: var(--green);
+  color: #10432C;
+}
+
+.note.bad {
+  background: var(--red-soft);
+  border-color: var(--red);
+  color: #6A1E18;
+}
+
+.note.warn {
+  background: var(--amber-soft);
+  border-color: var(--amber);
+  color: #5A3D06;
+}

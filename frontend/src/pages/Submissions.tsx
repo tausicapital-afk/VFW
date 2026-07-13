@@ -22,7 +22,7 @@ export function SubmissionsTable({ rows }: { rows: Submission[] }) {
   }
   return (
     <div className="tbl-wrap">
-      <table className="tbl">
+      <table>
         <thead>
           <tr>
             <th>Ref</th>
@@ -47,11 +47,11 @@ export function SubmissionsTable({ rows }: { rows: Submission[] }) {
               </td>
               <td>
                 <span className={'tag ' + s.event.brand}>{s.event.brand}</span>{' '}
-                {s.event.city.name}
+                <span className="sm">{s.event.city.name}</span>
               </td>
-              <td>{s.package.name}</td>
-              <td>{s.rep.name}</td>
-              <td className="num mono">{money(s.total, s.currency)}</td>
+              <td className="sm">{s.package.name}</td>
+              <td className="sm">{s.rep.name}</td>
+              <td className="num">{money(s.total, s.currency)}</td>
               <td><StatusPill status={s.status} /></td>
               <td className="sm mut">{fmtDate(s.submittedAt)}</td>
             </tr>
@@ -86,7 +86,7 @@ export function Submissions() {
       <div className="card">
         <div className="hd">
           <h3>Submissions</h3>
-          <div className="sp" style={{ flex: 1 }} />
+          <div className="sp" />
           <span className="sm mut">{scope}</span>
         </div>
         {isLoading ? (

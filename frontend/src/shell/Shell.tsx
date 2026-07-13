@@ -119,7 +119,7 @@ export function Page({
           <span className="crumb">{crumb}</span>
           <h1>{title}</h1>
         </div>
-        <div className="sp" style={{ flex: 1 }} />
+        <div className="sp" />
         <div className="rowflex">{actions}</div>
       </header>
       <div className="wrap">{children}</div>

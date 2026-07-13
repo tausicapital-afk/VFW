@@ -44,10 +44,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
     async logout() {
       await api.post('/api/auth/logout');
-      // Drop every cached query, not just the session: the next user to sign in
-      // on this browser must never see the previous one's submissions.
-      qc.clear();
+
+      // Flip the session first, while the ['me'] observer is still bound to the
+      // live cache entry. qc.clear() here would drop that entry out from under
+      // the mounted observer, which then keeps rendering the signed-out user.
       qc.setQueryData(['me'], null);
+
+      // Then drop everything else: the next person to sign in on this browser
+      // must never see the previous one's submissions.
+      qc.removeQueries({ predicate: (q) => q.queryKey[0] !== 'me' });
     },
   };
 

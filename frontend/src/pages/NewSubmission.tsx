@@ -11,6 +11,15 @@ const PAYMENT_METHODS = [
   'Cheque', 'Cash', 'Sponsored — No Charge',
 ];
 
+function Row({ label, value, cls }: { label: string; value: string; cls?: string }) {
+  return (
+    <div className={'r' + (cls ? ' ' + cls : '')}>
+      <span>{label}</span>
+      <span>{value}</span>
+    </div>
+  );
+}
+
 export function NewSubmission() {
   const nav = useNavigate();
   const qc = useQueryClient();
@@ -47,21 +56,21 @@ export function NewSubmission() {
     );
   }, [catalog, event]);
 
-  const addons = useMemo(() => {
-    if (!catalog || !event) return [];
-    return catalog.addons.filter((a) => a.forBrands.includes(event.brand));
-  }, [catalog, event]);
-
   const pkg = packages.find((p) => p.id === packageId);
   const price = pkg && event ? pkg.prices.find((pr) => pr.cityId === event.cityId) : undefined;
   const currency: Currency = price?.currency ?? 'USD';
 
-  // Add-ons priced in another currency cannot go on this invoice; the server
-  // rejects them, so grey them out rather than let the rep pick one.
-  const sellable = addons.filter((a) => a.currency === currency);
+  // Add-ons priced in another currency cannot go on this invoice — the server
+  // rejects a mixed-currency sale, so never offer one.
+  const sellable = useMemo(() => {
+    if (!catalog || !event || !price) return [];
+    return catalog.addons.filter(
+      (a) => a.forBrands.includes(event.brand) && a.currency === price.currency,
+    );
+  }, [catalog, event, price]);
 
   /**
-   * A preview only. The server recomputes all of this from the catalog on
+   * A preview only. The server recomputes all of this from the catalogue on
    * submit and its answer is the one that gets stored — this exists so the rep
    * can see the shape of the deal while they build it.
    */
@@ -114,223 +123,220 @@ export function NewSubmission() {
 
   return (
     <Page crumb="Work" title="New submission">
-      <div className="cols">
-        <div>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              setError(null);
-              create.mutate();
-            }}
-          >
-            <div className="sect">
-              <div className="hd"><h3>Customer</h3><span className="n">01</span></div>
-              <div className="bd">
-                <div className="grid2">
-                  <div className="f">
-                    <label>Designer name *</label>
-                    <input value={designer} onChange={(e) => setDesigner(e.target.value)} required />
-                  </div>
-                  <div className="f">
-                    <label>Brand *</label>
-                    <input value={brand} onChange={(e) => setBrand(e.target.value)} required />
-                  </div>
-                  <div className="f">
-                    <label>Company</label>
-                    <input value={company} onChange={(e) => setCompany(e.target.value)} />
-                  </div>
-                  <div className="f">
-                    <label>Email</label>
-                    <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
-                  </div>
-                  <div className="f">
-                    <label>Country</label>
-                    <input value={country} onChange={(e) => setCountry(e.target.value)} />
-                  </div>
-                </div>
+      <div className="split">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            setError(null);
+            create.mutate();
+          }}
+        >
+          <div className="sect">
+            <div className="hd"><h3>Customer</h3><span className="n">01</span></div>
+            <div className="fields">
+              <div className="f">
+                <label>Designer name <span className="req">*</span></label>
+                <input value={designer} onChange={(e) => setDesigner(e.target.value)} required />
               </div>
-            </div>
-
-            <div className="sect">
-              <div className="hd"><h3>Event</h3><span className="n">02</span></div>
-              <div className="bd">
-                <div className="f">
-                  <label>Show *</label>
-                  <select
-                    value={eventId}
-                    onChange={(e) => {
-                      setEventId(e.target.value);
-                      // The catalogue below is keyed off the event, so a stale
-                      // package or add-on would be a sale that cannot exist.
-                      setPackageId('');
-                      setAddonIds([]);
-                    }}
-                    required
-                  >
-                    <option value="">Select a show…</option>
-                    {catalog?.events.map((ev) => (
-                      <option key={ev.id} value={ev.id}>
-                        {ev.name} — {ev.city.name} · {ev.season}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+              <div className="f">
+                <label>Brand <span className="req">*</span></label>
+                <input value={brand} onChange={(e) => setBrand(e.target.value)} required />
               </div>
-            </div>
-
-            <div className="sect">
-              <div className="hd"><h3>Package</h3><span className="n">03</span></div>
-              <div className="bd">
-                {!event ? (
-                  <p className="hint">Choose a show first — packages and prices differ by city.</p>
-                ) : (
-                  <div className="opts">
-                    {packages.map((p) => {
-                      const pr = p.prices.find((x) => x.cityId === event.cityId)!;
-                      return (
-                        <label key={p.id} className={'opt' + (packageId === p.id ? ' on' : '')}>
-                          <input
-                            type="radio"
-                            name="pkg"
-                            checked={packageId === p.id}
-                            onChange={() => {
-                              setPackageId(p.id);
-                              setAddonIds([]);
-                            }}
-                          />
-                          <div style={{ flex: 1 }}>
-                            <b>{p.name}</b>
-                            <div className="sm mut">{p.blurb}</div>
-                          </div>
-                          <div className="mono">{money(pr.price, pr.currency)}</div>
-                        </label>
-                      );
-                    })}
-                  </div>
-                )}
+              <div className="f">
+                <label>Company</label>
+                <input value={company} onChange={(e) => setCompany(e.target.value)} />
               </div>
-            </div>
-
-            <div className="sect">
-              <div className="hd"><h3>Add-on services</h3><span className="n">04</span></div>
-              <div className="bd">
-                {!pkg ? (
-                  <p className="hint">Choose a package first.</p>
-                ) : sellable.length === 0 ? (
-                  <p className="hint">No add-ons are sold in {currency} for this show.</p>
-                ) : (
-                  <div className="opts">
-                    {sellable.map((a) => (
-                      <label key={a.id} className={'opt' + (addonIds.includes(a.id) ? ' on' : '')}>
-                        <input
-                          type="checkbox"
-                          checked={addonIds.includes(a.id)}
-                          onChange={(e) =>
-                            setAddonIds((prev) =>
-                              e.target.checked ? [...prev, a.id] : prev.filter((x) => x !== a.id),
-                            )
-                          }
-                        />
-                        <div style={{ flex: 1 }}>
-                          <b>{a.name}</b>
-                          {a.note && <div className="sm mut">{a.note}</div>}
-                        </div>
-                        <div className="mono">{money(a.price, a.currency)}</div>
-                      </label>
-                    ))}
-                  </div>
-                )}
+              <div className="f">
+                <label>Email</label>
+                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
               </div>
-            </div>
-
-            <div className="sect">
-              <div className="hd"><h3>Pricing &amp; payment</h3><span className="n">05</span></div>
-              <div className="bd">
-                <div className="grid2">
-                  <div className="f">
-                    <label>Discount (%)</label>
-                    <input
-                      type="number" min={0} max={100} step="0.01"
-                      value={discountValue}
-                      onChange={(e) => setDiscountValue(Number(e.target.value))}
-                    />
-                  </div>
-                  <div className="f">
-                    <label>Deposit ({currency})</label>
-                    <input
-                      type="number" min={0} step="0.01"
-                      value={deposit}
-                      onChange={(e) => setDeposit(Number(e.target.value))}
-                    />
-                  </div>
-                  <div className="f">
-                    <label>Payment method</label>
-                    <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
-                      {PAYMENT_METHODS.map((m) => <option key={m}>{m}</option>)}
-                    </select>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="sect">
-              <div className="hd"><h3>Sales notes</h3><span className="n">06</span></div>
-              <div className="bd">
-                <div className="f">
-                  <textarea rows={4} value={notes} onChange={(e) => setNotes(e.target.value)} />
-                </div>
-              </div>
-            </div>
-
-            {error && <div className="note bad" style={{ marginTop: 14 }}>{error}</div>}
-
-            <div className="rowflex" style={{ marginTop: 18, gap: 10 }}>
-              <button className="btn pri" disabled={!ready || create.isPending}>
-                {create.isPending ? 'Sending…' : 'Send to Accounting'}
-              </button>
-              <button type="button" className="btn" onClick={() => nav('/submissions')}>
-                Cancel
-              </button>
-            </div>
-          </form>
-        </div>
-
-        <aside>
-          <div className="card">
-            <div className="hd">
-              <h3>Live total</h3>
-              <div className="sp" style={{ flex: 1 }} />
-              {event && <span className={'tag ' + event.brand}>{event.brand}</span>}
-            </div>
-            <div className="bd">
-              {!preview ? (
-                <p className="hint">Pick a show and a package to see the total.</p>
-              ) : (
-                <div className="totals">
-                  <div><span>Package</span><b className="mono">{money(preview.base, currency)}</b></div>
-                  <div><span>Add-ons</span><b className="mono">{money(preview.addonTotal, currency)}</b></div>
-                  <div><span>Subtotal</span><b className="mono">{money(preview.subtotal, currency)}</b></div>
-                  {preview.discount > 0 && (
-                    <div><span>Discount ({discountValue}%)</span>
-                      <b className="mono">− {money(preview.discount, currency)}</b></div>
-                  )}
-                  <div><span>Net revenue</span><b className="mono">{money(preview.taxable, currency)}</b></div>
-                  <div><span>Tax ({preview.rate}%)</span><b className="mono">{money(preview.tax, currency)}</b></div>
-                  <div className="big"><span>Total</span><b className="mono">{money(preview.total, currency)}</b></div>
-                  {deposit > 0 && (
-                    <>
-                      <div><span>Deposit</span><b className="mono">− {money(deposit, currency)}</b></div>
-                      <div><span>Balance due</span><b className="mono">{money(preview.balance, currency)}</b></div>
-                    </>
-                  )}
-                </div>
-              )}
-              <div className="note lock" style={{ marginTop: 14 }}>
-                Indicative only. Accounting's figure is recomputed from the rate card on submit.
+              <div className="f">
+                <label>Country</label>
+                <input value={country} onChange={(e) => setCountry(e.target.value)} />
               </div>
             </div>
           </div>
-        </aside>
+
+          <div className="sect">
+            <div className="hd"><h3>Event</h3><span className="n">02</span></div>
+            <div className="fields">
+              <div className="f wide">
+                <label>Show <span className="req">*</span></label>
+                <select
+                  value={eventId}
+                  onChange={(e) => {
+                    setEventId(e.target.value);
+                    // The catalogue below is keyed off the event, so a stale
+                    // package or add-on would be a sale that cannot exist.
+                    setPackageId('');
+                    setAddonIds([]);
+                  }}
+                  required
+                >
+                  <option value="">Select a show…</option>
+                  {catalog?.events.map((ev) => (
+                    <option key={ev.id} value={ev.id}>
+                      {ev.name} — {ev.city.name} · {ev.season}
+                    </option>
+                  ))}
+                </select>
+                {event && (
+                  <div className="help">
+                    {event.venue} · {event.city.country} · prices in{' '}
+                    {event.city.currency}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="sect">
+            <div className="hd"><h3>Package</h3><span className="n">03</span></div>
+            {!event ? (
+              <p className="sm mut">Choose a show first — packages and prices differ by city.</p>
+            ) : (
+              <div className="checks">
+                {packages.map((p) => {
+                  const pr = p.prices.find((x) => x.cityId === event.cityId)!;
+                  return (
+                    <label key={p.id} className={'chk' + (packageId === p.id ? ' on' : '')}>
+                      <input
+                        type="radio"
+                        name="pkg"
+                        checked={packageId === p.id}
+                        onChange={() => {
+                          setPackageId(p.id);
+                          setAddonIds([]);
+                        }}
+                      />
+                      <span className="t">
+                        <b>{p.name}</b>
+                        <div className="sm mut">{p.looks} looks</div>
+                      </span>
+                      <span className="p">{money(pr.price, pr.currency)}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="sect">
+            <div className="hd"><h3>Add-on services</h3><span className="n">04</span></div>
+            {!pkg ? (
+              <p className="sm mut">Choose a package first.</p>
+            ) : sellable.length === 0 ? (
+              <p className="sm mut">No add-ons are sold in {currency} for this show.</p>
+            ) : (
+              <div className="checks">
+                {sellable.map((a) => (
+                  <label key={a.id} className={'chk' + (addonIds.includes(a.id) ? ' on' : '')}>
+                    <input
+                      type="checkbox"
+                      checked={addonIds.includes(a.id)}
+                      onChange={(e) =>
+                        setAddonIds((prev) =>
+                          e.target.checked ? [...prev, a.id] : prev.filter((x) => x !== a.id),
+                        )
+                      }
+                    />
+                    <span className="t">
+                      <b>{a.name}</b>
+                      {a.note && <div className="sm mut">{a.note}</div>}
+                    </span>
+                    <span className="p">{money(a.price, a.currency)}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="sect">
+            <div className="hd"><h3>Pricing &amp; payment</h3><span className="n">05</span></div>
+            <div className="fields">
+              <div className="f">
+                <label>Discount (%)</label>
+                <input
+                  type="number" min={0} max={100} step="0.01"
+                  value={discountValue}
+                  onChange={(e) => setDiscountValue(Number(e.target.value))}
+                />
+                {discountValue > 15 && (
+                  <div className="help">Above 15% — Accounting must sign this off explicitly.</div>
+                )}
+              </div>
+              <div className="f">
+                <label>Deposit ({currency})</label>
+                <input
+                  type="number" min={0} step="0.01"
+                  value={deposit}
+                  onChange={(e) => setDeposit(Number(e.target.value))}
+                />
+              </div>
+              <div className="f">
+                <label>Payment method</label>
+                <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
+                  {PAYMENT_METHODS.map((m) => <option key={m}>{m}</option>)}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div className="sect">
+            <div className="hd"><h3>Sales notes</h3><span className="n">06</span></div>
+            <div className="f">
+              <textarea rows={4} value={notes} onChange={(e) => setNotes(e.target.value)} />
+            </div>
+          </div>
+
+          {error && <div className="note bad" style={{ marginBottom: 14 }}>{error}</div>}
+
+          <div className="rowflex">
+            <button className="btn primary" disabled={!ready || create.isPending}>
+              {create.isPending ? 'Sending…' : 'Send to Accounting'}
+            </button>
+            <button type="button" className="btn" onClick={() => nav('/submissions')}>
+              Cancel
+            </button>
+          </div>
+        </form>
+
+        <div className="card">
+          <div className="hd">
+            <h3>Live total</h3>
+            <div className="sp" />
+            {event && <span className={'tag ' + event.brand}>{event.brand}</span>}
+          </div>
+          <div className="bd">
+            {!preview ? (
+              <p className="sm mut">Pick a show and a package to see the total.</p>
+            ) : (
+              <div className="totals">
+                <Row label="Package" value={money(preview.base, currency)} />
+                <Row label="Add-ons" value={money(preview.addonTotal, currency)} />
+                <Row label="Subtotal" value={money(preview.subtotal, currency)} />
+                {preview.discount > 0 && (
+                  <Row
+                    label={`Discount (${discountValue}%)`}
+                    value={'− ' + money(preview.discount, currency)}
+                  />
+                )}
+                <Row label="Net revenue" value={money(preview.taxable, currency)} />
+                <Row label={`Tax (${preview.rate}%)`} value={money(preview.tax, currency)} />
+                <Row label="Total" value={money(preview.total, currency)} cls="big" />
+                {deposit > 0 && (
+                  <>
+                    <Row label="Deposit" value={'− ' + money(deposit, currency)} />
+                    <Row label="Balance due" value={money(preview.balance, currency)} cls="due" />
+                  </>
+                )}
+              </div>
+            )}
+            <div className="note lock" style={{ marginTop: 14 }}>
+              Indicative only. Accounting's figure is recomputed from the rate card on submit.
+            </div>
+          </div>
+        </div>
       </div>
     </Page>
   );
