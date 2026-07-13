@@ -70,13 +70,14 @@ Public Suffix List, so the two subdomains count as different sites.
 **Fix.** The frontend service runs **nginx**, which both serves the SPA and
 reverse-proxies `/api/*` to the backend (`frontend/nginx.conf.template`). The
 browser only sees the frontend origin, so the session cookie is **first-party**
-and works everywhere. The SPA calls relative `/api` paths (`VITE_API_BASE` is
-empty), and nginx forwards them — cookies pass through untouched in both
-directions.
+and works everywhere. Because it's first-party, the cookie ships as
+`HttpOnly; Secure; SameSite=Lax`. The SPA calls relative `/api` paths
+(`VITE_API_BASE` is empty), and nginx forwards them — cookies pass through
+untouched in both directions.
 
 Verified: logging in at the frontend origin stores `vfw_session` against
-`frontend-production-b4a4.up.railway.app` and a follow-up `/api/auth/me`
-authenticates with it.
+`frontend-production-b4a4.up.railway.app` (`SameSite=Lax`) and a follow-up
+`/api/auth/me` authenticates with it.
 
 ---
 
@@ -88,7 +89,8 @@ authenticates with it.
 |----------|-------|-------|
 | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` | Reference to the Postgres plugin (internal URL). |
 | `JWT_SECRET` | 96-hex-char random | `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"` |
-| `NODE_ENV` | `production` | Makes the session cookie `Secure; SameSite=None`. |
+| `NODE_ENV` | `production` | Makes the session cookie `Secure`. |
+| `COOKIE_SAMESITE` | *(unset → `lax`)* | Escape hatch; set `none` only for a cross-site (no-proxy) deployment. |
 | `CORS_ORIGIN` | frontend URL | Belt-and-braces; browser calls are now same-origin so CORS isn't exercised. |
 | `PORT` | *(injected by Railway)* | Do not set. |
 
