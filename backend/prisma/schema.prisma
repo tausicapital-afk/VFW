@@ -50,6 +50,8 @@ model User {
   commissionPct Decimal    @default(0) @db.Decimal(5, 2)
   target        Decimal    @default(0) @db.Decimal(14, 2)
   colour        String     @default("#0E0E11")
+  // Presence: when this user's last socket disconnected. Powers "last seen".
+  lastSeenAt    DateTime?
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
@@ -63,6 +65,10 @@ model User {
   auditEntries      AuditEntry[]
   invitationsIssued Invitation[]     @relation("InvitationIssuer")
   passwordResets    PasswordReset[]
+
+  conversationsCreated Conversation[]            @relation("ConvCreator")
+  participations       ConversationParticipant[]
+  messagesSent         Message[]                 @relation("MsgSender")
 
   @@index([role, status])
 }
@@ -472,4 +478,98 @@ model Settings {
   fxRates             Json    @default("{\"CAD\":1,\"USD\":1.37,\"GBP\":1.74,\"EUR\":1.49,\"JPY\":0.0092}")
   scoreWeights        Json    @default("{\"revenue\":30,\"approved\":20,\"collection\":30,\"retention\":20}")
   updatedAt           DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Messaging — team chat (DMs + groups). Real-time over WebSockets.
+//
+// This is NOT financial evidence: messages are deliberately kept out of
+// AuditEntry, which is submission-scoped and append-only for accounting. These
+// tables are additive and touch nothing in the money loop.
+// ---------------------------------------------------------------------------
+
+enum ConversationKind {
+  DM
+  GROUP
+}
+
+model Conversation {
+  id    String           @id @default(cuid())
+  kind  ConversationKind @default(DM)
+  title String? // group only
+
+  // For a DM: the two userIds sorted and joined ("a:b"), so opening the same DM
+  // twice reuses the one thread instead of forking a second. Null for groups.
+  dmKey String? @unique
+
+  createdById   String
+  createdBy     User     @relation("ConvCreator", fields: [createdById], references: [id])
+  createdAt     DateTime @default(now())
+  lastMessageAt DateTime @default(now())
+
+  participants ConversationParticipant[]
+  messages     Message[]
+
+  @@index([lastMessageAt])
+}
+
+model ConversationParticipant {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id])
+
+  // Group admin (rename / add / remove participants). Always false for a DM.
+  isAdmin  Boolean   @default(false)
+  joinedAt DateTime  @default(now())
+  leftAt   DateTime?
+
+  // Receipt cursors — the WhatsApp model. Instead of one row per message per
+  // recipient, each participant carries the ordinal (Message.seq) of the last
+  // message delivered to / read by them. Ticks are computed by comparison.
+  lastReadSeq      Int @default(0)
+  lastDeliveredSeq Int @default(0)
+
+  mutedUntil DateTime?
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+}
+
+model Message {
+  id String @id @default(cuid())
+
+  // Global monotonic ordinal. cuid is not orderable and createdAt can tie, so
+  // seq is the single source of truth for "before / after" and for the cursors.
+  seq Int @default(autoincrement())
+
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String
+  sender         User         @relation("MsgSender", fields: [senderId], references: [id])
+
+  body      String? // null for a pure-media message
+  createdAt DateTime  @default(now())
+  editedAt  DateTime?
+  deletedAt DateTime? // soft delete → "this message was deleted"
+
+  attachments MessageAttachment[]
+
+  @@index([conversationId, seq])
+}
+
+model MessageAttachment {
+  id        String  @id @default(cuid())
+  messageId String
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  // Object-storage key (R2/S3): messages/<conversationId>/<cuid>-<filename>.
+  // The bytes never pass through the API — same presigned model as Document.
+  storageKey  String
+  filename    String
+  contentType String
+  size        Int?
+  width       Int? // image dimensions, so the UI reserves space without reflow
+  height      Int?
 }

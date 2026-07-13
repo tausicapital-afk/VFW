@@ -35,6 +35,21 @@ export const CurrentUser = createParamDecorator(
 );
 
 /**
+ * Verify a session JWT and return its user. The single definition of "who is
+ * this token", shared by the HTTP guard below and the WebSocket gateway — the
+ * gateway authenticates its handshake with the same cookie, and must not grow a
+ * second, subtly different copy of this rule. Throws on a missing/invalid token.
+ */
+export async function verifySession(jwt: JwtService, token?: string): Promise<AuthUser> {
+  if (!token) throw new UnauthorizedException('Not signed in');
+  try {
+    return await jwt.verifyAsync<AuthUser>(token);
+  } catch {
+    throw new UnauthorizedException('Session expired');
+  }
+}
+
+/**
  * One guard for both concerns: it verifies the session cookie, then checks the
  * ACL permission the route declared. Applied globally, so an endpoint is
  * locked down unless it is explicitly marked @Public().
@@ -47,6 +62,12 @@ export class AuthGuard implements CanActivate {
   ) {}
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
+    // This guard reads an HTTP request/cookie. It is registered globally, and a
+    // global guard also fires on WebSocket message handlers — where there is no
+    // such request. The gateway authenticates its own handshake (see
+    // messaging.gateway.ts), so anything that is not HTTP is not our concern.
+    if (ctx.getType() !== 'http') return true;
+
     const isPublic = this.reflector.getAllAndOverride<boolean>(PUBLIC_KEY, [
       ctx.getHandler(),
       ctx.getClass(),
@@ -54,15 +75,7 @@ export class AuthGuard implements CanActivate {
     if (isPublic) return true;
 
     const req = ctx.switchToHttp().getRequest<Request & { user?: AuthUser }>();
-    const token = req.cookies?.[SESSION_COOKIE];
-    if (!token) throw new UnauthorizedException('Not signed in');
-
-    let payload: AuthUser;
-    try {
-      payload = await this.jwt.verifyAsync<AuthUser>(token);
-    } catch {
-      throw new UnauthorizedException('Session expired');
-    }
+    const payload = await verifySession(this.jwt, req.cookies?.[SESSION_COOKIE]);
     req.user = payload;
 
     const permission = this.reflector.getAllAndOverride<Permission>(PERMISSION_KEY, [

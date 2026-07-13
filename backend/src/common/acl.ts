@@ -24,6 +24,7 @@ export const ACL = {
   'feedback.record': ['MGR', 'ADMIN', 'ACCT', 'SALES', 'INTERN'],
   'internal.comment': ['ACCT', 'MGR', 'ADMIN'],
   'internal.view': ['ACCT', 'MGR', 'ADMIN'],
+  'messaging.use': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
   'admin.manage': ['ADMIN'],
 } as const satisfies Record<string, readonly Role[]>;
 

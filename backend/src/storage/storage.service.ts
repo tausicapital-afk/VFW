@@ -66,12 +66,19 @@ export class StorageService {
     return getSignedUrl(this.requireClient(), cmd, { expiresIn: EXPIRES_SECONDS });
   }
 
-  /** A short-lived URL that streams the file back as a named download. */
-  presignDownload(key: string, filename: string): Promise<string> {
+  /**
+   * A short-lived URL that streams the file back.
+   *
+   * `inline` controls the disposition: an attachment (the default) forces a
+   * download, which is right for a contract; `inline: true` lets the browser
+   * render it in place, which is what a chat image wants.
+   */
+  presignDownload(key: string, filename: string, inline = false): Promise<string> {
+    const disposition = inline ? 'inline' : 'attachment';
     const cmd = new GetObjectCommand({
       Bucket: this.bucket,
       Key: key,
-      ResponseContentDisposition: `attachment; filename="${filename.replace(/"/g, '')}"`,
+      ResponseContentDisposition: `${disposition}; filename="${filename.replace(/"/g, '')}"`,
     });
     return getSignedUrl(this.requireClient(), cmd, { expiresIn: EXPIRES_SECONDS });
   }

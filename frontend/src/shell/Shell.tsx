@@ -3,6 +3,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { can, type Permission } from '../lib/acl';
 import { api } from '../lib/api';
+import { messagingApi, qk, useMessagingRealtime, type Conversation } from '../lib/messaging';
 import type { Role, Submission, User } from '../lib/types';
 
 const ROLE_LABEL: Record<Role, string> = {
@@ -17,7 +18,7 @@ const ROLE_LABEL: Record<Role, string> = {
 // slice are enabled; the rest land as they are built.
 type NavItem =
   | { grp: string }
-  | { to: string; label: string; ic: string; roles: Role[]; badge?: 'queue' };
+  | { to: string; label: string; ic: string; roles: Role[]; badge?: 'queue' | 'messages' };
 
 const NAV: NavItem[] = [
   { grp: 'Work' },
@@ -25,6 +26,7 @@ const NAV: NavItem[] = [
   { to: '/new', label: 'New submission', ic: '+', roles: ['SALES', 'INTERN', 'ADMIN'] },
   { to: '/submissions', label: 'Submissions', ic: '▤', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
   { to: '/contacts', label: 'Contacts', ic: '◈', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
+  { to: '/messages', label: 'Messages', ic: '✉', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'], badge: 'messages' },
   { to: '/queue', label: 'Approval queue', ic: '⚑', roles: ['ACCT', 'ADMIN'], badge: 'queue' },
   { to: '/qbo', label: 'QuickBooks', ic: '⇪', roles: ['ACCT', 'ADMIN'] },
   { grp: 'People' },
@@ -51,6 +53,11 @@ export function Shell() {
   const { user, logout } = useAuth();
   const location = useLocation();
 
+  // Wire the messaging socket for the whole signed-in session: this keeps the
+  // conversation cache (and the unread badge below) live from any screen, and
+  // tears the socket down on sign-out.
+  useMessagingRealtime();
+
   // Only Accounting/Admin can read the queue, so only they may ask for its
   // depth — otherwise this fires a request that is guaranteed to 403.
   const showQueue = can('submission.approve', user?.role);
@@ -60,9 +67,21 @@ export function Shell() {
     enabled: showQueue,
   });
 
+  // Everyone can message, so everyone polls their conversation list for the
+  // unread badge; the socket keeps it fresh, this is just the initial load.
+  const { data: conversations } = useQuery({
+    queryKey: qk.conversations,
+    queryFn: () => messagingApi.conversations(),
+    enabled: !!user,
+  });
+
   if (!user) return null;
 
   const pending = queue?.filter((s) => s.status === 'PENDING').length ?? 0;
+  const unreadMessages = (conversations ?? []).reduce(
+    (t: number, c: Conversation) => t + (c.unreadCount ?? 0),
+    0,
+  );
 
   return (
     // .on is what makes #app visible and lays out the rail + main grid.
@@ -86,7 +105,8 @@ export function Shell() {
               return visible ? <div className="grp" key={`g${i}`}>{item.grp}</div> : null;
             }
             if (!item.roles.includes(user.role)) return null;
-            const badge = item.badge === 'queue' ? pending : 0;
+            const badge =
+              item.badge === 'queue' ? pending : item.badge === 'messages' ? unreadMessages : 0;
             return (
               <NavLink
                 key={item.to}

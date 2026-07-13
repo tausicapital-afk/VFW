@@ -60,6 +60,16 @@ export const throttlerOptions: ThrottlerModuleOptions = {
 @Injectable()
 export class VfwThrottlerGuard extends ThrottlerGuard {
   /**
+   * The IP-keyed limiter is about HTTP requests. As a global guard it would also
+   * run on WebSocket message handlers, where there is no `req.ip` and its path
+   * predicates make no sense — skip those; socket flooding is a separate concern.
+   */
+  async canActivate(ctx: ExecutionContext): Promise<boolean> {
+    if (ctx.getType() !== 'http') return true;
+    return super.canActivate(ctx);
+  }
+
+  /**
    * Key the limit on the caller's IP.
    *
    * `req.ip` is only trustworthy because `trust proxy` is configured in main.ts

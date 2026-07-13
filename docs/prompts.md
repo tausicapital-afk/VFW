@@ -350,9 +350,39 @@ one with an actual API response, not a screenshot of a hidden UI element.
 
 ### ✅ Built — 2026-07-13
 
-No schema change, as predicted. `backend/src/{admin,feedback,internal}/`,
-`common/email.ts`, the three new auth routes, and
-`frontend/src/pages/{Admin,Feedback,Internal,Signup,ResetPassword}.tsx`.
+No schema change, as predicted — the four models were already migrated.
+
+**What landed**
+
+| File | What it is |
+|---|---|
+| `backend/src/admin/admin.service.ts` | Invitations, user approval, catalogue + settings editing |
+| `backend/src/admin/admin.controller.ts` | Every route `@Can('admin.manage')`, per handler |
+| `backend/src/admin/catalog.spec.ts` | Holds the line that a price edit cannot move history |
+| `backend/src/feedback/feedback.controller.ts` | `feedback.record` / `feedback.view` |
+| `backend/src/internal/internal.controller.ts` | The confidential comments — see below |
+| `backend/src/common/email.ts` | Resend adapter; **throws** when unconfigured |
+| `backend/src/auth/{auth.service,auth.controller,dto}.ts` | signup · forgot · reset |
+| `frontend/src/pages/Admin.tsx` | Five tabs: invitations · users · packages · tax · settings |
+| `frontend/src/pages/{Feedback,Internal}.tsx` | The two People screens + the submission-detail cards |
+| `frontend/src/pages/{Signup,ResetPassword}.tsx` | The three signed-out screens (`AuthShell` reuses `#login`) |
+
+| Endpoint | Guard |
+|---|---|
+| `GET/POST /api/invitations`, `POST /api/invitations/:id/revoke` | `admin.manage` |
+| `GET /api/users`, `GET /api/users/pending`, `POST /api/users/:id/{approve,reject}` | `admin.manage` |
+| `GET /api/admin/catalogue`, `PATCH /api/admin/{packages,addons,tax}/:id`, `GET/PATCH /api/admin/settings` | `admin.manage` |
+| `POST /api/auth/{signup,forgot-password,reset-password}` | `@Public()` |
+| `GET /api/feedback` · `POST /api/feedback` | `feedback.view` · `feedback.record` |
+| `GET /api/internal-comments`, `GET /api/submissions/:id/comments` | `internal.view` |
+| `POST /api/submissions/:id/comments` | `internal.comment` |
+
+Only classes `console.css` already defines: `.tabs`/`.tab.on`, `.modal .box`,
+`.log .e`, `.kpi`, `.pill.{STATUS}`, `.stars`, `.note.lock`, `.errbox`, `.req`,
+`.pendingIcon`, `.authBack`. Nothing new invented.
+
+**New environment variables** (`backend/.env.example` documents all of them):
+`RESEND_API_KEY`, `EMAIL_FROM`, `APP_URL`, `DEV_ECHO_LINKS`.
 
 **The prompt said "stop and ask" about email. It stopped and asked.** No API key
 was given, so there is no working mail transport. What exists instead:
@@ -400,13 +430,46 @@ was given, so there is no working mail transport. What exists instead:
 | **A SALES rep gets no internal comments** | `GET /api/submissions/:id` as the rep who owns it: 2,099 bytes, 51 top-level keys, **no `comments` key**, no trace of the canary planted in a comment on that exact record. The three comment routes 403 her. Accounting reads the same comment fine. |
 | Catalogue edits do not move history | Add-on tripled £760 → £2,391; the sale that bought it kept £760/£760 and its **£32,572.80** total. |
 
+In the browser, the rep's own submission detail renders **no Internal notes card
+at all** — the client does not even issue the request, and the server would 403 it
+if it did. Accounting, on the same record, sees the card with the comment in it.
+
 `npm test` in `backend/`: **34 passing**, including the new
 `admin/catalog.spec.ts`.
 
-**Known follow-up:** set `RESEND_API_KEY` + `EMAIL_FROM` and delete
-`DEV_ECHO_LINKS` from the environment. Until then, self-service password reset is
-not usable by a real user, and this is the only part of Phase 4 that is not
-finished.
+**An open question the next session should settle**
+
+A rep cannot read internal comments — but her **audit trail** shows
+`INTERNAL_COMMENT — Confidential Production comment added (excluded from
+scoring)`, with the author and the timestamp. The *content* never leaks; the
+*existence* does. So Marielle can tell that Hannah filed a confidential note about
+her deal at 11:22.
+
+This is faithful to the mockup, which logs exactly that string (line 2410) to an
+audit tab the rep can see, and it follows from the audit trail being append-only
+and complete. But it is arguably a disclosure about a person, and it was left as
+the mockup has it rather than changed unilaterally — **suppressing it means
+filtering an audit trail the system advertises as complete**, which is a bigger
+decision than it looks. If it should go, the change is to omit `INTERNAL_COMMENT`
+entries from `GET /api/submissions/:id/audit` when the caller is the rep.
+
+**How to re-run the proof**
+
+The rate limiter added in Phase 5 allows **10 auth POSTs per minute per IP, then
+blocks for 15 minutes** — enough to cut a scripted walk-through of this flow in
+half. Restart the API between phases (the throttler's buckets are in-memory) and
+keep each script under ten sign-ins, or the run will report false failures that
+look like bugs in this code and are not.
+
+**Known follow-ups**
+
+1. **Set `RESEND_API_KEY` + `EMAIL_FROM`, then remove `DEV_ECHO_LINKS`.** Until
+   then self-service password reset is not usable by a real user. This is the only
+   part of Phase 4 that is not finished.
+2. Settle the audit-trail question above.
+3. `frontend/` now carries `playwright` as a devDependency (for the browser
+   proof); `backend/` gained `@nestjs/throttler` + `nestjs-pino` and friends,
+   which Phase 5's code imported.
 
 ---
 
@@ -422,16 +485,12 @@ GOAL: this system handles money and is about to have real users. Harden it.
    global rate limit. Add @nestjs/throttler. Be stricter on the auth endpoints
    than on reads.
 
-2. THE COOKIE / CUSTOM DOMAIN — read §5 of docs/architecture.md carefully.
-   up.railway.app is on the Public Suffix List, so the SPA and API are treated as
-   DIFFERENT SITES and the session is currently a third-party cookie. Safari's ITP
-   already blocks that shape and Chrome is phasing it out. The failure mode is
-   nasty: sign-in breaks in the browser while the API keeps working fine under
-   curl.
-   backend/src/common/cookie.ts already supports COOKIE_DOMAIN. Walk me through
-   pointing a custom domain at both Railway services (app.example.com and
-   api.example.com), setting COOKIE_DOMAIN=.example.com, and VERIFY in a real
-   browser that the cookie comes back as SameSite=Lax and first-party.
+2. THE COOKIE. WARNING: docs/architecture.md §5 is STALE. backend/src/common/
+   cookie.ts has already been rewritten for a single-origin nginx proxy (the
+   frontend proxies /api to the API, so the cookie is first-party SameSite=Lax).
+   READ THE CODE FIRST, verify in a real browser what Set-Cookie actually comes
+   back, then correct §5 to match reality rather than re-fixing a problem that
+   may no longer exist.
 
 3. OBSERVABILITY. There is no structured logging and no error tracking. When a
    total looks wrong at month-end, someone will need to reconstruct why. Add
@@ -445,11 +504,113 @@ GOAL: this system handles money and is about to have real users. Harden it.
 5. BACKUPS. Confirm Railway's Postgres backups are on and tell me the restore
    procedure. An append-only audit trail is worthless if the database can vanish.
 
-DONE WHEN: rate limiting demonstrably rejects a burst of login attempts, the
-session cookie is first-party SameSite=Lax on a custom domain (show me the actual
-Set-Cookie header), errors reach Sentry, and you've told me in plain terms what
-the backup/restore story is.
+DONE WHEN: a burst of login attempts is demonstrably rejected, you show me the
+actual Set-Cookie header from a real browser, an error reaches Sentry, and you
+tell me the backup/restore story in plain terms.
+
+If you need Railway or Sentry credentials I have not given you, STOP AND ASK.
 ```
+
+### ✅ Built — 2026-07-13
+
+Run alongside Phase 4 in a second session, staying out of `backend/src/{reports,auth}/`
+and the admin screens. New files: `backend/src/common/{throttler,logging,sentry}.ts`,
+`docs/runbook-backups.md`. Modified: `main.ts`, `app.module.ts`, `.env.example`,
+`architecture.md` §5 + new §10.
+
+**The headline finding was not on the list: there were NO database backups.**
+Item 5 said "confirm backups are on". They were not on — Railway's API reported
+zero backup schedules and zero snapshots on the Postgres volume. If the database
+had been lost that day, every submission, payment, invoice and audit entry would
+have gone with it. **This was the most serious issue in the pass**, more serious
+than any cookie or rate limit, and it was hiding behind the word "confirm".
+Enabling it from the CLI token returns `Not Authorized` — the owner has to flip
+it in the dashboard. See `docs/runbook-backups.md`.
+
+**§5 was stale, and the prompt was right to say so.** The old §5 described the
+session as a doomed third-party cookie needing a custom domain. Verified in a real
+Chromium against production instead of trusting the doc — `POST /api/auth/login`
+→ 201 returned:
+
+```
+Set-Cookie: vfw_session=<JWT>; Max-Age=86400; Path=/; Expires=…;
+            HttpOnly; Secure; SameSite=Lax
+```
+
+Host-only on the frontend domain, no `Domain` attribute, `/api/auth/me` → 200,
+`document.cookie` empty. The nginx proxy had already removed the second origin and
+with it the problem. §5 now says so, and says it used to say the opposite. **A
+custom domain is cosmetic now, not a prerequisite. Do not re-fix this.**
+
+**Rate limiting** — `common/throttler.ts`. Two IP-keyed buckets: `auth`
+(10 writes/min to `POST /api/auth/*`, then a 15-minute block) and `global`
+(300/min for everything else). `/api/health` is exempt or Railway's probe would
+fail the deploy.
+
+- The limits are **one table, not `@Throttle()` decorators** — so a new endpoint
+  cannot be born unlimited because someone forgot to decorate it. It also kept the
+  change out of `auth/`, which another session owned.
+- The throttler guard is registered **before** the auth guard, so a flood is
+  rejected before it costs a JWT verify, a DB round-trip or an argon2 hash.
+- It **layers with** the per-email lockout rather than replacing it. The demo that
+  matters: an attacker who **rotates the email** dodges the per-email lockout
+  entirely (nine straight 401s, lockout never fires) and is stopped at attempt 10
+  by the IP limit. Same email → lockout at 6, throttle at 11.
+
+**Observability** — `common/logging.ts` (pino) + `common/sentry.ts`. One rule:
+a secret must never reach a log line or an error report. No cookie/`set-cookie`,
+no `authorization`, and **no request body at all** — a body is where a password
+lives, and there is no redaction rule to get wrong if it is never serialized.
+Sentry runs `sendDefaultPii: false` and attaches the user as `{id, role}`, never
+an email; it only reports genuine 5xx (a 403 from the ACL guard is the system
+*working*, and paging on it teaches everyone to ignore Sentry).
+
+Proven by taking Postgres down under a live authenticated request. The real
+`PrismaClientKnownRequestError` was transmitted with `transaction: GET
+/api/submissions`, `user: {id, role}` and a `request_id` that also appears in the
+pino log — and `request.headers` held only `host`, `user-agent`, `accept`, **even
+though that request carried the session cookie**. Scans for the cookie, the
+password and any JWT came back clean in both sinks.
+
+**Secrets** — `JWT_SECRET` in Railway is 96 hex chars, uniformly distributed: a
+real `randomBytes(48)`, not the placeholder. Checked without printing it. **Not
+rotated, and it should not be casually — rotating it signs every user out**, since
+it is the key the session JWTs are verified with.
+
+**Decisions worth not re-litigating**
+
+- **`TRUST_PROXY_HOPS` is a NUMBER, not `true`.** It is the load-bearing setting
+  behind the whole rate limiter. `true` takes the left-most `X-Forwarded-For`
+  entry — whatever the caller typed — so an attacker rotates it and is never
+  limited. Too low and every user shares the proxy's IP, one bucket for the
+  company, and real people get 429s. `GET /api/health/ip` exists to tune it.
+- **Sentry is optional by construction.** No DSN → `initSentry()` returns false
+  and the app runs normally. An observability vendor being unconfigured must never
+  stop the API from booting.
+- **Backups are disk snapshots, not `.sql` files.** Restoring is all-or-nothing
+  and destructive. It answers "the database is corrupted"; it answers "someone
+  deleted one invoice an hour ago" very badly. Hence the `pg_dump` recommendation
+  in the runbook — a dump you have restored is a backup; a snapshot you never have
+  is a hope.
+
+**Known follow-ups — Phase 5 is not true in production until these three land:**
+
+1. **Turn on Postgres backups** in the Railway dashboard (owner only). Nothing
+   else on this list matters as much.
+2. **Set `TRUST_PROXY_HOPS`** on the Railway backend service. It defaults to `0`,
+   which is right locally and *wrong* behind the proxy — deploy, call
+   `GET /api/health/ip` through the frontend domain, set the count that makes `ip`
+   come back as your own address.
+3. **Set `SENTRY_DSN`.** No DSN was supplied, so error tracking is inert by
+   design. The error above reached a local ingest stand-in the SDK was pointed at,
+   **not sentry.io** — the transmit-and-scrub path is proven, the vendor leg is not.
+
+**Found, not fixed:** the backend still has its own public Railway domain, so a
+caller can skip nginx, hit the API directly and forge `X-Forwarded-For`, defeating
+the IP limiter however the hop count is tuned. Removing that domain and pointing
+nginx's `BACKEND_URL` at `RAILWAY_PRIVATE_DOMAIN` closes it. Highest-value change
+left; left undone because it changes how the two services talk and could take the
+site down unattended.
 
 ---
 
@@ -462,6 +623,20 @@ failure mode is a session that reports success because the code compiles. Keep i
 when you adapt these.
 
 The prompts also tell the model to **stop and ask** rather than invent a fallback
-when a credential is missing (R2, email transport). That is deliberate too — a
-silent local-disk fallback for document storage would look like it works right up
-until the first redeploy eats a signed contract.
+when a credential is missing (R2, email transport, Sentry DSN). That is deliberate
+too — a silent local-disk fallback for document storage would look like it works
+right up until the first redeploy eats a signed contract. It has worked every
+time: Phase 2 stopped on R2, Phase 4 stopped on the mail transport, Phase 5
+stopped on the Sentry DSN.
+
+Two lessons from Phase 5 worth carrying into future prompts:
+
+- **Point at the code, not at the doc, when the two might disagree.** Phase 5's
+  cookie task said *"§5 is STALE — read the code first, verify in a browser, then
+  correct the doc"*. That is the only reason the session didn't spend its time
+  re-solving a third-party-cookie problem that the nginx proxy had already
+  deleted. A stale doc is worse than no doc, because it is confidently wrong.
+- **"Confirm X is on" must be allowed to come back "X is off."** Phase 5 asked to
+  *confirm* backups were enabled. They were not, and that turned out to be the
+  most serious finding in the phase. Word verification tasks so that the
+  discovering of a bad answer is a success, not a failure to be worked around.

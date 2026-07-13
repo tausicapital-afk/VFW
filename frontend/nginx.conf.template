@@ -15,6 +15,25 @@ server {
     root         /usr/share/nginx/html;
     index        index.html;
 
+    # The WebSocket front door for messaging (socket.io mounts at
+    # /api/socket.io). It needs the HTTP/1.1 Upgrade handshake that the plain
+    # /api/ block below does not pass, and a long read timeout so an idle but
+    # healthy socket is not culled mid-conversation. Must come BEFORE /api/ —
+    # nginx picks the longest matching prefix, and this one is more specific.
+    location /api/socket.io/ {
+        proxy_pass                 ${BACKEND_URL};
+        proxy_http_version         1.1;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        "upgrade";
+        proxy_set_header Host              $proxy_host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_ssl_server_name      on;
+        proxy_read_timeout         3600s;
+        proxy_send_timeout         3600s;
+    }
+
     # Reverse-proxy the API to the backend. proxy_pass has no path, so the full
     # /api/... URI is forwarded unchanged (the backend serves routes under /api).
     location /api/ {

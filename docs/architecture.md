@@ -411,3 +411,82 @@ or on staff departure), not as routine hygiene.
 ### 10.4 Backups
 
 See `docs/runbook-backups.md`.
+
+---
+
+## 11. Messaging
+
+Team chat inside the console — DMs and groups, WhatsApp-Web style: real-time
+delivery, typing indicators, online/last-seen presence, sent/delivered/read
+ticks, and image/media attachments. `backend/src/messaging/`,
+`frontend/src/pages/Messages.tsx`. It is **additive** — new tables only, nothing
+in the money loop changed — and deliberately **not** part of `AuditEntry`, which
+is financial evidence, not a chat log.
+
+### 11.1 Transport — the first WebSocket surface
+
+Everything else in this system is REST. Messaging adds a socket.io gateway
+(`messaging.gateway.ts`) mounted at **`/api/socket.io`**, so it rides the same
+nginx front door as the API and the session cookie stays first-party. The plain
+`/api/` proxy block does not pass the HTTP/1.1 `Upgrade` handshake, so
+`nginx.conf.template` has a dedicated `location /api/socket.io/` block (and Vite
+proxies it with `ws: true` in dev).
+
+The global HTTP `AuthGuard` cannot see a WebSocket handshake, so the gateway
+authenticates it directly with the **same** `vfw_session` cookie via the shared
+`verifySession()` helper — one definition of "who is this token", used by both
+the guard and the gateway. Conversely, the global guards now no-op on non-HTTP
+contexts (`ctx.getType() !== 'http'`), so a global guard does not wrongly gate a
+socket message handler.
+
+The durable side (history, sending, media) is REST; the live side (typing,
+presence, receipts) is the socket. A message is **persisted over REST**, then
+fanned out over the socket — so validation, the ACL and the membership check run
+once, in one place.
+
+### 11.2 Receipts are cursors, not rows
+
+Rather than a row per message per recipient, each `ConversationParticipant`
+carries two ordinals — `lastReadSeq` and `lastDeliveredSeq` — against
+`Message.seq`, a global autoincrement. A tick is then a comparison
+(`messaging/receipts.ts`, pure and unit-tested like `score.ts`): **delivered**
+when every *other* participant's delivered-cursor has reached the message,
+**read** when every other read-cursor has. In a group that means the *minimum*
+across everyone, so ✓✓-blue only lands once the last person has read it. Cursors
+only ever move forward (`GREATEST` in SQL), so an out-of-order client can't
+rewind a receipt.
+
+### 11.3 Boundary and access
+
+`messaging.use` is held by every role — anyone may message anyone. The real
+boundary is **membership**: `assertMember()` gates every read and write, and a
+non-member gets **404, not 403** (the same existence-hiding answer the rest of
+the system gives for another rep's record). A DM is idempotent — the two userIds
+are sorted into a unique `dmKey`, so opening the same DM twice reuses the one
+thread. Group rename / add / remove require `isAdmin`; anyone can leave; a DM
+cannot be left.
+
+### 11.4 Media
+
+Reuses the R2 `StorageService` and the presigned-PUT/GET model exactly as
+documents do — the bytes never pass through the API, and with `R2_*` unset the
+presign returns a **loud 503**, never a silent local-disk fallback. Images get
+an `inline` content-disposition so they render in the bubble; other files
+download.
+
+### 11.5 Presence and scale
+
+Presence is an **in-memory map** in the gateway (userId → set of live sockets),
+so "online" and "last seen" are correct for **one backend instance**. Scaling
+past one needs the socket.io **Redis adapter** and a shared presence store — a
+documented follow-up, consistent with keeping Redis out until it is actually
+needed (see QBO, §Decisions). WebSocket message flooding is also not yet
+rate-limited (the IP throttler covers HTTP only).
+
+**Verified live** (2026-07-13) with two cookie-authenticated socket clients:
+a DM message delivered to the recipient in real time and turned the sender's
+tick ✓ → ✓✓ → blue ✓✓ as it was delivered then read; a typing indicator crossed;
+an outsider got 404 on the thread; a 3-person group fanned a message to both
+others; presign 503'd without R2; and a disconnect produced an offline+last-seen
+presence event. `backend/` tests: **98 passing**, including
+`messaging/receipts.spec.ts` and `messaging/messaging.service.spec.ts`.

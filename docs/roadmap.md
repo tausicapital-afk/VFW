@@ -255,6 +255,37 @@ the rate card.
 
 ---
 
+## Messaging ✅ **Built — 2026-07-13**
+
+Team chat for all users — DMs + groups, WhatsApp-Web style. Real-time delivery,
+typing, online/last-seen presence, sent/delivered/read ticks, media attachments.
+The first WebSocket surface in a previously all-REST system. Additive: four new
+tables (`Conversation`, `ConversationParticipant`, `Message`,
+`MessageAttachment`), nothing in the money loop touched, and deliberately outside
+`AuditEntry`. Full design in `architecture.md` §11.
+
+- **Backend** `backend/src/messaging/` — `messaging.gateway.ts` (socket.io at
+  `/api/socket.io`, cookie-authed handshake), `messaging.service.ts`,
+  `messaging.controller.ts` (all `@Can('messaging.use')`), `receipts.ts` (pure
+  tick logic) + specs. Guards no-op on non-HTTP contexts so they don't clobber
+  socket handlers.
+- **Frontend** `pages/Messages.tsx` (two-pane UI), `lib/messaging.ts` +
+  `lib/socket.ts`, `styles/messaging.css`, nav item with a live unread badge.
+- **Proxy** `nginx.conf.template` gained a `/api/socket.io/` upgrade block;
+  `vite.config.ts` proxies it with `ws: true`.
+- Verified live with two socket clients (see §11); `npm test` → **98 passing**.
+
+**Known follow-ups**
+
+1. **Media needs `R2_*`.** Attachments reuse the document R2 pipeline; with the
+   keys unset, presign returns a loud **503** (no local fallback, by design — same
+   stance as Phase 2 documents). Set `R2_*` in `backend/.env` to verify the
+   image round-trip end-to-end.
+2. **Presence/fan-out are single-instance** (in-memory). Multiple backend
+   instances need the socket.io **Redis adapter** + a shared presence store.
+3. **No WS-level rate limit** — the IP throttler covers HTTP only.
+4. Not yet built: message search, edit/delete UI, reactions, push notifications.
+
 ## Cross-cutting — do not skip
 
 ### Tests

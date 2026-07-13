@@ -11,6 +11,7 @@ import { EditSubmission } from './pages/EditSubmission';
 import { Feedback } from './pages/Feedback';
 import { Internal } from './pages/Internal';
 import { Login } from './pages/Login';
+import { Messages } from './pages/Messages';
 import { NewSubmission } from './pages/NewSubmission';
 import { Qbo } from './pages/Qbo';
 import { Queue } from './pages/Queue';
@@ -70,6 +71,7 @@ function Routed() {
         <Route path="/qbo" element={<Guard permission="quickbooks.export"><Qbo /></Guard>} />
         <Route path="/contacts" element={<Contacts />} />
         <Route path="/contacts/:id" element={<ContactDetail />} />
+        <Route path="/messages" element={<Guard permission="messaging.use"><Messages /></Guard>} />
         <Route path="/queue" element={<Guard permission="submission.approve"><Queue /></Guard>} />
         <Route path="/board" element={<Guard permission="leaderboard.view"><Board /></Guard>} />
         <Route path="/feedback" element={<Guard permission="feedback.view"><Feedback /></Guard>} />
