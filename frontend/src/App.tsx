@@ -1,9 +1,13 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth/AuthContext';
+import { Contacts } from './pages/Contacts';
+import { ContactDetail } from './pages/ContactDetail';
 import { Dashboard } from './pages/Dashboard';
+import { EditSubmission } from './pages/EditSubmission';
 import { Login } from './pages/Login';
 import { NewSubmission } from './pages/NewSubmission';
+import { Qbo } from './pages/Qbo';
 import { Queue } from './pages/Queue';
 import { Submissions } from './pages/Submissions';
 import { SubmissionDetail } from './pages/SubmissionDetail';
@@ -40,6 +44,10 @@ function Routed() {
         <Route path="/new" element={<Guard permission="submission.create"><NewSubmission /></Guard>} />
         <Route path="/submissions" element={<Submissions />} />
         <Route path="/submissions/:id" element={<SubmissionDetail />} />
+        <Route path="/submissions/:id/edit" element={<Guard permission="submission.editOwn"><EditSubmission /></Guard>} />
+        <Route path="/qbo" element={<Guard permission="quickbooks.export"><Qbo /></Guard>} />
+        <Route path="/contacts" element={<Contacts />} />
+        <Route path="/contacts/:id" element={<ContactDetail />} />
         <Route path="/queue" element={<Guard permission="submission.approve"><Queue /></Guard>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

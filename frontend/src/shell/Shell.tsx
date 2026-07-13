@@ -24,7 +24,9 @@ const NAV: NavItem[] = [
   { to: '/', label: 'Dashboard', ic: '◧', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
   { to: '/new', label: 'New submission', ic: '+', roles: ['SALES', 'INTERN', 'ADMIN'] },
   { to: '/submissions', label: 'Submissions', ic: '▤', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
+  { to: '/contacts', label: 'Contacts', ic: '◈', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
   { to: '/queue', label: 'Approval queue', ic: '⚑', roles: ['ACCT', 'ADMIN'], badge: 'queue' },
+  { to: '/qbo', label: 'QuickBooks', ic: '⇪', roles: ['ACCT', 'ADMIN'] },
 ];
 
 function Avatar({ user }: { user: User }) {

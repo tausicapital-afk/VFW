@@ -48,7 +48,35 @@ export interface Catalog {
 
 export interface Contact {
   id: string; brand: string; designer: string;
-  company: string | null; email: string | null; country: string | null;
+  company: string | null; email: string | null;
+  phone?: string | null; country: string | null;
+  type?: string;
+}
+
+/** A single line of a contact's submission history, flattened by the API. */
+export interface ContactSubmission {
+  id: string; ref: string; event: string; brand: string;
+  package: string; total: Money; currency: Currency;
+  status: SubmissionStatus; createdAt: string;
+}
+
+export interface ContactDetail {
+  contact: Contact;
+  // Lifetime value is per-currency — currencies are never summed together.
+  lifetimeValue: Record<string, Money>;
+  submissions: ContactSubmission[];
+}
+
+export type DiscountType = 'PCT' | 'AMT';
+
+export interface Payment {
+  id: string;
+  date: string;
+  amount: Money;
+  currency: Currency;
+  method: string;
+  reference: string | null;
+  createdAt: string;
 }
 
 export interface Submission {
@@ -59,8 +87,11 @@ export interface Submission {
   packagePrice: Money;
   addonTotal: Money;
   subtotal: Money;
+  discountType: DiscountType;
+  discountValue: Money;
   discountAmount: Money;
   taxable: Money;
+  taxCode: string;
   taxRate: Money;
   taxAmount: Money;
   total: Money;
@@ -71,17 +102,24 @@ export interface Submission {
   commissionPct: Money;
   commissionAmount: Money;
   notes: string | null;
+  showDate: string | null;
+  paymentMethod: string | null;
   glCode: string | null;
   costCentre: string | null;
+  department: string | null;
+  invoiceNo: string | null;
+  qbDocNumber: string | null;
   rejectReason: string | null;
   returnNote: string | null;
   submittedAt: string | null;
   approvedAt: string | null;
-  rep: { id: string; name: string; colour: string };
+  exportedAt: string | null;
+  rep: { id: string; name: string; colour: string; role?: Role };
   contact: Contact;
   event: EventRow;
   package: PackageRow;
   addons: { addonId: string; qty: number; amount: Money; addon: AddonRow }[];
+  payments: Payment[];
   tax: TaxProfile;
 }
 

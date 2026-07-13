@@ -1,8 +1,16 @@
-import { Body, Controller, Get, Module, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Module, Param, Patch, Post, Put } from '@nestjs/common';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser, Can, CurrentUser } from '../common/auth.guard';
 import { PricingService } from '../pricing/pricing.service';
-import { ApproveDto, CreateSubmissionDto, RejectDto, ReturnDto } from './dto';
+import {
+  ApproveDto,
+  CreateSubmissionDto,
+  ExportDto,
+  PatchSubmissionDto,
+  PaymentDto,
+  RejectDto,
+  ReturnDto,
+} from './dto';
 import { SubmissionsService } from './submissions.service';
 
 @Controller('api/submissions')
@@ -57,10 +65,44 @@ export class SubmissionsController {
   returnToSales(@Param('id') id: string, @Body() dto: ReturnDto, @CurrentUser() user: AuthUser) {
     return this.submissions.returnToSales(id, dto.note, user);
   }
+
+  @Post(':id/payments')
+  @Can('accounting.fields')
+  addPayment(@Param('id') id: string, @Body() dto: PaymentDto, @CurrentUser() user: AuthUser) {
+    return this.submissions.addPayment(id, dto, user);
+  }
+
+  @Patch(':id')
+  @Can('accounting.fields')
+  patch(@Param('id') id: string, @Body() dto: PatchSubmissionDto, @CurrentUser() user: AuthUser) {
+    return this.submissions.patch(id, dto, user);
+  }
+
+  @Post(':id/invoice')
+  @Can('invoice.generate')
+  invoice(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.submissions.generateInvoice(id, user);
+  }
+
+  @Post(':id/export')
+  @Can('quickbooks.export')
+  export(@Param('id') id: string, @Body() dto: ExportDto, @CurrentUser() user: AuthUser) {
+    return this.submissions.export(id, dto, user);
+  }
+
+  // Rep edits and resubmits their own DRAFT/RETURNED record; ownership is
+  // enforced in the service, which 404s (not 403s) another rep's id.
+  @Put(':id')
+  @Can('submission.editOwn')
+  update(@Param('id') id: string, @Body() dto: CreateSubmissionDto, @CurrentUser() user: AuthUser) {
+    return this.submissions.update(id, dto, user);
+  }
 }
 
 @Module({
   controllers: [SubmissionsController],
   providers: [SubmissionsService, PricingService],
+  // Exported so ContactsService can reuse scopeFor() rather than reinventing it.
+  exports: [SubmissionsService],
 })
 export class SubmissionsModule {}

@@ -7,6 +7,7 @@ import { AuthController } from './auth/auth.controller';
 import { AuthService } from './auth/auth.service';
 import { CatalogModule } from './catalog/catalog.controller';
 import { AuthGuard, Public } from './common/auth.guard';
+import { ContactsModule } from './contacts/contacts.controller';
 import { PrismaModule } from './prisma/prisma.service';
 import { SubmissionsModule } from './submissions/submissions.controller';
 
@@ -31,6 +32,7 @@ class HealthController {
     AuditModule,
     CatalogModule,
     SubmissionsModule,
+    ContactsModule,
   ],
   controllers: [HealthController, AuthController],
   providers: [

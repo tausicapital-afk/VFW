@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-p2/
 build/
 .env
 .env.local

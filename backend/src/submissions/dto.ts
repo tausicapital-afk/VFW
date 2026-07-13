@@ -90,3 +90,48 @@ export class ReturnDto {
   @IsString() @MinLength(1) @MaxLength(4000)
   note: string;
 }
+
+/**
+ * Recording a payment. Amount is deliberately unbounded below zero: a payment is
+ * never deleted — a mistake is corrected with a negative (reversing) entry, so
+ * the ledger stays append-only and auditable.
+ */
+export class PaymentDto {
+  @IsDateString()
+  date: string;
+
+  @IsNumber() @Type(() => Number)
+  amount: number;
+
+  @IsString() @MinLength(1) @MaxLength(60)
+  method: string;
+
+  @IsOptional() @IsString() @MaxLength(120)
+  reference?: string;
+}
+
+/**
+ * Accounting reclassification. Note what is still absent: no total, no tax
+ * amount. Changing the tax profile re-prices the sale server-side; the client
+ * never sends a figure.
+ */
+export class PatchSubmissionDto {
+  @IsOptional() @IsString() @MaxLength(20)
+  glAccount?: string;
+
+  @IsOptional() @IsString() @MaxLength(60)
+  costCentre?: string;
+
+  @IsOptional() @IsString() @MaxLength(20)
+  taxCode?: string;
+
+  @IsOptional() @IsString() @MaxLength(60)
+  department?: string;
+}
+
+export class ExportDto {
+  // "Invoice" or "Sales Receipt" — a QBO document *format*, not a change of
+  // record. The server defaults it from pay status when omitted.
+  @IsOptional() @IsString() @MaxLength(40)
+  docType?: string;
+}
