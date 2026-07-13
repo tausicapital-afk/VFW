@@ -222,8 +222,9 @@ doesn't collide with Option A.
 |----------|-------|
 | `DATABASE_URL` | Reference the Postgres service: `${{ Postgres.DATABASE_URL }}`. |
 | `JWT_SECRET` | A long random string — `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`. |
-| `NODE_ENV` | `production` — required so the session cookie is `Secure` + `SameSite=None`. |
+| `NODE_ENV` | `production` — required so the session cookie is `Secure`. |
 | `CORS_ORIGIN` | The frontend's public URL, exactly (e.g. `https://vfw-console.up.railway.app`). |
+| `COOKIE_DOMAIN` | Optional but **strongly recommended for production** — see the cookie note below. Set to the shared parent of both custom domains, e.g. `.vfwconsole.com`. |
 | `PORT` | Provided by Railway — do not set. |
 
 **frontend**
@@ -241,11 +242,21 @@ data once, after the first deploy:
 railway run --service backend npm run seed
 ```
 
-> **Cookie note.** The API deliberately issues a cross-site session cookie
-> (`SameSite=None; Secure`) so the SPA and API can live on separate domains.
-> Browsers that block third-party cookies may drop it. If sign-in fails only in
-> the browser, the robust fix is to put both services behind one domain (serve
-> the SPA and reverse-proxy `/api` to the backend) — ask and I'll wire that up.
+> **Cookie note — read this before going live.**
+>
+> `up.railway.app` is on the Public Suffix List, which means browsers treat
+> `vfw-console.up.railway.app` and `vfw-api.up.railway.app` as **different
+> sites**. On Railway's default domains the session is therefore a *third-party*
+> cookie. It works today (the API issues `SameSite=None; Secure`), but Safari's
+> ITP already blocks cookies like this and Chrome is phasing them out — so
+> sign-in will start failing in the browser while the API keeps working fine
+> under `curl`. Don't ship a login that depends on it.
+>
+> **The fix is a custom domain.** Point the SPA at `app.example.com` and the API
+> at `api.example.com`, then set `COOKIE_DOMAIN=.example.com` on the backend.
+> Both services are now the same site, the cookie downgrades to `SameSite=Lax`
+> automatically, and nothing is third-party. `backend/src/common/cookie.ts`
+> handles the switch — you only set the variable.
 
 ---
 

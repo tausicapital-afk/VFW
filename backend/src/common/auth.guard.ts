@@ -12,8 +12,7 @@ import { JwtService } from '@nestjs/jwt';
 import { Role } from '@prisma/client';
 import { Request } from 'express';
 import { Permission, can } from './acl';
-
-export const SESSION_COOKIE = 'vfw_session';
+import { SESSION_COOKIE } from './cookie';
 
 export const PUBLIC_KEY = 'vfw:public';
 /** Opt an endpoint out of authentication entirely (login, health). */

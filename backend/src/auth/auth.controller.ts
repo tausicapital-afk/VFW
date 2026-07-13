@@ -1,7 +1,8 @@
 import { Body, Controller, Get, Post, Res } from '@nestjs/common';
 import { IsBoolean, IsEmail, IsOptional, IsString, MinLength } from 'class-validator';
 import { Response } from 'express';
-import { AuthUser, CurrentUser, Public, SESSION_COOKIE } from '../common/auth.guard';
+import { AuthUser, CurrentUser, Public } from '../common/auth.guard';
+import { SESSION_COOKIE, sessionCookie } from '../common/cookie';
 import { AuthService } from './auth.service';
 
 class LoginDto {
@@ -17,7 +18,7 @@ class LoginDto {
   remember?: boolean;
 }
 
-const isProd = process.env.NODE_ENV === 'production';
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 @Controller('api/auth')
 export class AuthController {
@@ -28,29 +29,17 @@ export class AuthController {
   async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
     const { token, user } = await this.auth.login(dto.email, dto.password);
 
-    // httpOnly so a script on the page can never read the session; the SPA
-    // sends it automatically via credentials:"include". In production the SPA
-    // and API sit on different Railway subdomains, which requires
-    // SameSite=None — and SameSite=None is only honoured when Secure is set.
-    res.cookie(SESSION_COOKIE, token, {
-      httpOnly: true,
-      secure: isProd,
-      sameSite: isProd ? 'none' : 'lax',
-      maxAge: (dto.remember ? 30 : 1) * 24 * 60 * 60 * 1000,
-      path: '/',
-    });
+    // httpOnly, so a script on the page can never read the session. The SPA
+    // sends it automatically via credentials:"include".
+    res.cookie(SESSION_COOKIE, token, sessionCookie((dto.remember ? 30 : 1) * DAY_MS));
 
     return { user };
   }
 
   @Post('logout')
   logout(@Res({ passthrough: true }) res: Response) {
-    res.clearCookie(SESSION_COOKIE, {
-      httpOnly: true,
-      secure: isProd,
-      sameSite: isProd ? 'none' : 'lax',
-      path: '/',
-    });
+    // Must match the attributes the cookie was set with, or the browser keeps it.
+    res.clearCookie(SESSION_COOKIE, sessionCookie());
     return { ok: true };
   }
 
