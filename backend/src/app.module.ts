@@ -2,13 +2,14 @@ import { Controller, Get, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
-import { AuditModule } from './audit/audit.service';
+import { AuditModule } from './audit/audit.controller';
 import { AuthController } from './auth/auth.controller';
 import { AuthService } from './auth/auth.service';
 import { CatalogModule } from './catalog/catalog.controller';
 import { AuthGuard, Public } from './common/auth.guard';
 import { ContactsModule } from './contacts/contacts.controller';
 import { PrismaModule } from './prisma/prisma.service';
+import { ReportsModule } from './reports/reports.controller';
 import { SubmissionsModule } from './submissions/submissions.controller';
 
 @Controller('api')
@@ -33,6 +34,7 @@ class HealthController {
     CatalogModule,
     SubmissionsModule,
     ContactsModule,
+    ReportsModule,
   ],
   controllers: [HealthController, AuthController],
   providers: [

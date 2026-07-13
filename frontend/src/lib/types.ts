@@ -130,3 +130,79 @@ export interface AuditEntry {
   createdAt: string;
   actor: { id: string; name: string; role: Role } | null;
 }
+
+// --- Insight: reports, leaderboard, audit trail ------------------------------
+
+/**
+ * A report arrives as columns and rows, already aggregated and already converted
+ * to CAD by the server. The client renders it and never sums it — consolidating
+ * five currencies is the server's job, and doing it here would put money
+ * arithmetic back in a float.
+ */
+export interface ReportCol {
+  label: string;
+  num?: boolean;
+  /** A money column — always rendered to 2dp, cents included. */
+  money?: boolean;
+}
+export type ReportCell = string | number | null;
+export interface ReportTable {
+  key: string;
+  name: string;
+  cols: ReportCol[];
+  rows: ReportCell[][];
+}
+export interface ReportType {
+  key: string;
+  name: string;
+}
+
+export interface ScoreWeights {
+  revenue: number;
+  approved: number;
+  collection: number;
+  retention: number;
+}
+
+export interface LeaderboardRep {
+  id: string;
+  name: string;
+  employeeId: string | null;
+  colour: string;
+  rank: number;
+  count: number;
+  approvedCount: number;
+  rejectedCount: number;
+  pendingCount: number;
+  decidedCount: number;
+  revenue: Money;
+  invoiced: Money;
+  collected: Money;
+  outstanding: Money;
+  commission: Money;
+  commissionPending: Money;
+  customerCount: number;
+  repeatCount: number;
+  target: Money;
+  targetPct: number;
+  /** Each part is a ratio in [0, 1] — revenue, approved, collection, retention. */
+  parts: ScoreWeights;
+  score: number;
+  rating: { stars: number; label: string; cls: string };
+}
+
+export interface Leaderboard {
+  weights: ScoreWeights;
+  reps: LeaderboardRep[];
+}
+
+export interface AuditRow extends AuditEntry {
+  submission: { id: string; ref: string; contact: { brand: string } } | null;
+}
+
+export interface AuditPage {
+  total: number;
+  limit: number;
+  offset: number;
+  entries: AuditRow[];
+}

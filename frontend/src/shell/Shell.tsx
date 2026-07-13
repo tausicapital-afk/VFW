@@ -27,6 +27,11 @@ const NAV: NavItem[] = [
   { to: '/contacts', label: 'Contacts', ic: '◈', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
   { to: '/queue', label: 'Approval queue', ic: '⚑', roles: ['ACCT', 'ADMIN'], badge: 'queue' },
   { to: '/qbo', label: 'QuickBooks', ic: '⇪', roles: ['ACCT', 'ADMIN'] },
+  { grp: 'People' },
+  { to: '/board', label: 'Leaderboard', ic: '★', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
+  { grp: 'Insight' },
+  { to: '/reports', label: 'Reports', ic: '▦', roles: ['ACCT', 'MGR', 'ADMIN'] },
+  { to: '/audit', label: 'Audit trail', ic: '◷', roles: ['ACCT', 'MGR', 'ADMIN'] },
 ];
 
 function Avatar({ user }: { user: User }) {
@@ -66,7 +71,16 @@ export function Shell() {
 
         <div id="nav">
           {NAV.map((item, i) => {
-            if ('grp' in item) return <div className="grp" key={`g${i}`}>{item.grp}</div>;
+            if ('grp' in item) {
+              // Drop the heading when the role can see nothing under it —
+              // otherwise a sales rep gets a bare "Insight" label with no links.
+              const until = NAV.slice(i + 1).findIndex((n) => 'grp' in n);
+              const members = NAV.slice(i + 1, until === -1 ? undefined : i + 1 + until);
+              const visible = members.some(
+                (n) => !('grp' in n) && n.roles.includes(user.role),
+              );
+              return visible ? <div className="grp" key={`g${i}`}>{item.grp}</div> : null;
+            }
             if (!item.roles.includes(user.role)) return null;
             const badge = item.badge === 'queue' ? pending : 0;
             return (

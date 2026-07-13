@@ -1,4 +1,4 @@
-import { Global, Injectable, Module } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -37,11 +37,73 @@ export class AuditService {
       include: { actor: { select: { id: true, name: true, role: true } } },
     });
   }
+
+  /**
+   * The global trail: every entry ever written, newest first, filtered and
+   * paged. Read-only — there is no counterpart to this that edits or removes a
+   * row, and there never will be, not even for an admin. The count is returned
+   * alongside the page so the UI can say how many events exist in total.
+   */
+  async search(filter: AuditFilter) {
+    const limit = Math.min(filter.limit ?? 50, 200);
+    const offset = filter.offset ?? 0;
+
+    const where: Prisma.AuditEntryWhereInput = {};
+    if (filter.action) where.action = filter.action;
+    if (filter.submissionId) where.submissionId = filter.submissionId;
+    if (filter.from || filter.to) {
+      where.createdAt = {
+        ...(filter.from ? { gte: new Date(filter.from) } : {}),
+        // An inclusive "to" date means the whole of that day.
+        ...(filter.to ? { lt: new Date(new Date(filter.to).getTime() + 86_400_000) } : {}),
+      };
+    }
+    const q = filter.q?.trim();
+    if (q) {
+      where.OR = [
+        { action: { contains: q, mode: 'insensitive' } },
+        { detail: { contains: q, mode: 'insensitive' } },
+        { actor: { name: { contains: q, mode: 'insensitive' } } },
+        { submission: { ref: { contains: q, mode: 'insensitive' } } },
+        { submission: { contact: { brand: { contains: q, mode: 'insensitive' } } } },
+      ];
+    }
+
+    const [total, entries] = await this.prisma.$transaction([
+      this.prisma.auditEntry.count({ where }),
+      this.prisma.auditEntry.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: offset,
+        take: limit,
+        include: {
+          actor: { select: { id: true, name: true, role: true } },
+          submission: {
+            select: { id: true, ref: true, contact: { select: { brand: true } } },
+          },
+        },
+      }),
+    ]);
+
+    return { total, limit, offset, entries };
+  }
+
+  /** The distinct actions on record, so the UI can offer them as a filter. */
+  async actions(): Promise<string[]> {
+    const rows = await this.prisma.auditEntry.groupBy({
+      by: ['action'],
+      orderBy: { action: 'asc' },
+    });
+    return rows.map((r) => r.action);
+  }
 }
 
-@Global()
-@Module({
-  providers: [AuditService],
-  exports: [AuditService],
-})
-export class AuditModule {}
+export interface AuditFilter {
+  q?: string;
+  action?: string;
+  submissionId?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+  offset?: number;
+}

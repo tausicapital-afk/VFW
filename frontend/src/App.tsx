@@ -1,6 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth/AuthContext';
+import { Audit } from './pages/Audit';
+import { Board } from './pages/Board';
 import { Contacts } from './pages/Contacts';
 import { ContactDetail } from './pages/ContactDetail';
 import { Dashboard } from './pages/Dashboard';
@@ -9,6 +11,7 @@ import { Login } from './pages/Login';
 import { NewSubmission } from './pages/NewSubmission';
 import { Qbo } from './pages/Qbo';
 import { Queue } from './pages/Queue';
+import { Reports } from './pages/Reports';
 import { Submissions } from './pages/Submissions';
 import { SubmissionDetail } from './pages/SubmissionDetail';
 import { Guard, Shell } from './shell/Shell';
@@ -49,6 +52,9 @@ function Routed() {
         <Route path="/contacts" element={<Contacts />} />
         <Route path="/contacts/:id" element={<ContactDetail />} />
         <Route path="/queue" element={<Guard permission="submission.approve"><Queue /></Guard>} />
+        <Route path="/board" element={<Guard permission="leaderboard.view"><Board /></Guard>} />
+        <Route path="/reports" element={<Guard permission="reports.view"><Reports /></Guard>} />
+        <Route path="/audit" element={<Guard permission="reports.view"><Audit /></Guard>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
