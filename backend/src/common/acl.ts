@@ -26,6 +26,10 @@ export const ACL = {
   'internal.view': ['ACCT', 'MGR', 'ADMIN'],
   'messaging.use': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
   'admin.manage': ['ADMIN'],
+  // The activity/logs screen is user-monitoring — who signed in, what they
+  // opened, who they messaged. HR/security-sensitive, so admin-only, the same
+  // set as admin.manage.
+  'activity.view': ['ADMIN'],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type Permission = keyof typeof ACL;

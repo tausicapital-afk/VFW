@@ -8,6 +8,7 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
+import { ActivityService } from '../activity/activity.service';
 import { AuthUser, Can, CurrentUser } from '../common/auth.guard';
 import {
   AddParticipantsDto,
@@ -36,6 +37,7 @@ export class MessagingController {
   constructor(
     private readonly messaging: MessagingService,
     private readonly gateway: MessagingGateway,
+    private readonly activity: ActivityService,
   ) {}
 
   /** Annotate participants with live online status from the gateway. */
@@ -93,6 +95,16 @@ export class MessagingController {
   ) {
     const { message, recipientIds } = await this.messaging.sendMessage(id, user, dto);
     await this.gateway.dispatchMessage(id, message, recipientIds);
+
+    // Activity telemetry for the Logs screen — who messaged whom, never the
+    // body. Fire-and-forget: logging must not slow or fail a send.
+    this.messaging
+      .conversationLabel(id, user.id)
+      .then((label) =>
+        this.activity.recordMessageSent(user.id, { conversationId: id, label, recipientIds }),
+      )
+      .catch(() => undefined);
+
     return message;
   }
 

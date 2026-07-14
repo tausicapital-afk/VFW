@@ -1,16 +1,20 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth/AuthContext';
+import { ThemeProvider } from './theme/ThemeContext';
+import { Account } from './pages/Account';
 import { Admin } from './pages/Admin';
 import { Audit } from './pages/Audit';
 import { Board } from './pages/Board';
 import { Contacts } from './pages/Contacts';
 import { ContactDetail } from './pages/ContactDetail';
 import { Dashboard } from './pages/Dashboard';
+import { Settings } from './pages/Settings';
 import { EditSubmission } from './pages/EditSubmission';
 import { Feedback } from './pages/Feedback';
 import { Internal } from './pages/Internal';
 import { Login } from './pages/Login';
+import { Logs } from './pages/Logs';
 import { Messages } from './pages/Messages';
 import { NewSubmission } from './pages/NewSubmission';
 import { Qbo } from './pages/Qbo';
@@ -79,6 +83,9 @@ function Routed() {
         <Route path="/reports" element={<Guard permission="reports.view"><Reports /></Guard>} />
         <Route path="/audit" element={<Guard permission="reports.view"><Audit /></Guard>} />
         <Route path="/admin" element={<Guard permission="admin.manage"><Admin /></Guard>} />
+        <Route path="/logs" element={<Guard permission="activity.view"><Logs /></Guard>} />
+        <Route path="/settings" element={<Settings />} />
+        <Route path="/account" element={<Account />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
@@ -88,11 +95,13 @@ function Routed() {
 export function App() {
   return (
     <QueryClientProvider client={qc}>
-      <BrowserRouter>
-        <AuthProvider>
-          <Routed />
-        </AuthProvider>
-      </BrowserRouter>
+      <ThemeProvider>
+        <BrowserRouter>
+          <AuthProvider>
+            <Routed />
+          </AuthProvider>
+        </BrowserRouter>
+      </ThemeProvider>
     </QueryClientProvider>
   );
 }

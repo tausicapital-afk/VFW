@@ -401,6 +401,26 @@ export class MessagingService {
     await this.prisma.user.update({ where: { id: userId }, data: { lastSeenAt: new Date() } });
   }
 
+  /**
+   * A short human label for a conversation from one user's point of view — the
+   * other person's name for a DM, the title for a group. Used only to write the
+   * activity-log line ("Messaged Jane Doe"); no message content is involved.
+   */
+  async conversationLabel(conversationId: string, forUserId: string): Promise<string> {
+    const conv = await this.prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: {
+        kind: true,
+        title: true,
+        participants: { select: { userId: true, user: { select: { name: true } } } },
+      },
+    });
+    if (!conv) return 'a conversation';
+    if (conv.kind === 'GROUP') return conv.title ?? 'a group';
+    const other = conv.participants.find((p) => p.userId !== forUserId);
+    return other?.user.name ?? 'someone';
+  }
+
   // --- Media ---------------------------------------------------------------
 
   async presignAttachment(conversationId: string, user: AuthUser, dto: PresignAttachmentDto) {

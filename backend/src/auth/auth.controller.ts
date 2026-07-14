@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Post, Res } from '@nestjs/common';
-import { Response } from 'express';
+import { Body, Controller, Get, Post, Req, Res } from '@nestjs/common';
+import { Request, Response } from 'express';
 import { AuthUser, CurrentUser, Public } from '../common/auth.guard';
 import { SESSION_COOKIE, sessionCookie } from '../common/cookie';
 import { AuthService } from './auth.service';
@@ -13,8 +13,13 @@ export class AuthController {
 
   @Public()
   @Post('login')
-  async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
-    const { token, user } = await this.auth.login(dto.email, dto.password);
+  async login(
+    @Body() dto: LoginDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const ctx = { ip: req.ip, userAgent: req.headers['user-agent'] };
+    const { token, user } = await this.auth.login(dto.email, dto.password, ctx);
 
     // httpOnly, so a script on the page can never read the session. The SPA
     // sends it automatically via credentials:"include".
@@ -24,7 +29,8 @@ export class AuthController {
   }
 
   @Post('logout')
-  logout(@Res({ passthrough: true }) res: Response) {
+  async logout(@CurrentUser() user: AuthUser, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    await this.auth.recordLogout(user, { ip: req.ip, userAgent: req.headers['user-agent'] });
     // Must match the attributes the cookie was set with, or the browser keeps it.
     res.clearCookie(SESSION_COOKIE, sessionCookie());
     return { ok: true };

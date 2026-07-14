@@ -318,3 +318,139 @@ pre.code{background:var(--ink);color:#D7DCE4;padding:14px;border-radius:var(--r)
   #app.on{grid-template-columns:1fr}
   .card{box-shadow:none;break-inside:avoid}
 }
+
+/* ---------- TOPBAR: THEME TOGGLE + USER MENU ---------- */
+.theme-toggle{
+  width:36px;height:36px;flex:0 0 auto;border:1px solid var(--line);background:var(--card);
+  border-radius:var(--r);cursor:pointer;font-size:15px;color:var(--text);display:grid;place-items:center;
+}
+.theme-toggle:hover{background:var(--paper)}
+
+.usermenu{position:relative;flex:0 0 auto}
+.usermenu-trigger{
+  display:flex;align-items:center;gap:8px;border:1px solid var(--line);background:var(--card);
+  border-radius:100px;padding:4px 10px 4px 4px;cursor:pointer;color:var(--text);
+}
+.usermenu-trigger:hover{background:var(--paper)}
+.usermenu-trigger .av{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;
+  color:#fff;font-weight:700;font-size:11px;font-family:"Archivo";flex:0 0 auto}
+.usermenu-trigger .nm{font-size:13px;font-weight:600;white-space:nowrap;max-width:150px;overflow:hidden;text-overflow:ellipsis}
+.usermenu-trigger .chev{font-size:10px;color:var(--muted)}
+
+.usermenu-pop{
+  position:absolute;right:0;top:calc(100% + 8px);min-width:236px;z-index:50;
+  background:var(--card);border:1px solid var(--line);border-radius:var(--r);
+  box-shadow:0 18px 46px -16px rgba(0,0,0,.4);padding:6px;
+}
+.usermenu-head{display:flex;align-items:center;gap:10px;padding:9px 10px 11px;
+  border-bottom:1px solid var(--line-soft);margin-bottom:6px}
+.usermenu-head .av{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;
+  color:#fff;font-weight:700;font-size:12px;font-family:"Archivo";flex:0 0 auto}
+.usermenu-head .nm{font-weight:600;font-size:13.5px}
+.usermenu-head .rl{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.usermenu-item{display:flex;align-items:center;gap:10px;width:100%;text-align:left;border:0;background:none;
+  padding:9px 10px;border-radius:var(--r);cursor:pointer;color:var(--text);font-size:13px}
+.usermenu-item:hover{background:var(--paper)}
+.usermenu-item .ic{width:16px;text-align:center;opacity:.85}
+.usermenu-item.danger{color:var(--red)}
+.usermenu-item.danger:hover{background:var(--red-soft)}
+.usermenu-sep{height:1px;background:var(--line-soft);margin:6px 0}
+
+/* Segmented theme picker on the Settings screen. */
+.theme-choices{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+.theme-choice{display:flex;flex-direction:column;align-items:flex-start;gap:2px;
+  border:1px solid var(--line);background:var(--card);border-radius:var(--r);padding:12px 14px;cursor:pointer;color:var(--text)}
+.theme-choice:hover{border-color:#B9BFC8}
+.theme-choice.on{border-color:var(--blue);background:var(--blue-soft)}
+.theme-choice .ic{font-size:18px}
+.theme-choice .lb{font-weight:600;font-size:13.5px}
+.theme-choice .hint{font-size:11px;color:var(--muted)}
+
+/* ============================================================
+   DARK THEME
+   Remaps the surface tokens for a dark canvas, then overrides the
+   hardcoded light fills so ported components read correctly. Brand
+   accents keep their hue; only their soft tints and on-tint text
+   are re-tuned for contrast. The rail stays the darkest surface,
+   cards the most elevated — the inverse ordering of light mode.
+   ============================================================ */
+:root[data-theme="dark"]{
+  --ink:#0B0B0E;
+  --ink-2:#141419;
+  --ink-3:#23232D;
+  --ink-4:#33333F;
+  --paper:#121218;
+  --card:#1C1C23;
+  --line:#2E2E38;
+  --line-soft:#25252E;
+  --text:#E7E9ED;
+  --muted:#9BA2AE;
+  --blue:#5E8BFF;
+  --blue-soft:#1B2942;
+  --gold-soft:#3A3212;
+  --taupe-soft:#302A20;
+  --green-soft:#123227;
+  --amber-soft:#3A2A0E;
+  --red-soft:#3A1C1A;
+  --violet-soft:#241C3E;
+  --shadow:0 1px 0 rgba(0,0,0,.35), 0 12px 30px -20px rgba(0,0,0,.8);
+}
+
+/* Surfaces that hardcode white / near-white in the base sheet. */
+:root[data-theme="dark"] .topbar,
+:root[data-theme="dark"] .btn,
+:root[data-theme="dark"] .kpi,
+:root[data-theme="dark"] .chk,
+:root[data-theme="dark"] .f input,
+:root[data-theme="dark"] .f select,
+:root[data-theme="dark"] .f textarea,
+:root[data-theme="dark"] .toolbar input[type=search],
+:root[data-theme="dark"] .toolbar select,
+:root[data-theme="dark"] .stickybar,
+:root[data-theme="dark"] .modal .box,
+:root[data-theme="dark"] .modal .box .ft,
+:root[data-theme="dark"] #login .panel,
+:root[data-theme="dark"] .acct{background:var(--card)}
+
+:root[data-theme="dark"] .btn:hover,
+:root[data-theme="dark"] .acct:hover,
+:root[data-theme="dark"] .f input[readonly],
+:root[data-theme="dark"] .avpick{background:var(--paper)}
+:root[data-theme="dark"] .f input[readonly]{color:#AEB4BE}
+
+:root[data-theme="dark"] th,
+:root[data-theme="dark"] tbody tr:hover,
+:root[data-theme="dark"] .totals{background:var(--ink-2)}
+
+:root[data-theme="dark"] .rank{background:var(--ink-3)}
+:root[data-theme="dark"] .f.err input,
+:root[data-theme="dark"] .f.err select{background:#2A1614}
+:root[data-theme="dark"] .log .e:before{box-shadow:0 0 0 3px var(--card)}
+:root[data-theme="dark"] .msg-row.mine .msg-bubble{border-color:#2A3E63}
+
+/* Neutral "primary" CTA inverts to a light chip so it stays the loudest button. */
+:root[data-theme="dark"] .btn.primary{background:#EDEFF2;border-color:#EDEFF2;color:#0E0E11}
+:root[data-theme="dark"] .btn.primary:hover{background:#fff}
+
+/* Active tab underline uses --ink (dark) in the base — invisible on dark. */
+:root[data-theme="dark"] .tab.on{border-bottom-color:var(--blue)}
+
+/* Status pills: dark tint + brightened foreground so labels stay legible. */
+:root[data-theme="dark"] .pill.DRAFT{background:#26262F;color:#AEB4BE}
+:root[data-theme="dark"] .pill.PENDING,
+:root[data-theme="dark"] .pill.PARTIAL{background:#3A2A0E;color:#E9B45C}
+:root[data-theme="dark"] .pill.RETURNED{background:#241C3E;color:#B7A2F0}
+:root[data-theme="dark"] .pill.APPROVED,
+:root[data-theme="dark"] .pill.PAID{background:#123227;color:#4CCB94}
+:root[data-theme="dark"] .pill.REJECTED,
+:root[data-theme="dark"] .pill.UNPAID{background:#3A1C1A;color:#F0847A}
+:root[data-theme="dark"] .pill.EXPORTED{background:#1B2942;color:#8FAEFF}
+
+/* Notes / errbox carry hardcoded dark text — lift it for the dark tints. */
+:root[data-theme="dark"] .note{color:#AFC3F0}
+:root[data-theme="dark"] .note.lock{color:#C6B6F2}
+:root[data-theme="dark"] .note.good{color:#7FD9AE}
+:root[data-theme="dark"] .note.bad,
+:root[data-theme="dark"] .errbox{color:#F0A79E}
+:root[data-theme="dark"] .note.warn{color:#E9C57C}
+:root[data-theme="dark"] .errbox{border-color:#5A2622}

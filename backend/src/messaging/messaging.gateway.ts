@@ -8,6 +8,7 @@ import {
   WebSocketServer,
 } from '@nestjs/websockets';
 import type { Server, Socket } from 'socket.io';
+import { ActivityService } from '../activity/activity.service';
 import { AuthUser, verifySession } from '../common/auth.guard';
 import { SESSION_COOKIE } from '../common/cookie';
 import { MessagingService } from './messaging.service';
@@ -55,9 +56,14 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // tabs open). Online iff the set is non-empty.
   private readonly presence = new Map<string, Set<string>>();
 
+  // userId -> the id of their currently-open UserSession row. One session spans
+  // a whole online period (first connect to last disconnect), not one socket.
+  private readonly sessionByUser = new Map<string, string>();
+
   constructor(
     private readonly jwt: JwtService,
     private readonly messaging: MessagingService,
+    private readonly activity: ActivityService,
   ) {}
 
   // --- Presence helpers exposed to the controller --------------------------
@@ -89,6 +95,19 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
     sockets.add(socket.id);
     this.presence.set(user.id, sockets);
 
+    // First socket for this user opens a session for the Logs screen. Handshake
+    // headers give us the origin; best-effort, never blocks the connection.
+    if (wasOffline) {
+      const ctx = {
+        ip: socket.handshake.address,
+        userAgent: socket.handshake.headers['user-agent'],
+      };
+      this.activity
+        .openSession(user.id, user.name, ctx)
+        .then((id) => this.sessionByUser.set(user.id, id))
+        .catch(() => undefined);
+    }
+
     // Join my personal room and every conversation I belong to, so fan-out to a
     // conversation reaches all of a member's tabs.
     await socket.join(userRoom(user.id));
@@ -119,6 +138,13 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
       this.presence.delete(user.id);
       await this.messaging.setLastSeen(user.id);
       await this.emitPresence(user.id, false);
+
+      // Last socket gone — close the session and stamp its duration.
+      const sessionId = this.sessionByUser.get(user.id);
+      if (sessionId) {
+        this.sessionByUser.delete(user.id);
+        await this.activity.closeSession(sessionId, user.id, user.name).catch(() => undefined);
+      }
     }
   }
 

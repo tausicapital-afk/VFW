@@ -52,6 +52,8 @@ model User {
   colour        String     @default("#0E0E11")
   // Presence: when this user's last socket disconnected. Powers "last seen".
   lastSeenAt    DateTime?
+  // When this user most recently authenticated. Null = has never logged in.
+  lastLoginAt   DateTime?
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
@@ -69,6 +71,9 @@ model User {
   conversationsCreated Conversation[]            @relation("ConvCreator")
   participations       ConversationParticipant[]
   messagesSent         Message[]                 @relation("MsgSender")
+
+  activityLogs         ActivityLog[]
+  sessions             UserSession[]
 
   @@index([role, status])
 }
@@ -572,4 +577,54 @@ model MessageAttachment {
   size        Int?
   width       Int? // image dimensions, so the UI reserves space without reflow
   height      Int?
+}
+
+// ---------------------------------------------------------------------------
+// Activity — operational telemetry for the admin-only Logs screen.
+//
+// This is NOT financial evidence and is deliberately kept out of AuditEntry,
+// which is submission-scoped and append-only for accounting. These tables
+// record who signed in, what modules they opened, and who messaged whom
+// (metadata only — never message text). Additive: they touch nothing in the
+// money loop. Nothing writes back over a row; the screen is read-only.
+// ---------------------------------------------------------------------------
+
+model ActivityLog {
+  id     String @id @default(cuid())
+  // Null-able and SetNull on delete: a log line outlives the account it names.
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  // LOGIN, LOGOUT, CONNECT, DISCONNECT, MODULE_VIEW, MESSAGE_SENT.
+  action String
+  // Human one-liner for the feed: "Entered Messages", "Messaged Jane Doe".
+  detail String?
+  // Structured context: { module, conversationId, recipientId, durationSec }.
+  // Never message content.
+  meta      Json?
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+  @@index([createdAt])
+}
+
+// One row per online session, opened when a user's first socket connects and
+// closed when their last one disconnects. durationSec is filled on close, so a
+// still-open session (endedAt null) is someone online right now.
+model UserSession {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  startedAt   DateTime  @default(now())
+  endedAt     DateTime?
+  durationSec Int?
+  ip          String?
+  userAgent   String?
+
+  @@index([userId, startedAt])
+  @@index([startedAt])
 }

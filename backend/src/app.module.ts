@@ -5,6 +5,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { ThrottlerModule } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { LoggerModule } from 'nestjs-pino';
+import { ActivityModule } from './activity/activity.controller';
 import { AdminModule } from './admin/admin.controller';
 import { AuditModule } from './audit/audit.controller';
 import { AuthController } from './auth/auth.controller';
@@ -75,6 +76,7 @@ class HealthController {
     ReportsModule,
     AdminModule,
     MessagingModule,
+    ActivityModule,
   ],
   controllers: [HealthController, AuthController],
   providers: [
