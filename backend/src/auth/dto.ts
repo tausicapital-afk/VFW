@@ -4,6 +4,7 @@ import {
   IsIn,
   IsOptional,
   IsString,
+  Matches,
   MaxLength,
   MinLength,
 } from 'class-validator';
@@ -67,6 +68,22 @@ export class SignupDto {
   @IsOptional()
   @IsString()
   role?: string;
+}
+
+export class VerifyOtpDto {
+  @IsEmail()
+  email: string;
+
+  // Exactly six digits. Matched with a regex rather than min/max so "12 34 5"
+  // or a pasted "123-456" is rejected here instead of failing the hash compare.
+  @IsString()
+  @Matches(/^\d{6}$/, { message: 'Enter the 6-digit code' })
+  code: string;
+}
+
+export class ResendOtpDto {
+  @IsEmail()
+  email: string;
 }
 
 export class ForgotDto {

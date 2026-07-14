@@ -65,6 +65,7 @@ model User {
   auditEntries      AuditEntry[]
   invitationsIssued Invitation[]     @relation("InvitationIssuer")
   passwordResets    PasswordReset[]
+  emailOtps         EmailOtp[]
 
   conversationsCreated Conversation[]            @relation("ConvCreator")
   participations       ConversationParticipant[]
@@ -107,6 +108,31 @@ model PasswordReset {
   expiresAt DateTime
   usedAt    DateTime?
   createdAt DateTime  @default(now())
+}
+
+// One-time 6-digit codes emailed for a specific purpose. Today that is SIGNUP —
+// a freshly created account is PENDING and cannot log in until the code sent to
+// its inbox is entered, which proves the email is real and reachable. The code
+// is stored only as an argon2 hash, exactly like a password: a leaked row must
+// not hand someone a working code.
+enum OtpPurpose {
+  SIGNUP
+}
+
+model EmailOtp {
+  id         String     @id @default(cuid())
+  userId     String
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  purpose    OtpPurpose
+  codeHash   String
+  expiresAt  DateTime
+  // Wrong guesses against this code. Enough of them and the code is burned, so a
+  // six-digit space cannot be walked by brute force.
+  attempts   Int        @default(0)
+  consumedAt DateTime?
+  createdAt  DateTime   @default(now())
+
+  @@index([userId, purpose])
 }
 
 // ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ interface AuthValue {
   user: User | null;
   loading: boolean;
   login: (email: string, password: string, remember: boolean) => Promise<void>;
+  verifyOtp: (email: string, code: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -40,6 +41,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { user } = await api.post<{ user: User }>('/api/auth/login', {
         email, password, remember,
       });
+      qc.setQueryData(['me'], user);
+    },
+    // Verifying the signup code activates the account AND returns a live session,
+    // so it lands the user exactly like a login — App swaps to the dashboard the
+    // moment ['me'] is populated.
+    async verifyOtp(email, code) {
+      const { user } = await api.post<{ user: User }>('/api/auth/verify-otp', { email, code });
       qc.setQueryData(['me'], user);
     },
     async logout() {

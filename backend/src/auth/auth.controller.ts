@@ -3,7 +3,7 @@ import { Response } from 'express';
 import { AuthUser, CurrentUser, Public } from '../common/auth.guard';
 import { SESSION_COOKIE, sessionCookie } from '../common/cookie';
 import { AuthService } from './auth.service';
-import { ForgotDto, LoginDto, ResetDto, SignupDto } from './dto';
+import { ForgotDto, LoginDto, ResendOtpDto, ResetDto, SignupDto, VerifyOtpDto } from './dto';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -38,13 +38,33 @@ export class AuthController {
   /**
    * Invite-only signup. Public by necessity — the caller has no account yet —
    * but not open: it is guarded by the invitation code, and what it creates is a
-   * PENDING account that cannot log in until an administrator approves it. No
-   * session cookie is issued here.
+   * PENDING account that cannot log in until the emailed code is verified. No
+   * session cookie is issued here — that happens at verify-otp.
    */
   @Public()
   @Post('signup')
   async signup(@Body() dto: SignupDto) {
-    return { user: await this.auth.signup(dto) };
+    return this.auth.signup(dto);
+  }
+
+  /**
+   * Enter the six-digit code from the welcome email. On success the account is
+   * activated AND a session cookie is issued, so the SPA drops the user straight
+   * on the dashboard — no separate login step.
+   */
+  @Public()
+  @Post('verify-otp')
+  async verifyOtp(@Body() dto: VerifyOtpDto, @Res({ passthrough: true }) res: Response) {
+    const { token, user } = await this.auth.verifyOtp(dto);
+    // A freshly verified session lasts a day, like a login without "remember me".
+    res.cookie(SESSION_COOKIE, token, sessionCookie(DAY_MS));
+    return { user };
+  }
+
+  @Public()
+  @Post('resend-otp')
+  async resendOtp(@Body() dto: ResendOtpDto) {
+    return this.auth.resendOtp(dto.email);
   }
 
   @Public()

@@ -1,19 +1,24 @@
-import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { UserStatus } from '@prisma/client';
+import { OtpPurpose, UserStatus } from '@prisma/client';
 import * as argon2 from 'argon2';
-import { randomBytes } from 'crypto';
+import { randomBytes, randomInt } from 'crypto';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/auth.guard';
 import { EmailNotConfiguredError, EmailService } from '../common/email';
 import { PrismaService } from '../prisma/prisma.service';
-import { ForgotDto, ResetDto, SignupDto } from './dto';
+import { ForgotDto, ResetDto, SignupDto, VerifyOtpDto } from './dto';
 
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 15 * 60 * 1000;
 
 /** A reset link is a bearer credential in an inbox. It should not live long. */
 const RESET_TTL_MINUTES = 30;
+
+/** A signup code lands the caller straight in their account, so keep it short-lived. */
+const OTP_TTL_MINUTES = 10;
+/** Wrong guesses before a six-digit code is burned — far below what brute force needs. */
+const MAX_OTP_ATTEMPTS = 5;
 
 const AVATAR_COLOURS = ['#2F6BFF', '#0C7A4D', '#6B4BC4', '#A96C05', '#B3332A'];
 
@@ -28,6 +33,8 @@ const FORGOT_REPLY = {
 
 @Injectable()
 export class AuthService {
+  private readonly log = new Logger(AuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
@@ -60,7 +67,7 @@ export class AuthService {
     if (user.status !== UserStatus.ACTIVE) {
       const reason =
         user.status === UserStatus.PENDING
-          ? 'Your account is awaiting administrator approval'
+          ? 'Please verify your email to activate your account'
           : 'This account is not active';
       throw new UnauthorizedException(reason);
     }
@@ -97,9 +104,12 @@ export class AuthService {
   // -------------------------------------------------------------------------
 
   /**
-   * Redeem an invitation and create a PENDING account.
+   * Redeem an invitation and create an unverified (PENDING) account, then email a
+   * one-time code. The account cannot log in until that code is entered at
+   * {@link verifyOtp}, which flips it ACTIVE and issues the session — email
+   * verification, not an administrator, is the gate.
    *
-   * Two things are load-bearing here:
+   * Three things are load-bearing here:
    *
    * 1. **The role comes from the invitation, never from the request.** The
    *    signup form posts a role because the mockup's form has the field, but an
@@ -110,10 +120,17 @@ export class AuthService {
    *    transaction** (`updateMany` on the still-unused row), not a read followed
    *    by a write. Two people racing the same code cannot both get an account:
    *    the second update matches zero rows and the whole transaction rolls back.
+   *
+   * 3. **Email is required.** The account is useless until a code is delivered,
+   *    so if the transport is not configured we refuse up front rather than
+   *    stranding a PENDING account nobody can ever verify.
    */
-  async signup(dto: SignupDto) {
+  async signup(dto: SignupDto): Promise<{ email: string; otpRequired: true; devOtp?: string }> {
     const email = dto.email.trim().toLowerCase();
     const code = dto.code.trim().toUpperCase();
+
+    const echo = this.devEcho();
+    if (!this.email.configured && !echo) throw new EmailNotConfiguredError();
 
     if (await this.prisma.user.findUnique({ where: { email } })) {
       throw new BadRequestException('An account already exists for that email');
@@ -136,14 +153,14 @@ export class AuthService {
     const role = invitation.role;
     const department = invitation.department ?? dto.department ?? null;
 
-    return this.prisma.$transaction(async (tx) => {
+    const user = await this.prisma.$transaction(async (tx) => {
       const claimed = await tx.invitation.updateMany({
         where: { id: invitation.id, usedAt: null, revokedAt: null, expiresAt: { gt: new Date() } },
         data: { usedAt: new Date() },
       });
       if (claimed.count !== 1) throw invalid;
 
-      const user = await tx.user.create({
+      const created = await tx.user.create({
         data: {
           name: dto.name.trim(),
           email,
@@ -151,8 +168,8 @@ export class AuthService {
           passwordHash,
           role,
           department,
-          // PENDING: a redeemed invitation gets you a request, not an account.
-          // An administrator still has to let you in.
+          // PENDING = email not yet verified. verifyOtp() flips it to ACTIVE once
+          // the code we email below is entered; until then it cannot log in.
           status: UserStatus.PENDING,
           commissionPct: role === 'SALES' ? '8' : '0',
           target: role === 'SALES' ? '60000' : '0',
@@ -162,21 +179,141 @@ export class AuthService {
 
       await tx.invitation.update({
         where: { id: invitation.id },
-        data: { usedById: user.id },
+        data: { usedById: created.id },
       });
 
       await this.audit.log(
         {
-          actorId: user.id,
+          actorId: created.id,
           action: 'SIGNUP',
-          detail: `${user.name} redeemed invitation ${code} (${role}) — awaiting administrator approval`,
+          detail: `${created.name} redeemed invitation ${code} (${role}) — awaiting email verification`,
           payload: { invitationId: invitation.id, role, email },
         },
         tx,
       );
 
-      return { id: user.id, name: user.name, email: user.email, status: user.status };
+      return created;
     });
+
+    // The account exists; now the code that unlocks it. Minted after the commit
+    // so a mail hiccup leaves a recoverable PENDING account (resend re-issues)
+    // rather than rolling back an already-claimed invitation.
+    const otp = await this.issueOtp(user.id);
+    if (this.email.configured) {
+      await this.email.send(this.email.welcome(user.email, user.name, otp, OTP_TTL_MINUTES));
+      return { email: user.email, otpRequired: true };
+    }
+    // DEV_ECHO_LINKS: hand the code back instead of mailing it. Off by default,
+    // ignored in production, and named so nobody mistakes it for real delivery.
+    return { email: user.email, otpRequired: true, devOtp: otp };
+  }
+
+  /**
+   * Mint a fresh six-digit signup code for a user and return the plaintext once.
+   *
+   * Any earlier unconsumed code is retired first, so only the newest one works —
+   * a resent code silently invalidating the previous email is the behaviour users
+   * expect, and it keeps the attempt counters from being split across rows.
+   * Only the argon2 hash is stored; the plaintext lives only in the email.
+   */
+  private async issueOtp(userId: string): Promise<string> {
+    const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    const codeHash = await argon2.hash(code);
+    const expiresAt = new Date(Date.now() + OTP_TTL_MINUTES * 60_000);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.emailOtp.updateMany({
+        where: { userId, purpose: OtpPurpose.SIGNUP, consumedAt: null },
+        data: { consumedAt: new Date() },
+      });
+      await tx.emailOtp.create({
+        data: { userId, purpose: OtpPurpose.SIGNUP, codeHash, expiresAt },
+      });
+    });
+
+    return code;
+  }
+
+  /**
+   * Verify a signup code: on success the account goes ACTIVE and a session is
+   * issued, so the caller lands straight on the dashboard.
+   *
+   * The reply is deliberately uniform. Unknown email, wrong code, expired code,
+   * too many attempts — all answer with the same message, so this endpoint never
+   * becomes a way to learn which addresses are registered or how far a guess got.
+   */
+  async verifyOtp(dto: VerifyOtpDto): Promise<{ token: string; user: AuthUser }> {
+    const email = dto.email.trim().toLowerCase();
+    const submitted = dto.code.trim();
+    const invalid = new BadRequestException('That code is invalid or has expired. Request a new one.');
+
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    // Already verified accounts have no live code; anything but PENDING is a no-op.
+    if (!user || user.status !== UserStatus.PENDING) throw invalid;
+
+    const otp = await this.prisma.emailOtp.findFirst({
+      where: { userId: user.id, purpose: OtpPurpose.SIGNUP, consumedAt: null },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!otp || otp.expiresAt <= new Date()) throw invalid;
+
+    if (otp.attempts >= MAX_OTP_ATTEMPTS) {
+      // Burn it so a fresh code must be requested, then refuse.
+      await this.prisma.emailOtp.update({ where: { id: otp.id }, data: { consumedAt: new Date() } });
+      throw invalid;
+    }
+
+    const ok = await argon2.verify(otp.codeHash, submitted).catch(() => false);
+    if (!ok) {
+      await this.prisma.emailOtp.update({ where: { id: otp.id }, data: { attempts: { increment: 1 } } });
+      throw invalid;
+    }
+
+    const authUser = await this.prisma.$transaction(async (tx) => {
+      await tx.emailOtp.update({ where: { id: otp.id }, data: { consumedAt: new Date() } });
+      const activated = await tx.user.update({
+        where: { id: user.id },
+        data: { status: UserStatus.ACTIVE },
+      });
+      // Whoever just proved control of the inbox should not inherit a lockout
+      // left by someone guessing at the password.
+      await tx.loginAttempt.deleteMany({ where: { email: activated.email } });
+      await this.audit.log(
+        { actorId: activated.id, action: 'EMAIL_VERIFIED', detail: `${activated.email} verified their email and activated their account` },
+        tx,
+      );
+      return {
+        id: activated.id,
+        email: activated.email,
+        name: activated.name,
+        role: activated.role,
+      } satisfies AuthUser;
+    });
+
+    return { token: await this.jwt.signAsync(authUser), user: authUser };
+  }
+
+  /**
+   * Re-issue a signup code. Uniform reply for the same enumeration reason as
+   * {@link forgot}: it says the same thing whether or not the address maps to an
+   * account still waiting to be verified.
+   */
+  async resendOtp(email: string): Promise<{ message: string; devOtp?: string }> {
+    const reply = { message: 'If that account is awaiting verification, a new code has been sent.' };
+    const addr = email.trim().toLowerCase();
+    const echo = this.devEcho();
+
+    if (!this.email.configured && !echo) throw new EmailNotConfiguredError();
+
+    const user = await this.prisma.user.findUnique({ where: { email: addr } });
+    if (!user || user.status !== UserStatus.PENDING) return reply;
+
+    const code = await this.issueOtp(user.id);
+    if (this.email.configured) {
+      await this.email.send(this.email.otp(user.email, user.name, code, OTP_TTL_MINUTES));
+      return reply;
+    }
+    return { ...reply, devOtp: code };
   }
 
   /**
@@ -235,7 +372,7 @@ export class AuthService {
     const invalid = new BadRequestException('This reset link is invalid, expired, or already used');
     const passwordHash = await argon2.hash(dto.password);
 
-    return this.prisma.$transaction(async (tx) => {
+    const user = await this.prisma.$transaction(async (tx) => {
       const claimed = await tx.passwordReset.updateMany({
         where: { token: dto.token, usedAt: null, expiresAt: { gt: new Date() } },
         data: { usedAt: new Date() },
@@ -243,7 +380,7 @@ export class AuthService {
       if (claimed.count !== 1) throw invalid;
 
       const reset = await tx.passwordReset.findUniqueOrThrow({ where: { token: dto.token } });
-      const user = await tx.user.update({
+      const updated = await tx.user.update({
         where: { id: reset.userId },
         data: { passwordHash },
       });
@@ -251,25 +388,35 @@ export class AuthService {
       // Any other outstanding link for this account is now stale — a password
       // change should not leave a second key lying in an old email.
       await tx.passwordReset.updateMany({
-        where: { userId: user.id, usedAt: null },
+        where: { userId: updated.id, usedAt: null },
         data: { usedAt: new Date() },
       });
 
       // Clear the brute-force counter: the person who just proved control of the
       // inbox should not be locked out by whoever was guessing at their password.
-      await tx.loginAttempt.deleteMany({ where: { email: user.email } });
+      await tx.loginAttempt.deleteMany({ where: { email: updated.email } });
 
       await this.audit.log(
         {
-          actorId: user.id,
+          actorId: updated.id,
           action: 'PASSWORD_RESET',
-          detail: `Password reset for ${user.email}`,
+          detail: `Password reset for ${updated.email}`,
         },
         tx,
       );
 
-      return { ok: true };
+      return updated;
     });
+
+    // Confirmation is best-effort: the reset already succeeded, so a mail failure
+    // here must not turn a completed password change into an error for the user.
+    if (this.email.configured) {
+      await this.email.send(this.email.passwordChanged(user.email)).catch((err) => {
+        this.log.error(`Password-changed notice failed to send: ${err?.message ?? err}`);
+      });
+    }
+
+    return { ok: true };
   }
 
   /** Never in production, whatever the env says. */

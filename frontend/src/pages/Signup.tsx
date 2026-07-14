@@ -1,5 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 
 const DEPARTMENTS = [
@@ -39,6 +39,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
 
 export function Signup() {
   const { code: codeParam } = useParams<{ code: string }>();
+  const nav = useNavigate();
 
   const [code, setCode] = useState((codeParam ?? '').toUpperCase());
   const [name, setName] = useState('');
@@ -49,7 +50,6 @@ export function Signup() {
   const [department, setDepartment] = useState('');
   const [errors, setErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState<string | null>(null);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -66,34 +66,26 @@ export function Signup() {
 
     setErrors([]);
     setBusy(true);
+    const addr = email.trim().toLowerCase();
     try {
-      await api.post('/api/auth/signup', {
-        code: code.trim().toUpperCase(),
-        name: name.trim(),
-        email: email.trim().toLowerCase(),
-        password,
-        phone: phone.trim() || undefined,
-        department: department || undefined,
-      });
-      setDone(name.trim().split(' ')[0]);
+      const r = await api.post<{ email: string; otpRequired: true; devOtp?: string }>(
+        '/api/auth/signup',
+        {
+          code: code.trim().toUpperCase(),
+          name: name.trim(),
+          email: addr,
+          password,
+          phone: phone.trim() || undefined,
+          department: department || undefined,
+        },
+      );
+      // A welcome email with a 6-digit code is on its way. Hand the address (and,
+      // in dev-echo mode, the code) to the verification screen via router state.
+      nav('/verify', { replace: true, state: { email: r.email, devOtp: r.devOtp } });
     } catch (err) {
       setErrors([err instanceof Error ? err.message : 'Could not create that account']);
       setBusy(false);
     }
-  }
-
-  if (done) {
-    return (
-      <AuthShell>
-        <div className="pendingIcon">✓</div>
-        <h2>Request received</h2>
-        <p className="hint" style={{ maxWidth: '42ch' }}>
-          Thanks, {done}. <b>Your account requires administrator approval before activation.</b>{' '}
-          You will be able to sign in once an administrator reviews the request.
-        </p>
-        <Link className="btn primary" style={{ marginTop: 14 }} to="/">Back to sign in</Link>
-      </AuthShell>
-    );
   }
 
   return (

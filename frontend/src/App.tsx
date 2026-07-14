@@ -18,6 +18,7 @@ import { Queue } from './pages/Queue';
 import { Reports } from './pages/Reports';
 import { ForgotPassword, ResetPassword } from './pages/ResetPassword';
 import { Signup } from './pages/Signup';
+import { VerifyOtp } from './pages/VerifyOtp';
 import { Submissions } from './pages/Submissions';
 import { SubmissionDetail } from './pages/SubmissionDetail';
 import { Guard, Shell } from './shell/Shell';
@@ -53,6 +54,7 @@ function Routed() {
       <Routes>
         <Route path="/signup/:code" element={<Signup />} />
         <Route path="/signup" element={<Signup />} />
+        <Route path="/verify" element={<VerifyOtp />} />
         <Route path="/forgot" element={<ForgotPassword />} />
         <Route path="/reset" element={<ResetPassword />} />
         <Route path="*" element={<Login />} />
