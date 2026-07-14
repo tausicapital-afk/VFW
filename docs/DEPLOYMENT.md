@@ -13,7 +13,7 @@ operate and redeploy it. Written 2026-07-13, updated 2026-07-14.
 |------|-----|
 | **App** (use this) | https://frontend-production-b4a4.up.railway.app |
 | API health | https://frontend-production-b4a4.up.railway.app/api/health |
-| Backend (direct) | https://backend-production-8dcb.up.railway.app |
+| Backend (direct) | https://backend-production-8dcb.up.railway.app — **being removed**, see [Closing the backend's public door](#closing-the-backends-public-door) |
 
 **Sign in:** `it@vanfashionweek.com` / `Vfw@2026!` (System Administrator).
 Every seeded account shares that password — see [Seed data](#seed-data).
@@ -83,6 +83,73 @@ Verified: logging in at the frontend origin stores `vfw_session` against
 
 ---
 
+## Closing the backend's public door
+
+The proxy above only *routes* traffic through nginx — it does not *force* it. As
+long as the backend service has its own public Railway domain, the API is still
+reachable directly at `https://backend-….up.railway.app`, and everything nginx
+does for us can simply be skipped.
+
+**Why that matters.** The rate limiter (`common/throttler.ts`) keys on `req.ip`,
+which Express derives by counting `TRUST_PROXY_HOPS` entries in from the right of
+`X-Forwarded-For`. That header is only trustworthy because *our own* nginx
+appended the caller's real address to it. A caller who reaches the backend
+directly writes the whole header themselves, rotates a fresh value per request,
+and gets an unlimited number of rate-limit buckets — which defeats the `auth`
+bucket that stands between an attacker and a password-spraying run.
+
+Closing it takes **three** things, and all three are load-bearing:
+
+1. **The backend listens on `::`** (`backend/src/main.ts`). Railway's private
+    network is IPv6-only; an app bound to `0.0.0.0` is not reachable on it at
+    all. ✅ *done in code.*
+2. **`BACKEND_URL` points at the private domain** (frontend service variable):
+
+    ```bash
+    railway variables --service frontend \
+      --set 'BACKEND_URL=http://${{backend.RAILWAY_PRIVATE_DOMAIN}}:${{backend.PORT}}'
+    ```
+
+    Note it is `http://`, not `https://` — the private network is inside
+    Railway's perimeter and does not terminate TLS.
+
+3. **The backend's public domain is removed** — ⚠️ **manual, in the Railway
+    dashboard.** There is no `railway domain --remove`; it cannot be scripted:
+
+    > **Railway → project VFW → `backend` service → Settings → Networking →
+    > Public Networking → the `backend-production-8dcb.up.railway.app` entry →
+    > *Remove domain* → confirm.**
+    >
+    > Leave **Private Networking** enabled. Do this *after* step 2 is deployed
+    > and verified, or the frontend loses its only route to the API.
+
+**Verify, in this order:**
+
+```bash
+# 1. BEFORE removing the public domain — confirm the vulnerability is real.
+#    The forged header is echoed back as the client IP the limiter would key on:
+curl -s https://backend-production-8dcb.up.railway.app/api/health/ip \
+     -H 'X-Forwarded-For: 1.2.3.4'
+
+# 2. AFTER the change, through the front door. `ip` must be YOUR address —
+#    not nginx's, and not anything you put in the header:
+curl -s https://frontend-production-b4a4.up.railway.app/api/health/ip \
+     -H 'X-Forwarded-For: 1.2.3.4'
+
+# 3. AFTER removing the public domain — the direct route must be gone (404 from
+#    Railway's edge, not a response from our app):
+curl -si https://backend-production-8dcb.up.railway.app/api/health | head -1
+```
+
+**`TRUST_PROXY_HOPS` must be re-tuned in the same breath.** Removing a hop from
+the chain and leaving the count stale is its own bug: too high and the app starts
+believing a forged header again; too low and every user shares nginx's IP and one
+bucket. Take the count from step 2 — raise or lower it until `ip` comes back as
+your own address — and set it on the backend service. Do not guess it from the
+diagram; measure it.
+
+---
+
 ## Environment variables
 
 ### backend
@@ -100,9 +167,15 @@ Verified: logging in at the frontend origin stores `vfw_session` against
 
 | Variable | Value | Notes |
 |----------|-------|-------|
-| `BACKEND_URL` | backend URL | nginx `proxy_pass` target (no trailing slash). Substituted into the config at container start. |
+| `BACKEND_URL` | `http://${{backend.RAILWAY_PRIVATE_DOMAIN}}:${{backend.PORT}}` | nginx `proxy_pass` target (no trailing slash). **The private domain, not the public one** — see [Closing the backend's public door](#closing-the-backends-public-door). |
 | `PORT` | *(injected by Railway)* | nginx listens on it. |
 | ~~`VITE_API_BASE`~~ | *(removed)* | Empty → SPA uses relative `/api`. Set it only if you ever stop proxying. |
+
+### backend, continued
+
+| Variable | Value | Notes |
+|----------|-------|-------|
+| `TRUST_PROXY_HOPS` | a **number** | How many proxies sit in front of the app. The rate limiter keys on `req.ip`, which is only as good as this count. Tune it with `GET /api/health/ip` — see below. |
 
 ---
 
@@ -129,7 +202,8 @@ railway domain                          # generate public domain
 cd ../frontend
 railway add --service frontend          # (created empty)
 railway link --project VFW --environment production --service frontend
-railway variables --set "BACKEND_URL=https://backend-production-8dcb.up.railway.app"
+# The PRIVATE domain — see "Closing the backend's public door" above.
+railway variables --set 'BACKEND_URL=http://${{backend.RAILWAY_PRIVATE_DOMAIN}}:${{backend.PORT}}'
 railway up --ci
 railway domain
 

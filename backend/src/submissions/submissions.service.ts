@@ -270,6 +270,20 @@ export class SubmissionsService {
     });
   }
 
+  /**
+   * Approve, subject to the discount threshold.
+   *
+   * A rep may propose any discount up to 100% — sales discretion is not being
+   * removed, and create/update stay untouched. The gate is here, at sign-off:
+   * a discount deeper than `Settings.discountApprovalPct` cannot be approved
+   * silently. The approver must send `acknowledgeDiscountOverride: true`, and
+   * the audit entry then records *why* sign-off was needed — the threshold that
+   * was in force and the discount that beat it — rather than a bare "APPROVED".
+   *
+   * The threshold is read here rather than stamped on the submission, so
+   * Accounting editing it in Settings changes the next approval with no
+   * migration and no backfill.
+   */
   async approve(id: string, dto: ApproveDto, user: AuthUser) {
     const submission = await this.prisma.submission.findUnique({ where: { id } });
     if (!submission) throw new NotFoundException('Submission not found');
@@ -278,6 +292,34 @@ export class SubmissionsService {
         `Only a pending submission can be approved — this one is ${submission.status}`,
       );
     }
+
+    const settings = await this.prisma.settings.findUniqueOrThrow({ where: { id: 1 } });
+    const discount = this.pricing.discountApproval(
+      submission.subtotal,
+      submission.discountAmount,
+      settings.discountApprovalPct,
+    );
+
+    if (discount.exceedsThreshold && !dto.acknowledgeDiscountOverride) {
+      throw new BadRequestException(
+        `This sale is discounted ${discount.discountPct.toFixed(2)}%, above the ` +
+          `${discount.thresholdPct.toFixed(2)}% that needs accounting sign-off. ` +
+          'Re-send with acknowledgeDiscountOverride: true to approve it anyway.',
+      );
+    }
+
+    // Only present when the threshold was actually beaten, so a normal approval
+    // is byte-for-byte the audit row it was before.
+    const override = discount.exceedsThreshold
+      ? {
+          thresholdPct: discount.thresholdPct.toFixed(2),
+          discountPct: discount.discountPct.toFixed(2),
+          discountAmount: submission.discountAmount.toString(),
+          discountType: submission.discountType,
+          subtotal: submission.subtotal.toString(),
+          currency: submission.currency,
+        }
+      : null;
 
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.submission.update({
@@ -292,13 +334,22 @@ export class SubmissionsService {
         include: DETAIL,
       });
 
+      const posted = dto.glAccount ? `Posted to GL ${dto.glAccount}` : 'Approved';
+
       await this.audit.log(
         {
           submissionId: id,
           actorId: user.id,
           action: 'APPROVED',
-          detail: dto.glAccount ? `Posted to GL ${dto.glAccount}` : 'Approved',
-          payload: { glAccount: dto.glAccount, total: updated.total.toString() },
+          detail: override
+            ? `${posted} — discount override: ${override.discountPct}% exceeds the ` +
+              `${override.thresholdPct}% approval threshold, signed off by ${user.name}`
+            : posted,
+          payload: {
+            glAccount: dto.glAccount,
+            total: updated.total.toString(),
+            ...(override ? { discountOverride: override } : {}),
+          },
         },
         tx,
       );

@@ -91,6 +91,23 @@ the mockup's `calc()`. The one rule worth stating aloud:
 > **Commission is struck on net revenue, never on tax.** The company merely
 > collects tax on behalf of a government; nobody earns commission on it.
 
+**Deep discounts need sign-off, at approval.** A rep may still propose any
+discount up to 100% — that is sales discretion, and `create`/`update` are
+unchanged. But a discount deeper than `Settings.discountApprovalPct` (default
+15%) cannot be *approved* silently: `POST /api/submissions/:id/approve` returns
+400 unless the approver explicitly sends `acknowledgeDiscountOverride: true`,
+in the same named-and-explicit spirit as the "client sends `total` → 400" rule.
+The audit entry then records the threshold that was in force and the discount
+that beat it, so the trail says *why* sign-off was required rather than just
+`APPROVED`.
+
+The check (`PricingService.discountApproval`) is **derived, never stored**: it is
+computed from the submission's own money at the moment it is asked, so Accounting
+moving the threshold re-judges the next approval with no migration and no
+backfill. It compares the discount's *share of the subtotal*, so an `AMT` discount
+is measured against the same percentage threshold a `PCT` one is — otherwise a
+flat amount would be a way around the rule.
+
 ### 3.3 Authorization is server-side; the frontend copy is cosmetic
 
 The matrix exists twice, on purpose:
@@ -193,12 +210,27 @@ read back empty — `HttpOnly` is doing its job.
 deployment (SPA and API on different sites, no proxy). It forces `Secure`,
 because browsers ignore `SameSite=None` without it. Nothing sets it today.
 
-**The one thing still worth doing:** the backend also has its own public Railway
-domain (`backend-production-8dcb.up.railway.app`), so the API is reachable
-*without* going through the nginx proxy. Nothing depends on that path — it is
-only an extra front door. Removing the backend's public domain and pointing
-nginx's `BACKEND_URL` at `RAILWAY_PRIVATE_DOMAIN` would close it, and would also
-make the rate limiter's client-IP detection unspoofable (see §10).
+**The one thing still worth doing** *(in progress — the code half is done, the
+dashboard half is not)*: the backend also has its own public Railway domain
+(`backend-production-8dcb.up.railway.app`), so the API is reachable *without*
+going through the nginx proxy. Nothing depends on that path — it is only an extra
+front door — but it is the one that makes the rate limiter's client IP forgeable
+(see §10.1).
+
+Closing it is three things:
+
+1. the backend now listens on `::` rather than `0.0.0.0` (`main.ts`), because
+   Railway's private network is **IPv6-only** and an app bound to `0.0.0.0`
+   cannot be reached on it at all — **done**;
+2. `BACKEND_URL` on the frontend service points at
+   `http://${{backend.RAILWAY_PRIVATE_DOMAIN}}:${{backend.PORT}}` rather than the
+   public URL — **a Railway variable, not a file in this repo**;
+3. the backend's public domain is removed in the Railway dashboard — **manual;
+   it cannot be scripted.** Exact steps in `docs/DEPLOYMENT.md` → *Closing the
+   backend's public door*.
+
+`TRUST_PROXY_HOPS` must be re-measured with `GET /api/health/ip` when (2) lands:
+the change removes a hop from the chain, and a stale count is its own bug.
 
 ---
 
@@ -298,6 +330,8 @@ Boundaries probed directly against the API:
 | USD add-on on a EUR sale | 400 — mixed currency has no correct total |
 | 120% discount | 400 |
 | Approving an already-approved record | 400 |
+| Approving a 25% discount against a 15% threshold, unacknowledged | 400 |
+| …the same one with `acknowledgeDiscountOverride: true` | 201 + audit records the override |
 
 ---
 
@@ -364,11 +398,14 @@ victim11+       429 Too many requests.               <- only the IP throttle sto
 > `GET /api/health/ip` exists to tune it: call it through the real front door and
 > confirm the `ip` it returns is your own address.
 
-> **Known gap.** The backend still has its own public Railway domain, so an
-> attacker can skip nginx, hit the API directly, and forge `X-Forwarded-For`.
-> Closing it — remove the backend's public domain, point nginx's `BACKEND_URL` at
-> `RAILWAY_PRIVATE_DOMAIN` — makes the client IP unforgeable and is the single
-> highest-value change left in this section.
+> **Known gap, half-closed.** The backend still has its own public Railway
+> domain, so an attacker can skip nginx, hit the API directly, and forge
+> `X-Forwarded-For`. The code side is now done — the app listens on `::` so the
+> private network can reach it (§5) — but the two remaining steps are **Railway
+> configuration, not code**: point `BACKEND_URL` at `RAILWAY_PRIVATE_DOMAIN`, then
+> remove the backend's public domain in the dashboard. Until both are done, this
+> gap is still open. Steps and verification: `docs/DEPLOYMENT.md` → *Closing the
+> backend's public door*.
 
 ### 10.2 Logging and error tracking
 
@@ -480,8 +517,41 @@ Presence is an **in-memory map** in the gateway (userId → set of live sockets)
 so "online" and "last seen" are correct for **one backend instance**. Scaling
 past one needs the socket.io **Redis adapter** and a shared presence store — a
 documented follow-up, consistent with keeping Redis out until it is actually
-needed (see QBO, §Decisions). WebSocket message flooding is also not yet
-rate-limited (the IP throttler covers HTTP only).
+needed (see QBO, §Decisions).
+
+### 11.6 Socket flooding
+
+The HTTP throttler (§10.1) is a Nest guard over an Express request and cannot see
+a socket event, so inbound socket events carry their own limiter:
+`messaging/socket-throttle.ts`. It is the same *shape* as the HTTP one — one
+table of buckets, each with a limit and a block duration, and an event must
+satisfy every bucket that applies to it — so there is one style of rate limiting
+here, not two.
+
+| Bucket | Applies to | Limit | On breach |
+|---|---|---|---|
+| `typing` | `typing` | 60 / min | blocked 1 min |
+| `events` | every socket event | 240 / min | blocked 1 min |
+
+Two things differ from the HTTP side, both on purpose:
+
+- **Keyed by userId, not IP.** The socket is already authenticated on its
+  handshake, so the real actor is known. IP-keying would put a whole NAT'd office
+  in one bucket and let one person's flood throttle their colleagues.
+- **The counter survives a disconnect.** Clearing a user's window when their last
+  socket closes would hand every flooder a reset button — disconnect, reconnect,
+  carry on. Windows expire on time and only on time.
+
+On a breach the socket gets a typed `{ event, bucket, retryAfterMs }` on a
+`rate_limited` event, rather than being silently dropped (a client that cannot
+distinguish "throttled" from "lost" retries, making it worse) or hard-
+disconnected (which would kill a legitimate user's other tabs over one runaway
+one). Unit-tested pure, like `receipts.ts`, with the clock injected.
+
+> Note **what is not in this table: sending a message.** Messages are persisted
+> over REST and only *fanned out* over the socket (§11.1), so the send path is
+> already covered by the HTTP throttler's `global` bucket — though that one is
+> IP-keyed, not per-user.
 
 **Verified live** (2026-07-13) with two cookie-authenticated socket clients:
 a DM message delivered to the recipient in real time and turned the sender's

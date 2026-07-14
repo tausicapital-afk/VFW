@@ -333,6 +333,32 @@ export class MessagingService {
   }
 
   /**
+   * Raise the delivered cursor for many participants of one conversation in a
+   * single statement, then return each one's receipt. Used when a message is
+   * fanned out: every online recipient is marked delivered at once instead of
+   * one round-trip apiece. GREATEST keeps a cursor from ever moving backwards.
+   */
+  async markDeliveredForRecipients(conversationId: string, userIds: string[], seq: number) {
+    if (userIds.length === 0) return [];
+    await this.prisma.$executeRaw`
+      UPDATE "ConversationParticipant"
+      SET "lastDeliveredSeq" = GREATEST("lastDeliveredSeq", ${seq})
+      WHERE "conversationId" = ${conversationId}
+        AND "userId" IN (${Prisma.join(userIds)})
+    `;
+    const rows = await this.prisma.conversationParticipant.findMany({
+      where: { conversationId, userId: { in: userIds } },
+      select: { userId: true, lastReadSeq: true, lastDeliveredSeq: true },
+    });
+    return rows.map((r) => ({
+      conversationId,
+      userId: r.userId,
+      lastReadSeq: r.lastReadSeq,
+      lastDeliveredSeq: r.lastDeliveredSeq,
+    }));
+  }
+
+  /**
    * When a user comes online, everything already waiting for them is now
    * "delivered". Bumps their delivered cursor to the latest message in every
    * conversation and returns the ones that actually moved, so the caller can

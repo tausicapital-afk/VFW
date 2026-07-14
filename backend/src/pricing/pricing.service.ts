@@ -33,6 +33,14 @@ export interface PricedLine extends AddonLine {
   amount: Decimal;
 }
 
+export interface DiscountApproval {
+  /** The discount as a percentage of the subtotal, whatever type it was entered as. */
+  discountPct: Decimal;
+  /** Settings.discountApprovalPct as it stood when the question was asked. */
+  thresholdPct: Decimal;
+  exceedsThreshold: boolean;
+}
+
 export interface PricingResult {
   packagePrice: Decimal;
   lines: PricedLine[];
@@ -56,6 +64,42 @@ const r2 = (v: Decimal.Value): Decimal => new Decimal(v).toDecimalPlaces(2, Deci
 
 @Injectable()
 export class PricingService {
+  /**
+   * Whether a sale's discount is deep enough to need Accounting's explicit
+   * sign-off, per Settings.discountApprovalPct.
+   *
+   * Derived, never stored. The answer is computed from the submission's own
+   * money at the moment it is asked, so moving the threshold in Settings changes
+   * the verdict on the next approval — a persisted flag would still be carrying
+   * the answer to the old threshold, and would need a backfill to correct.
+   *
+   * The comparison is on the discount's share of the subtotal, not on
+   * `discountValue`, so an AMT discount is measured against the same threshold a
+   * PCT one is: 9,000 off a 10,000 deal is a 90% discount however it was keyed.
+   */
+  discountApproval(
+    subtotal: Decimal.Value,
+    discountAmount: Decimal.Value,
+    thresholdPct: Decimal.Value,
+  ): DiscountApproval {
+    const sub = new Decimal(subtotal || 0);
+    const exact = sub.gt(0)
+      ? new Decimal(discountAmount || 0).dividedBy(sub).times(100)
+      : new Decimal(0);
+    const threshold = new Decimal(thresholdPct || 0);
+
+    return {
+      // Reported to 2dp, because that is what a human reads on the screen and in
+      // the audit row...
+      discountPct: r2(exact),
+      thresholdPct: threshold,
+      // ...but compared unrounded. Rounding first would quietly widen the rule:
+      // 15.004% off would round to 15.00% and slide under a 15% threshold, which
+      // is not what "exceeds the threshold" means.
+      exceedsThreshold: exact.gt(threshold),
+    };
+  }
+
   compute(input: PricingInput): PricingResult {
     const packagePrice = r2(input.packagePrice);
 

@@ -76,7 +76,19 @@ async function bootstrap() {
   app.enableCors({ origin: origins, credentials: true });
 
   const port = Number(process.env.PORT) || 3001;
-  await app.listen(port, '0.0.0.0');
+
+  /**
+   * Bind on `::`, not `0.0.0.0`.
+   *
+   * Railway's private network is IPv6-only. Once nginx proxies to
+   * RAILWAY_PRIVATE_DOMAIN instead of the public domain (see architecture.md §5),
+   * the only traffic this app ever sees arrives over IPv6 — and a socket bound to
+   * 0.0.0.0 is listening on IPv4 only, so every request would be refused.
+   *
+   * `::` is dual-stack on Node (IPV6_V6ONLY off), so IPv4 callers — local dev,
+   * the public domain while it still exists — keep working unchanged.
+   */
+  await app.listen(port, '::');
 
   app
     .get(Logger)

@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsDateString,
   IsEmail,
   IsEnum,
@@ -76,6 +77,15 @@ export class ApproveDto {
 
   @IsOptional() @IsString()
   costCentre?: string;
+
+  /**
+   * Sign-off that this sale's discount exceeds Settings.discountApprovalPct.
+   * Named and explicit, like everything else on this API: an approver has to say
+   * out loud that they are overriding the threshold, and the audit entry records
+   * that they did. Submissions at or under the threshold ignore it entirely.
+   */
+  @IsOptional() @IsBoolean()
+  acknowledgeDiscountOverride?: boolean;
 }
 
 export class RejectDto {

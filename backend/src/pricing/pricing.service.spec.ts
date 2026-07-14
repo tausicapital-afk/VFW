@@ -49,6 +49,46 @@ describe('PricingService', () => {
     });
   });
 
+  /**
+   * The discount-approval threshold (Settings.discountApprovalPct). Derived on
+   * demand from the stored money — never persisted — so Accounting moving the
+   * threshold re-judges the next approval without a backfill. Enforced at
+   * approval time in SubmissionsService; see submissions/discount-approval.spec.ts.
+   */
+  describe('discountApproval — does this discount need sign-off?', () => {
+    it('is under the threshold at exactly the threshold — the boundary approves silently', () => {
+      const r = svc.discountApproval(10000, 1500, 15);
+      expect(r.discountPct.toFixed(2)).toBe('15.00');
+      expect(r.exceedsThreshold).toBe(false);
+    });
+
+    it('exceeds the threshold a cent past it', () => {
+      const r = svc.discountApproval(10000, 1500.01, 15);
+      expect(r.exceedsThreshold).toBe(true);
+    });
+
+    it('measures an AMT discount as a percentage of the subtotal, like a PCT one', () => {
+      // 9,000 off a 10,000 deal is a 90% discount however it was keyed — a
+      // threshold in percent must catch it, or AMT is a way around the rule.
+      const r = svc.discountApproval(10000, 9000, 15);
+      expect(r.discountPct.toFixed(2)).toBe('90.00');
+      expect(r.exceedsThreshold).toBe(true);
+    });
+
+    it('reports the threshold that was in force, so the audit row can quote it', () => {
+      const r = svc.discountApproval(10000, 2500, 20);
+      expect(r.thresholdPct.toFixed(2)).toBe('20.00');
+      expect(r.discountPct.toFixed(2)).toBe('25.00');
+      expect(r.exceedsThreshold).toBe(true);
+    });
+
+    it('a sale with no discount never needs sign-off, whatever the threshold', () => {
+      expect(svc.discountApproval(10000, 0, 0).exceedsThreshold).toBe(false);
+      // ...and a zero subtotal cannot divide by zero.
+      expect(svc.discountApproval(0, 0, 15).discountPct.toFixed(2)).toBe('0.00');
+    });
+  });
+
   describe('tax', () => {
     it('charges no tax on a zero-rated / exempt profile', () => {
       const r = svc.compute({ ...base, taxRate: 0 });

@@ -8,6 +8,23 @@
 # ${PORT} and ${BACKEND_URL} are substituted from the environment by the nginx
 # image's envsubst entrypoint at container start. nginx's own $-variables
 # (e.g. $host, $uri) are left untouched because they are not env vars.
+#
+# BACKEND_URL MUST BE THE BACKEND'S PRIVATE DOMAIN, NOT ITS PUBLIC ONE:
+#
+#     BACKEND_URL=http://${{backend.RAILWAY_PRIVATE_DOMAIN}}:${{backend.PORT}}
+#
+# Pointing it at the public https://backend-….up.railway.app leaves the API
+# reachable without passing through this proxy, and an attacker who goes straight
+# there can forge X-Forwarded-For and defeat the IP-keyed rate limiter — the
+# client IP is only unforgeable because THIS file is the one appending it.
+# See architecture.md §5 and §10.1. Removing the backend's public domain is a
+# manual step in the Railway dashboard; this variable is the other half of it.
+#
+# Two things the private domain depends on: the backend listens on `::`
+# (Railway's private network is IPv6-only — see backend/src/main.ts), and nginx
+# resolves this hostname once at container start. If the backend is redeployed
+# and lands on a new private address, restart the frontend service so nginx
+# re-resolves it.
 
 server {
     listen       ${PORT};

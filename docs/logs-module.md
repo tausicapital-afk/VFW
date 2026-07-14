@@ -238,12 +238,48 @@ activity begin accumulating from first use.
   constraint the gateway already documents. Scaling past one process needs the
   socket.io Redis adapter and a shared presence store, at which point session
   open/close should move there too.
-- **Stale open sessions on a hard crash.** If the process is killed mid-session,
-  that user's `UserSession` row stays `endedAt = null` until they reconnect (a
-  reconnect opens a fresh session; the orphan is never closed). The **Users** tab's
-  "Online now" is unaffected — it reads the live gateway set, not open rows — but
-  the **Sessions** tab may show a lingering "Online" until a future cleanup pass
-  (e.g. closing orphaned sessions on gateway bootstrap) is added.
+- **Crash recovery is at boot, not instant.** A session's close is written when the
+  last socket drops; if the process is killed mid-session that write never happens,
+  so the row is left `endedAt = null`. The gateway now sweeps these shut on the next
+  boot (`ActivityService.closeOrphanedSessions`), stamping `endedAt` but leaving
+  `durationSec` null — we know it started, not how long it ran, so it is recorded as
+  unknown rather than invented. The window in which a ghost shows as "Online" on the
+  **Sessions** tab is therefore only *between* a crash and the next restart; the
+  **Users** tab's "Online now" is never affected (it reads the live gateway set, not
+  open rows). Under a multi-instance deployment this sweep would need to move behind
+  the shared presence store so one instance's boot does not close another's live
+  sessions.
 - **Privacy by design.** Message *content* is never recorded — only that a message
   was sent, to whom, and in which conversation. This is intentional and should stay
   that way.
+
+## 9. Hardening applied after first ship
+
+A review pass tightened five things:
+
+- **Module-view flooding.** The Shell posted a `MODULE_VIEW` on every route change —
+  every re-mount, every record paged under one module, and (in dev) StrictMode's
+  double-invoke. It now dedupes by resolved module within a 5-minute window, so only
+  genuine module transitions are recorded.
+- **Session open/close race.** `openSession` was fire-and-forget, so a socket that
+  dropped before the write resolved orphaned its row. The open is now awaited, and
+  `closeSession` falls back to the user's most-recent open session when the
+  in-memory id is missing — a session can no longer be orphaned by a timing gap.
+- **Real client IP for sockets.** Behind nginx the socket's own address is the
+  proxy's. Session/CONNECT rows now read the left-most `x-forwarded-for` hop, the
+  same intent as express `trust proxy` on the HTTP side.
+- **Orphan sweep on boot** (see §8).
+- **Batched delivered fan-out.** `MessagingGateway.dispatchMessage` marked each
+  online recipient delivered in a serial per-recipient write (N round-trips per
+  message in a large group). It now advances every online recipient's cursor in one
+  statement via `MessagingService.markDeliveredForRecipients`, then emits the
+  per-recipient receipts.
+
+Covered by `src/activity/activity.service.spec.ts` (duration maths, the race
+fallback, idempotency, the boot sweep) and the batched-fan-out cases in
+`src/messaging/messaging.service.spec.ts`.
+
+One related concern from the same review — a live socket outliving a role change or
+account disable — was already closed independently: `verifySession` re-reads status,
+role and `tokenVersion` from the database on the handshake, so a revoked or demoted
+account cannot keep a privileged socket.
