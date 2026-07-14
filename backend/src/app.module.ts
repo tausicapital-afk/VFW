@@ -17,6 +17,7 @@ import { loggerOptions } from './common/logging';
 import { VfwThrottlerGuard, throttlerOptions } from './common/throttler';
 import { ContactsModule } from './contacts/contacts.controller';
 import { DocumentsModule } from './documents/documents.controller';
+import { ExportModule } from './export/export.controller';
 import { MessagingModule } from './messaging/messaging.module';
 import { PrismaModule } from './prisma/prisma.service';
 import { ReportsModule } from './reports/reports.controller';
@@ -77,6 +78,7 @@ class HealthController {
     AdminModule,
     MessagingModule,
     ActivityModule,
+    ExportModule,
   ],
   controllers: [HealthController, AuthController],
   providers: [

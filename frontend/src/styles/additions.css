@@ -21,3 +21,38 @@
   border-color: var(--amber);
   color: #5A3D06;
 }
+
+/* ---------- EXPORT MENU ----------
+   The one export control, reused wherever a screen is exportable. Built from
+   the same parts as the topbar user menu (.usermenu-pop) so a popup menu looks
+   the same everywhere; only the item body differs, carrying a format and the
+   one line that says when to pick it. */
+.exportmenu { position: relative; flex: 0 0 auto; }
+.exportmenu .chev { font-size: 10px; color: var(--muted); }
+.exportmenu .ic { opacity: .85; }
+
+.exportmenu-pop {
+  position: absolute; right: 0; top: calc(100% + 8px); min-width: 232px; z-index: 50;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--r);
+  box-shadow: 0 18px 46px -16px rgba(0, 0, 0, .4); padding: 6px;
+}
+.exportmenu-head {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .12em; font-weight: 600;
+  color: var(--muted); padding: 7px 10px 8px; border-bottom: 1px solid var(--line-soft);
+  margin-bottom: 6px;
+}
+.exportmenu-item {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  border: 0; background: none; padding: 8px 10px; border-radius: var(--r);
+  cursor: pointer; color: var(--text);
+}
+.exportmenu-item:hover { background: var(--paper); }
+.exportmenu-item:disabled { opacity: .5; cursor: not-allowed; }
+.exportmenu-item .ic { width: 16px; text-align: center; }
+.exportmenu-item .t { display: flex; flex-direction: column; line-height: 1.3; }
+.exportmenu-item .lb { font-size: 13px; font-weight: 600; }
+.exportmenu-item .hint { font-size: 11px; color: var(--muted); }
+.exportmenu-err {
+  margin: 6px 4px 2px; padding: 7px 9px; border-radius: var(--r);
+  background: var(--red-soft); color: var(--red); font-size: 11.5px;
+}

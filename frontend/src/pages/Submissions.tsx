@@ -5,6 +5,7 @@ import { can } from '../lib/acl';
 import { api } from '../lib/api';
 import { fmtDate, money, STATUS_LABEL } from '../lib/format';
 import type { Submission } from '../lib/types';
+import { ExportMenu } from '../shell/ExportMenu';
 import { Page } from '../shell/Shell';
 
 export function StatusPill({ status }: { status: Submission['status'] }) {
@@ -87,6 +88,9 @@ export function Submissions() {
         <div className="hd">
           <h3>Submissions</h3>
           <div className="sp" />
+          {/* Exports what this table shows — the server re-applies the same
+              scope, so a rep's file holds only their own customers. */}
+          <ExportMenu dataset="submissions" disabled={isLoading || !data?.length} />
           <span className="sm mut">{scope}</span>
         </div>
         {isLoading ? (
