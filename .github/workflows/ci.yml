@@ -1,7 +1,8 @@
 name: CI
 
 # Build and type-check both services on every push and PR to main. This is the
-# gate; Railway handles the actual deploy (see the README's Railway section).
+# gate: a green run on main triggers deploy.yml, which is what actually ships to
+# Railway. Railway has no repo connected and deploys nothing on its own.
 on:
   push:
     branches: [main]

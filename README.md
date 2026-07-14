@@ -174,45 +174,57 @@ The repo is set up to run as **three services in one Railway project**:
 Both services build from a committed `Dockerfile`, so the build is identical on
 Railway, in CI, and locally.
 
-### Option A — connect GitHub (recommended)
+### How deploys actually happen: GitHub Actions
 
-Railway watches the repo and redeploys on every push to `main`. This is a
-one-time setup in the browser:
+**Railway's GitHub integration is deliberately NOT connected.** Neither service
+has a repo source, so Railway itself does nothing when you push. All deploys are
+driven by `.github/workflows/deploy.yml`:
 
-1. Create a project at [railway.app](https://railway.app) → **Deploy from GitHub
-   repo** → authorize Railway's GitHub app → pick `tausicapital-afk/VFW`.
-2. Add a **PostgreSQL** database to the project (**+ New → Database → Postgres**).
-3. Add the **backend** service from the repo and set its **Root Directory** to
-   `backend`. Add the **frontend** service and set its root to `frontend`.
-4. Set the environment variables below.
-5. Generate a public domain for each service (**Settings → Networking → Generate
-   Domain**), then fill `CORS_ORIGIN` and `VITE_API_BASE` with those URLs.
+```
+push to main → ci.yml (build · test · type-check)
+                  └─ on success → deploy.yml
+                         ├─ railway up --service backend   (runs prisma migrate deploy, then boots)
+                         ├─ railway up --service frontend
+                         └─ poll /api/health until 200
+```
 
-CD is then automatic — no GitHub Actions secret needed. (`.github/workflows/ci.yml`
-still runs to gate builds on every push/PR.)
+Deploys are gated on green CI and run against the exact commit CI validated, so
+a failing test never reaches production. Backend goes first: it applies pending
+migrations on boot, and if a migration fails the job stops before the frontend
+ships against a schema it doesn't match.
 
-### Option B — deploy from the terminal
+**One-time setup** (already done unless the secret was rotated):
 
-The Railway CLI is the alternative. Because login is browser-based, run it
-yourself in this session so the CLI is authenticated for the rest of the work:
+1. Railway → **Project → Settings → Tokens** → create a **project token** scoped
+   to the `production` environment.
+2. From the repo: `gh secret set RAILWAY_TOKEN` (or GitHub → Settings → Secrets
+   and variables → Actions).
+
+Without the secret, `deploy.yml` warns and skips rather than failing `main`.
+
+To redeploy current `main` without a code change: **Actions → Deploy to Railway →
+Run workflow**.
+
+> If you ever connect the repo inside the Railway dashboard, disable this
+> workflow — otherwise every push deploys twice.
+
+### Deploying from the terminal (fallback)
+
+Login is browser-based, so run it yourself:
 
 ```
 ! railway login
 ```
 
-Then, from the repo root:
+Because neither service sets a **Root Directory**, `railway up` uploads the
+current directory as the build context — it must be run from *inside* each
+service folder, not the repo root (from the root Railway finds no `Dockerfile`):
 
 ```bash
-railway init                       # create/link a project
-railway add --database postgres    # provision Postgres
-railway up --service backend       # deploy backend/ (run from backend/, or pass --path)
-railway up --service frontend      # deploy frontend/
-railway variables --set KEY=VALUE  # set env vars per service
+cd backend  && railway up --service backend --ci    # applies migrations, boots API
+cd frontend && railway up --service frontend --ci
+railway variables --service backend                 # inspect env vars
 ```
-
-`.github/workflows/deploy.yml` wraps the same `railway up` calls for CI-driven
-deploys; it needs a `RAILWAY_TOKEN` repo secret and is disabled by default so it
-doesn't collide with Option A.
 
 ### Environment variables
 

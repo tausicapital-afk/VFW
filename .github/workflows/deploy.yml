@@ -1,39 +1,101 @@
 name: Deploy to Railway
 
-# OPTIONAL. Only use this if you want GitHub Actions to drive deploys.
+# Deploys are driven from here, NOT from Railway's built-in GitHub integration —
+# neither service has a repo connected (`source.repo` is null on both), which is
+# why pushing to main used to change nothing in production until someone ran
+# `railway up` by hand.
 #
-# The simpler path is Railway's built-in GitHub integration: connect the repo
-# once in the Railway dashboard and it redeploys each service on every push to
-# main automatically — no secret, no workflow. Pick ONE of the two, not both,
-# or every push deploys twice.
+# Requires one secret: RAILWAY_TOKEN
+#   Railway → Project → Settings → Tokens → create a *project* token (scoped to
+#   the production environment), then:
+#     gh secret set RAILWAY_TOKEN
 #
-# To use this workflow instead:
-#   1. Railway → Project → Settings → Tokens → create a Project Token.
-#   2. GitHub → repo → Settings → Secrets and variables → Actions →
-#      add RAILWAY_TOKEN with that value.
-#   3. Make sure the service names below match your Railway services.
+# If you ever connect the repo inside the Railway dashboard, disable this
+# workflow or every push will deploy twice.
 on:
+  # Deploy only after CI is green on main, against the exact commit CI validated.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  # Manual redeploy of current main (Actions tab → Run workflow).
   workflow_dispatch:
-  # push:
-  #   branches: [main]
+
+# Never let two deploys race; a queued one supersedes, but let the in-flight
+# deploy finish so a half-applied migration can't be interrupted.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
 
 jobs:
   deploy:
     name: Deploy
     runs-on: ubuntu-latest
-    if: ${{ github.ref == 'refs/heads/main' }}
+    # workflow_run fires on failure too, so gate on the conclusion.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # On workflow_run, github.sha is main's tip, which may have moved past
+          # what CI tested. Deploy the commit that actually passed.
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+
+      # Until the secret exists this workflow warns and no-ops rather than failing
+      # main. Delete this step once RAILWAY_TOKEN is set, if you'd rather a
+      # missing token be a hard error.
+      - name: Check RAILWAY_TOKEN is configured
+        id: guard
+        run: |
+          if [ -z "${RAILWAY_TOKEN}" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::RAILWAY_TOKEN is not set — skipping deploy. Create a project token in Railway, then run: gh secret set RAILWAY_TOKEN"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install Railway CLI
+        if: steps.guard.outputs.configured == 'true'
         run: npm i -g @railway/cli
-      - name: Deploy backend
+
+      # Both services have no root directory set in Railway, so the build context
+      # is whatever `railway up` uploads. It must be run from INSIDE each service
+      # directory — from the repo root Railway would find no Dockerfile.
+
+      # Backend first: its start command is `prisma migrate deploy && node
+      # dist/main.js`, so this is also what applies pending migrations. If a
+      # migration fails the container never becomes healthy, this step fails, and
+      # the frontend is never pointed at a database it doesn't match.
+      - name: Deploy backend (applies migrations)
+        if: steps.guard.outputs.configured == 'true'
+        working-directory: backend
         run: railway up --service backend --ci
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
       - name: Deploy frontend
+        if: steps.guard.outputs.configured == 'true'
+        working-directory: frontend
         run: railway up --service frontend --ci
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+      - name: Verify production is healthy
+        if: steps.guard.outputs.configured == 'true'
+        # Hits the frontend's /api proxy, so one call exercises nginx, the
+        # backend, and the DB connection behind it. `|| echo 000` keeps a
+        # connection failure from aborting the loop on the first attempt.
+        run: |
+          url=https://frontend-production-b4a4.up.railway.app/api/health
+          for i in $(seq 1 30); do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' "$url" || echo 000)
+            if [ "$code" = "200" ]; then
+              echo "production healthy (HTTP 200) after ${i} attempt(s)"
+              exit 0
+            fi
+            echo "attempt ${i}/30: HTTP ${code} — retrying in 10s"
+            sleep 10
+          done
+          echo "::error::production did not become healthy within 5 minutes of deploy"
+          exit 1
