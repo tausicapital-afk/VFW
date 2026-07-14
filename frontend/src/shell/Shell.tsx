@@ -1,13 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
+import { useTheme } from '../theme/ThemeContext';
 import { can, type Permission } from '../lib/acl';
 import { api } from '../lib/api';
 import { messagingApi, qk, useMessagingRealtime, type Conversation } from '../lib/messaging';
 import type { Role, Submission, User } from '../lib/types';
 
-const ROLE_LABEL: Record<Role, string> = {
+export const ROLE_LABEL: Record<Role, string> = {
   SALES: 'Sales Representative',
   INTERN: 'Intern',
   ACCT: 'Accounting',
@@ -39,7 +40,20 @@ const NAV: NavItem[] = [
   { to: '/audit', label: 'Audit trail', ic: '◷', roles: ['ACCT', 'MGR', 'ADMIN'] },
   { grp: 'System' },
   { to: '/admin', label: 'Administration', ic: '⚙', roles: ['ADMIN'] },
+  { to: '/logs', label: 'Logs', ic: '❈', roles: ['ADMIN'] },
 ];
+
+/** The human label for a path, for the activity log line ("Opened Messages"). */
+function moduleLabel(pathname: string): string {
+  // Longest matching nav route wins, so /submissions/:id maps to "Submissions".
+  let best: { to: string; label: string } | null = null;
+  for (const item of NAV) {
+    if ('grp' in item) continue;
+    const match = item.to === '/' ? pathname === '/' : pathname.startsWith(item.to);
+    if (match && (!best || item.to.length > best.to.length)) best = item;
+  }
+  return best?.label ?? pathname;
+}
 
 function Avatar({ user }: { user: User }) {
   const initials = user.name.split(' ').map((p) => p[0]).slice(0, 2).join('');
@@ -60,6 +74,19 @@ export function Shell() {
   // Any navigation (or route change) closes the drawer so it never sits open
   // over the page you just moved to.
   useEffect(() => setNavOpen(false), [location.pathname]);
+
+  // Record each screen the user opens for the Logs telemetry. Fire-and-forget:
+  // this is the one client-driven event, it can only ever log the caller's own
+  // view, and a failure here must never surface to the user.
+  useEffect(() => {
+    void api
+      .post('/api/activity/track', {
+        action: 'MODULE_VIEW',
+        module: location.pathname,
+        label: moduleLabel(location.pathname),
+      })
+      .catch(() => undefined);
+  }, [location.pathname]);
 
   // Wire the messaging socket for the whole signed-in session: this keeps the
   // conversation cache (and the unread badge below) live from any screen, and
@@ -158,6 +185,86 @@ export function Shell() {
   );
 }
 
+/** Sun/moon quick toggle: flips straight between light and dark. Finer control
+    (including "system") lives on the Settings screen. */
+function ThemeToggle() {
+  const { resolved, setTheme } = useTheme();
+  const dark = resolved === 'dark';
+  return (
+    <button
+      className="theme-toggle"
+      title={dark ? 'Switch to light theme' : 'Switch to dark theme'}
+      aria-label="Toggle dark mode"
+      onClick={() => setTheme(dark ? 'light' : 'dark')}
+    >
+      {dark ? '☀' : '☾'}
+    </button>
+  );
+}
+
+/** Avatar + name in the topbar, opening a menu of Settings / Account / Logout. */
+function UserMenu() {
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Close on click-away or Escape while the menu is open.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  if (!user) return null;
+  const initials = user.name.split(' ').map((p) => p[0]).slice(0, 2).join('');
+  const go = (to: string) => { setOpen(false); navigate(to); };
+
+  return (
+    <div className="usermenu" ref={ref}>
+      <button
+        className="usermenu-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <div className="av" style={{ background: user.colour ?? '#0E0E11' }}>{initials}</div>
+        <span className="nm">{user.name}</span>
+        <span className="chev">▾</span>
+      </button>
+      {open && (
+        <div className="usermenu-pop" role="menu">
+          <div className="usermenu-head">
+            <div className="av" style={{ background: user.colour ?? '#0E0E11' }}>{initials}</div>
+            <div style={{ minWidth: 0 }}>
+              <div className="nm">{user.name}</div>
+              <div className="rl">{user.email}</div>
+            </div>
+          </div>
+          <button className="usermenu-item" role="menuitem" onClick={() => go('/settings')}>
+            <span className="ic">⚙</span> Settings
+          </button>
+          <button className="usermenu-item" role="menuitem" onClick={() => go('/account')}>
+            <span className="ic">◈</span> Account
+          </button>
+          <div className="usermenu-sep" />
+          <button className="usermenu-item danger" role="menuitem" onClick={() => void logout()}>
+            <span className="ic">→</span> Logout
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** The topbar every page renders, so crumb/title stay consistent. */
 export function Page({
   crumb, title, actions, children,
@@ -175,7 +282,9 @@ export function Page({
           <h1>{title}</h1>
         </div>
         <div className="sp" />
-        <div className="rowflex">{actions}</div>
+        {actions && <div className="rowflex">{actions}</div>}
+        <ThemeToggle />
+        <UserMenu />
       </header>
       <div className="wrap">{children}</div>
     </>

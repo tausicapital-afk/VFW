@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import { OtpPurpose, UserStatus } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { randomBytes, randomInt } from 'crypto';
+import { ActivityService, ActivityContext } from '../activity/activity.service';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/auth.guard';
 import { EmailNotConfiguredError, EmailService } from '../common/email';
@@ -40,9 +41,14 @@ export class AuthService {
     private readonly jwt: JwtService,
     private readonly email: EmailService,
     private readonly audit: AuditService,
+    private readonly activity: ActivityService,
   ) {}
 
-  async login(rawEmail: string, password: string): Promise<{ token: string; user: AuthUser }> {
+  async login(
+    rawEmail: string,
+    password: string,
+    ctx?: ActivityContext,
+  ): Promise<{ token: string; user: AuthUser }> {
     const email = rawEmail.trim().toLowerCase();
 
     const attempt = await this.prisma.loginAttempt.findUnique({ where: { email } });
@@ -74,8 +80,19 @@ export class AuthService {
 
     await this.prisma.loginAttempt.deleteMany({ where: { email } });
 
+    // Telemetry for the Logs screen: stamp lastLoginAt and record the sign-in.
+    // Best-effort — a logging hiccup must never turn a valid login into a 500.
+    await this.activity
+      .recordLogin(user.id, user.name, ctx)
+      .catch(() => undefined);
+
     const authUser: AuthUser = { id: user.id, email: user.email, name: user.name, role: user.role };
     return { token: await this.jwt.signAsync(authUser), user: authUser };
+  }
+
+  /** Record a sign-out for the Logs screen. Best-effort, like login. */
+  async recordLogout(user: AuthUser, ctx?: ActivityContext) {
+    await this.activity.recordLogout(user.id, user.name, ctx).catch(() => undefined);
   }
 
   private async recordFailure(email: string) {

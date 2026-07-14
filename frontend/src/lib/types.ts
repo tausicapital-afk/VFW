@@ -220,6 +220,66 @@ export interface AuditPage {
   entries: AuditRow[];
 }
 
+// --- Logs: user-activity telemetry (admin only) ------------------------------
+
+export type ActivityAction =
+  | 'LOGIN' | 'LOGOUT' | 'CONNECT' | 'DISCONNECT' | 'MODULE_VIEW' | 'MESSAGE_SENT'
+  | string;
+
+/** One user's row on the overview tab: identity + derived activity. */
+export interface ActivityUser {
+  id: string;
+  name: string;
+  email: string;
+  role: Role;
+  status: UserStatus;
+  colour: string;
+  department: string | null;
+  createdAt: string;
+  lastLoginAt: string | null;
+  lastSeenAt: string | null;
+  online: boolean;
+  neverLoggedIn: boolean;
+  eventCount: number;
+  messageCount: number;
+  lastActivityAt: string | null;
+  sessionCount: number;
+  totalActiveSec: number;
+}
+
+export interface ActivityLogRow {
+  id: string;
+  action: ActivityAction;
+  detail: string | null;
+  meta: Record<string, unknown> | null;
+  ip: string | null;
+  createdAt: string;
+  user: { id: string; name: string; role: Role; colour: string } | null;
+}
+
+export interface ActivityPage {
+  total: number;
+  limit: number;
+  offset: number;
+  entries: ActivityLogRow[];
+}
+
+export interface SessionRow {
+  id: string;
+  startedAt: string;
+  endedAt: string | null;
+  durationSec: number | null;
+  ip: string | null;
+  user: { id: string; name: string; role: Role; colour: string } | null;
+}
+
+export interface SessionPage {
+  total: number;
+  limit: number;
+  offset: number;
+  sessions: SessionRow[];
+}
+
 // --- People: administration, feedback, internal comments ---------------------
 
 export type UserStatus = 'PENDING' | 'ACTIVE' | 'REJECTED' | 'DISABLED';

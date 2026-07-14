@@ -14,5 +14,8 @@ import { MessagingService } from './messaging.service';
 @Module({
   controllers: [MessagingController],
   providers: [MessagingService, MessagingGateway],
+  // Exported so the activity/logs module can read live presence off the
+  // gateway (who is online right now) without a second source of truth.
+  exports: [MessagingGateway],
 })
 export class MessagingModule {}
