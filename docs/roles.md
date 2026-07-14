@@ -45,14 +45,14 @@ From the nav in `frontend/src/shell/Shell.tsx`, enforced server-side by
 | Contacts | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Messages | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Leaderboard | ✓ | ✓ | ✓ | ✓ | ✓ |
-| New submission | ✓ | ✓ | — | — | ✓ |
-| Approval queue | — | — | ✓ | — | ✓ |
+| New submission | ✓ | ✓ | — | — | ✓ | (Give access to all )
+| Approval queue | — | — | ✓ | — | ✓ | (Give sales access)
 | QuickBooks | — | — | ✓ | — | ✓ |
 | Designer feedback | — | — | ✓ | ✓ | ✓ |
 | Internal notes | — | — | ✓ | ✓ | ✓ |
 | Reports | — | — | ✓ | ✓ | ✓ |
 | Audit trail | — | — | ✓ | ✓ | ✓ |
-| Administration | — | — | — | — | ✓ |
+| Administration | — | — | — | — | ✓ | (Give to accountant)
 | Logs | — | — | — | — | ✓ |
 
 **Common to everyone:** Dashboard, Submissions, Contacts, Messages, Leaderboard.

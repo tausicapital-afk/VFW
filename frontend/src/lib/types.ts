@@ -372,3 +372,61 @@ export interface InternalComment {
     contact: { brand: string };
   };
 }
+
+// ---------------------------------------------------------------------------
+// System configuration (Administration → Configuration)
+//
+// Data-driven: the backend registry describes the fields, and the UI renders
+// from it. A secret's plaintext is never sent here — only whether it is set.
+// See backend/src/config/config.registry.ts.
+// ---------------------------------------------------------------------------
+export type ConfigSource = 'db' | 'env' | 'default';
+export type ConfigFieldType = 'text' | 'number' | 'email' | 'color' | 'secret' | 'select';
+
+export interface ConfigFieldState {
+  key: string;
+  source: ConfigSource;
+  value?: string; // non-secret effective value; absent for secrets
+  isSet: boolean;
+  hasEnv: boolean;
+  decryptError?: boolean;
+}
+
+export interface ConfigField {
+  key: string;
+  label: string;
+  type: ConfigFieldType;
+  help?: string;
+  placeholder?: string;
+  options?: string[];
+  required?: boolean;
+  state: ConfigFieldState;
+}
+
+export interface ConfigGroup {
+  id: 'email' | 'storage';
+  title: string;
+  blurb: string;
+  configured: boolean;
+  fields: ConfigField[];
+}
+
+export interface EnvPanelRow {
+  key: string;
+  label: string;
+  secret: boolean;
+  help: string;
+  isSet: boolean;
+  value?: string;
+}
+
+export interface ConfigState {
+  groups: ConfigGroup[];
+  env: EnvPanelRow[];
+}
+
+export interface ConfigTestResult {
+  ok: boolean;
+  error?: string;
+  sentTo?: string;
+}

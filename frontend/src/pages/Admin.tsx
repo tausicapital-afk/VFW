@@ -6,6 +6,7 @@ import type {
   AdminCatalogue, AdminUser, Currency, Invitation, Role, Settings,
 } from '../lib/types';
 import { Page } from '../shell/Shell';
+import { ConfigTab } from './AdminConfig';
 
 const ROLE_LABEL: Record<Role, string> = {
   SALES: 'Sales Representative',
@@ -37,6 +38,7 @@ const TABS = [
   ['packages', 'Packages & pricing'],
   ['tax', 'Tax rates'],
   ['settings', 'Settings'],
+  ['config', 'Configuration'],
 ] as const;
 
 type TabKey = (typeof TABS)[number][0];
@@ -63,6 +65,7 @@ export function Admin() {
       {tab === 'packages' && <PackagesTab />}
       {tab === 'tax' && <TaxTab />}
       {tab === 'settings' && <SettingsTab />}
+      {tab === 'config' && <ConfigTab />}
     </Page>
   );
 }

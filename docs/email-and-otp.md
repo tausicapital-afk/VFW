@@ -125,8 +125,32 @@ Each returns a full `Mail` with **both** an HTML and a plain-text body.
 
 ## Configuration
 
-SMTP is configured entirely through environment variables. Real credentials live
-only in gitignored `backend/.env`; `backend/.env.example` carries placeholders.
+SMTP can be set **two ways**, and the app resolves them in this order:
+
+1. **In-app** — *Administration → Configuration → Email (SMTP)*. An administrator
+   sets host/port/username/password/from-address from the console; values are
+   saved to the database (the `ConfigSetting` table, the password **encrypted at
+   rest**) and take effect immediately, no redeploy. A **Send test email** button
+   proves it works. This is how a non-technical operator turns email on. See
+   `backend/src/config/`.
+2. **Environment variables** — the `MAIL_*` vars below. Real credentials live only
+   in gitignored `backend/.env`; `backend/.env.example` carries placeholders.
+
+**Resolution is database value → environment variable → built-in default**, per
+key. So env vars still fully configure a fresh install, and the in-app screen
+overrides them per deployment. `EmailService` reads through `ConfigService`
+rather than `process.env` directly, and rebuilds its SMTP transport whenever a
+value changes.
+
+> **Common gotcha (this is what "email not configured on the server" means in
+> production).** The `MAIL_*` vars live in local `backend/.env`, which is
+> gitignored and **never ships to Railway** — so a fresh Railway backend has no
+> email config and every invite/OTP shows *"Email is not configured on this
+> server."* Fix it by either setting the `MAIL_*` vars on the Railway **backend**
+> service, or (once this build is deployed) filling them in under
+> *Administration → Configuration*.
+
+The `MAIL_*` variables:
 
 | Variable | Example | Purpose |
 |---|---|---|

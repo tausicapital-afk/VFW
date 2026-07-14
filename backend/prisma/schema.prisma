@@ -47,6 +47,11 @@ model User {
   role          Role
   department    String?
   status        UserStatus @default(PENDING)
+  // Operational-only accounts (demo / test logins) that must keep working but
+  // stay off the admin Users tab. Hidden is orthogonal to status: a hidden user
+  // is still ACTIVE and authenticates normally — it is only filtered out of the
+  // admin people listings, never out of auth.
+  hidden        Boolean    @default(false)
   // Bumped to invalidate every session this user currently holds. The session
   // JWT carries the value it was minted with; the guard refuses a token whose
   // value has fallen behind. A password reset bumps it, so a stolen session
@@ -518,6 +523,30 @@ model Settings {
   fxRates             Json    @default("{\"CAD\":1,\"USD\":1.37,\"GBP\":1.74,\"EUR\":1.49,\"JPY\":0.0092}")
   scoreWeights        Json    @default("{\"revenue\":30,\"approved\":20,\"collection\":30,\"retention\":20}")
   updatedAt           DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// System configuration — the operational credentials (SMTP, object storage)
+// that used to live only in .env / Railway variables, moved into the database
+// so a non-technical administrator can set them from the console.
+//
+// One row per setting, keyed by the SAME name as the environment variable it
+// shadows (MAIL_HOST, R2_BUCKET, …). Resolution order in ConfigService is
+// DB row -> process.env -> built-in default, so an existing env-only deployment
+// keeps working untouched and the DB simply overrides it when a value is set.
+//
+// `encrypted` marks a secret (SMTP password, R2 secret key): its `value` is
+// AES-256-GCM ciphertext, never plaintext, and is never returned to the browser.
+// See src/config/config.crypto.ts and config.registry.ts.
+// ---------------------------------------------------------------------------
+model ConfigSetting {
+  key         String   @id
+  value       String
+  encrypted   Boolean  @default(false)
+  // Who last changed it. A plain column, not an FK: the audit trail is the
+  // system of record for "who changed what", so a relation here is redundant.
+  updatedById String?
+  updatedAt   DateTime @updatedAt
 }
 
 // ---------------------------------------------------------------------------

@@ -13,6 +13,7 @@ import { AuthService } from './auth/auth.service';
 import { CatalogModule } from './catalog/catalog.controller';
 import { AuthGuard, Public } from './common/auth.guard';
 import { EmailModule } from './common/email';
+import { SystemConfigModule } from './config/config.controller';
 import { loggerOptions } from './common/logging';
 import { VfwThrottlerGuard, throttlerOptions } from './common/throttler';
 import { ContactsModule } from './contacts/contacts.controller';
@@ -67,8 +68,9 @@ class HealthController {
       signOptions: { expiresIn: '30d' },
     }),
     PrismaModule,
-    EmailModule,
     AuditModule,
+    SystemConfigModule,
+    EmailModule,
     CatalogModule,
     SubmissionsModule,
     ContactsModule,

@@ -183,7 +183,10 @@ export class AdminService {
 
   async listUsers() {
     return {
+      // `hidden` accounts (demo / test logins) are deliberately omitted here.
+      // They still authenticate — this filter only keeps them off the Users tab.
       users: await this.prisma.user.findMany({
+        where: { hidden: false },
         select: this.userFields,
         orderBy: [{ status: 'asc' }, { name: 'asc' }],
       }),
@@ -193,7 +196,7 @@ export class AdminService {
   async pendingUsers() {
     return {
       users: await this.prisma.user.findMany({
-        where: { status: UserStatus.PENDING },
+        where: { status: UserStatus.PENDING, hidden: false },
         select: this.userFields,
         orderBy: { createdAt: 'asc' },
       }),

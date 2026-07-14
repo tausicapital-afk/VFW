@@ -1,6 +1,7 @@
 import { Global, Injectable, Logger, Module, ServiceUnavailableException } from '@nestjs/common';
 import * as nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
+import { ConfigService } from '../config/config.service';
 
 /**
  * Outbound email — one transport, one global template, and one fallback:
@@ -53,14 +54,23 @@ export interface Mail {
 // from BRAND_* env so the same code can wear a different suit per deployment.
 // ---------------------------------------------------------------------------
 
+// The template helpers below are module-level (they are called from inside
+// `layout()` / `button()`), so they cannot reach the injected ConfigService
+// through `this`. EmailService sets this reference in its constructor, so brand
+// name/colour follow whatever the admin has configured — DB first, then env.
+let cfg: ConfigService | null = null;
+
+function conf(key: string): string {
+  return (cfg?.get(key) ?? process.env[key]?.trim() ?? '').trim();
+}
 function brandName() {
-  return process.env.MAIL_FROM_NAME?.trim() || 'VFW Console';
+  return conf('MAIL_FROM_NAME') || 'VFW Console';
 }
 function brandColour() {
-  return process.env.MAIL_BRAND_COLOUR?.trim() || '#0C7A4D';
+  return conf('MAIL_BRAND_COLOUR') || '#0C7A4D';
 }
 function supportAddress() {
-  return process.env.MAIL_SUPPORT_ADDRESS?.trim() || process.env.MAIL_FROM_ADDRESS?.trim() || '';
+  return conf('MAIL_SUPPORT_ADDRESS') || conf('MAIL_FROM_ADDRESS') || '';
 }
 
 /** Escape anything interpolated into HTML that came from a person or the DB. */
@@ -161,18 +171,25 @@ function textLayout(lines: string[]): string {
 export class EmailService {
   private readonly log = new Logger(EmailService.name);
   private transporter?: Transporter;
+  /** The config version the memoised transporter was built against. */
+  private transporterVersion = -1;
+
+  constructor(private readonly config: ConfigService) {
+    // Let the module-level template helpers read live config too.
+    cfg = config;
+  }
 
   private get host() {
-    return process.env.MAIL_HOST?.trim() || '';
+    return this.config.get('MAIL_HOST') ?? '';
   }
   private get user() {
-    return process.env.MAIL_USERNAME?.trim() || '';
+    return this.config.get('MAIL_USERNAME') ?? '';
   }
   private get pass() {
-    return process.env.MAIL_PASSWORD ?? '';
+    return this.config.get('MAIL_PASSWORD') ?? '';
   }
   private get fromAddress() {
-    return process.env.MAIL_FROM_ADDRESS?.trim() || this.user;
+    return this.config.get('MAIL_FROM_ADDRESS') ?? this.user;
   }
   private get from() {
     return `${brandName()} <${this.fromAddress}>`;
@@ -180,7 +197,7 @@ export class EmailService {
 
   /** Where the SPA lives, so an emailed link points at something real. */
   get appUrl() {
-    return (process.env.APP_URL?.trim() || 'http://localhost:5173').replace(/\/$/, '');
+    return (this.config.get('APP_URL') ?? 'http://localhost:5173').replace(/\/$/, '');
   }
 
   /**
@@ -194,25 +211,29 @@ export class EmailService {
   }
 
   private get port(): number {
-    return Number(process.env.MAIL_PORT?.trim() || 587);
+    return this.config.getNumber('MAIL_PORT') ?? 587;
   }
 
   /** 465 is implicit TLS (secure); 587/25 start plaintext and upgrade via STARTTLS. */
   private get secure(): boolean {
-    const enc = process.env.MAIL_ENCRYPTION?.trim().toLowerCase();
+    const enc = this.config.get('MAIL_ENCRYPTION')?.toLowerCase();
     if (enc === 'ssl') return true;
     if (enc === 'tls' || enc === 'none') return false;
     return this.port === 465;
   }
 
   private get transport(): Transporter {
-    if (!this.transporter) {
+    // Rebuild when the admin changes any credential, so a saved SMTP setting
+    // takes effect on the next send without a restart. The version counter on
+    // ConfigService bumps on every write.
+    if (!this.transporter || this.transporterVersion !== this.config.version) {
       this.transporter = nodemailer.createTransport({
         host: this.host,
         port: this.port,
         secure: this.secure,
         auth: { user: this.user, pass: this.pass },
       });
+      this.transporterVersion = this.config.version;
     }
     return this.transporter;
   }
@@ -234,6 +255,35 @@ export class EmailService {
       this.log.error(`SMTP send failed: ${err instanceof Error ? err.message : String(err)}`);
       throw new ServiceUnavailableException('The email could not be sent');
     }
+  }
+
+  /**
+   * Send a real message to the signed-in admin to prove the SMTP settings work.
+   * Unlike {@link send}, this first runs `transporter.verify()` and lets its
+   * error through — the whole point of a test is to surface *why* it failed
+   * (bad login, wrong port, unreachable host), not a generic "could not send".
+   */
+  async sendTest(to: string, name: string): Promise<void> {
+    if (!this.configured) throw new EmailNotConfiguredError();
+    await this.transport.verify();
+
+    const first = esc((name || '').split(' ')[0] || 'there');
+    const brand = esc(brandName());
+    const bodyHtml =
+      `<h1 style="margin:0 0 14px;font-size:22px;color:#0e0e11;">Email is working ✅</h1>` +
+      `<p style="margin:0 0 6px;">Hi ${first}, this is a test message from ${brand}. ` +
+      `If you're reading it, your outgoing email settings are correct — sign-up codes, ` +
+      `password resets and invitations will now be delivered.</p>`;
+    await this.send({
+      to,
+      subject: `${brandName()} — test email`,
+      html: layout({ title: 'Test email', preheader: 'Your email settings are working', bodyHtml }),
+      text: textLayout([
+        `This is a test email from ${brandName()}.`,
+        '',
+        `If you're reading it, your outgoing email settings are correct.`,
+      ]),
+    });
   }
 
   // -------------------------------------------------------------------------
