@@ -172,10 +172,11 @@ export function Shell() {
                 key={item.to}
                 to={item.to}
                 end={item.to === '/'}
+                title={collapsed ? item.label : undefined}
                 className={({ isActive }) => 'nav' + (isActive ? ' on' : '')}
               >
                 <span className="ic">{item.ic}</span>
-                {item.label}
+                <span className="lbl">{item.label}</span>
                 {badge > 0 && <span className="badge">{badge}</span>}
               </NavLink>
             );
@@ -190,8 +191,13 @@ export function Shell() {
               <div className="rl">{ROLE_LABEL[user.role]}</div>
             </div>
           </div>
-          <button className="nav" onClick={() => void logout()}>
-            <span className="ic">→</span> Sign out
+          <button
+            className="nav"
+            title={collapsed ? 'Sign out' : undefined}
+            onClick={() => void logout()}
+          >
+            <span className="ic">→</span>
+            <span className="lbl">Sign out</span>
           </button>
         </div>
       </aside>
