@@ -1,7 +1,9 @@
 # VFW Console — Deployment
 
 How the VFW Console is hosted on **Railway**, how it was set up, and how to
-operate and redeploy it. Written 2026-07-13.
+operate and redeploy it. Written 2026-07-13, updated 2026-07-14.
+
+**Deploys are manual.** Pushing to GitHub ships nothing — see [CI/CD](#cicd).
 
 ---
 
@@ -168,24 +170,87 @@ The seed is idempotent (all upserts). It creates the FW26 catalog (6 taxes,
 
 ## CI/CD
 
-- **`.github/workflows/ci.yml`** — on every push/PR to `main`, builds and
-  type-checks both services (backend also runs `prisma validate`). This is the
-  quality gate.
-- **`.github/workflows/deploy.yml`** — optional, manual (`workflow_dispatch`).
-  Deploys via the Railway CLI using a `RAILWAY_TOKEN` repo secret. Disabled by
-  default so it doesn't collide with option B below.
+> **Pushing to GitHub does not deploy anything.** Deploys are manual, via the
+> Railway CLI. Read this section before assuming production is up to date.
 
-### Redeploying
+### Why deploys are manual
 
-- **CLI (current setup):** from `backend/` or `frontend/`, run `railway up`.
-  Both directories are already linked to their services.
-- **GitHub auto-deploy (optional):** in the Railway dashboard, connect each
-  service to `tausicapital-afk/VFW` and set the service **Root Directory**
-  (`backend` / `frontend`). Railway then redeploys on every push to `main`.
-  Pick one mechanism, not both.
+Two mechanisms *could* deploy on push. Neither is active:
+
+1. **Railway's GitHub integration** — never connected. Both services report
+   `source.repo = null`; Railway has no idea the repo exists and rebuilds
+   nothing when you push.
+2. **`.github/workflows/deploy.yml`** — written and wired, but **dormant**. It
+   needs a `RAILWAY_TOKEN` repo secret, and Railway only issues project tokens
+   on a paid plan. This account is on the free trial, so the token can't be
+   created yet. Without it the workflow logs a warning and skips its deploy
+   steps — it never fails `main`.
+
+This bit us once: `main` was several commits ahead of production for days
+(Messages/Contacts/Leaderboard were merged but not live, and three migrations —
+`messaging`, `email_otp`, `activity_logs` — had never been applied), because
+everyone assumed a push shipped. **It doesn't. Someone has to run `railway up`.**
+
+### `.github/workflows/ci.yml` (active)
+
+On every push/PR to `main`: builds and type-checks both services, runs the
+backend test suite against a throwaway Postgres, and runs `prisma validate`.
+This is the quality gate, and it is the only thing a push triggers today.
+
+### Deploying (the actual procedure)
+
+Prerequisite: `railway login` once (browser-based).
+
+**Order matters.** Backend first — its start command is
+`prisma migrate deploy && node dist/main.js`, so deploying the backend is also
+what applies pending migrations. If a migration fails, stop; do not ship a
+frontend against a schema it doesn't match.
+
+**Run from *inside* each service directory.** Neither service sets a **Root
+Directory** in Railway, so `railway up` uploads the current directory as the
+build context. From the repo root Railway finds no `Dockerfile` and the build
+fails.
+
+```bash
+cd backend  && railway up --service backend  --ci   # applies migrations, boots API
+cd ../frontend && railway up --service frontend --ci
+```
+
+Then verify — never trust "Deploy complete" alone:
+
+```bash
+# 1. API + DB + proxy all in one call (must be 200)
+curl -s -o /dev/null -w '%{http_code}\n' \
+  https://frontend-production-b4a4.up.railway.app/api/health
+
+# 2. Migrations actually applied
+railway logs --service backend | grep -i migrat
+
+# 3. The shipped bundle really contains your change — this is the check that
+#    would have caught the stale-production incident.
+bundle=$(curl -s https://frontend-production-b4a4.up.railway.app/ \
+  | grep -o 'assets/index-[A-Za-z0-9_-]*\.js')
+curl -s "https://frontend-production-b4a4.up.railway.app/$bundle" | grep -c Messages
+```
 
 Setting a variable (e.g. `CORS_ORIGIN`) triggers a redeploy automatically unless
 you pass `--skip-deploys`.
+
+### Turning on automatic deploys (once the account is paid)
+
+`deploy.yml` is already correct and waiting. It runs only after CI passes on
+`main`, checks out the exact commit CI validated, deploys backend → frontend,
+then polls `/api/health` until it returns 200. To activate:
+
+1. Railway → **Project → Settings → Tokens** → create a **project token** scoped
+   to the `production` environment. *(Requires a paid plan.)*
+2. `gh secret set RAILWAY_TOKEN`
+
+That's it — the next push to `main` deploys itself, and **Actions → Deploy to
+Railway → Run workflow** redeploys current `main` on demand.
+
+> Do not *also* connect Railway's dashboard GitHub integration. Pick one, or
+> every push deploys twice.
 
 ---
 
@@ -212,12 +277,19 @@ services will consume the credit within days. Add a payment method in the
 Railway dashboard (**Project → Settings**, or account billing) to keep it
 running.
 
+The trial is also why deploys are still manual: project tokens (needed for the
+GitHub Actions deploy) are a paid-plan feature. Adding a payment method unblocks
+[automatic deploys](#turning-on-automatic-deploys-once-the-account-is-paid) as
+well as keeping the services alive.
+
 ---
 
 ## Troubleshooting
 
 | Symptom | Likely cause / fix |
 |---------|--------------------|
+| **A merged feature isn't live** | Almost always this: nothing deployed it. Pushing to `main` does **not** deploy — see [CI/CD](#cicd). Run `railway up` from `backend/` then `frontend/`. |
+| A new table/column is missing in prod | Migrations only apply when the **backend** is deployed (`prisma migrate deploy` runs on boot). Deploying only the frontend never touches the DB. |
 | Login works in `curl` but "logs out" in the browser | Third-party cookie blocking — should be fixed by the single-origin proxy; confirm the SPA calls relative `/api` (no backend host in the JS bundle). |
 | `/api/*` returns 502 from the frontend | Backend down or `BACKEND_URL` wrong. Check `railway logs --service backend` and the `BACKEND_URL` frontend variable. |
 | Backend boot fails | Usually migrations. Check `DATABASE_URL` and `railway logs --service backend`. |

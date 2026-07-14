@@ -174,57 +174,41 @@ The repo is set up to run as **three services in one Railway project**:
 Both services build from a committed `Dockerfile`, so the build is identical on
 Railway, in CI, and locally.
 
-### How deploys actually happen: GitHub Actions
+### Pushing to main does NOT deploy
 
-**Railway's GitHub integration is deliberately NOT connected.** Neither service
-has a repo source, so Railway itself does nothing when you push. All deploys are
-driven by `.github/workflows/deploy.yml`:
+Railway's GitHub integration is **not** connected (neither service has a repo
+source), and `.github/workflows/deploy.yml` is **dormant** — it needs a
+`RAILWAY_TOKEN`, and Railway only issues project tokens on a paid plan. So a push
+runs CI and ships nothing. **Deploys are manual.**
 
-```
-push to main → ci.yml (build · test · type-check)
-                  └─ on success → deploy.yml
-                         ├─ railway up --service backend   (runs prisma migrate deploy, then boots)
-                         ├─ railway up --service frontend
-                         └─ poll /api/health until 200
-```
-
-Deploys are gated on green CI and run against the exact commit CI validated, so
-a failing test never reaches production. Backend goes first: it applies pending
-migrations on boot, and if a migration fails the job stops before the frontend
-ships against a schema it doesn't match.
-
-**One-time setup** (already done unless the secret was rotated):
-
-1. Railway → **Project → Settings → Tokens** → create a **project token** scoped
-   to the `production` environment.
-2. From the repo: `gh secret set RAILWAY_TOKEN` (or GitHub → Settings → Secrets
-   and variables → Actions).
-
-Without the secret, `deploy.yml` warns and skips rather than failing `main`.
-
-To redeploy current `main` without a code change: **Actions → Deploy to Railway →
-Run workflow**.
-
-> If you ever connect the repo inside the Railway dashboard, disable this
-> workflow — otherwise every push deploys twice.
-
-### Deploying from the terminal (fallback)
-
-Login is browser-based, so run it yourself:
+Login is browser-based, so run it yourself once:
 
 ```
 ! railway login
 ```
 
-Because neither service sets a **Root Directory**, `railway up` uploads the
-current directory as the build context — it must be run from *inside* each
-service folder, not the repo root (from the root Railway finds no `Dockerfile`):
+Deploy the **backend first**: its start command is `prisma migrate deploy && node
+dist/main.js`, so deploying the backend is also what applies pending migrations.
+And because neither service sets a **Root Directory**, `railway up` uploads the
+current directory as the build context — it must run from *inside* each service
+folder, not the repo root (from the root Railway finds no `Dockerfile`):
 
 ```bash
 cd backend  && railway up --service backend --ci    # applies migrations, boots API
 cd frontend && railway up --service frontend --ci
 railway variables --service backend                 # inspect env vars
+
+# verify — must print 200 (exercises nginx, the API and the DB in one call)
+curl -s -o /dev/null -w '%{http_code}\n' \
+  https://frontend-production-b4a4.up.railway.app/api/health
 ```
+
+Once the account is on a paid plan, create a Railway **project token**, run
+`gh secret set RAILWAY_TOKEN`, and `deploy.yml` takes over: CI green on `main` →
+backend → frontend → health check. Don't also connect Railway's dashboard GitHub
+integration, or every push deploys twice.
+
+Full procedure, seeding and troubleshooting: **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
 
 ### Environment variables
 
