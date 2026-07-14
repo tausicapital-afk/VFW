@@ -72,14 +72,29 @@ export class ActivityService {
     return session.id;
   }
 
-  /** The last socket dropped — close the session and stamp its duration. */
-  async closeSession(sessionId: string, userId: string, name: string) {
-    const session = await this.prisma.userSession.findUnique({ where: { id: sessionId } });
-    if (!session || session.endedAt) return;
+  /**
+   * The last socket dropped — close the session and stamp its duration. Prefer
+   * the exact session id the gateway remembered; if that was lost (a disconnect
+   * that raced the open, before the id was recorded), fall back to the user's
+   * most recent still-open session. Either way a session can never be orphaned
+   * open by an in-memory timing gap.
+   */
+  async closeSession(userId: string, name: string, sessionId?: string) {
+    const session = sessionId
+      ? await this.prisma.userSession.findUnique({ where: { id: sessionId } })
+      : await this.prisma.userSession.findFirst({
+          where: { userId, endedAt: null },
+          orderBy: { startedAt: 'desc' },
+        });
+    if (!session || session.endedAt || session.userId !== userId) return;
+
     const endedAt = new Date();
-    const durationSec = Math.max(0, Math.round((endedAt.getTime() - session.startedAt.getTime()) / 1000));
+    const durationSec = Math.max(
+      0,
+      Math.round((endedAt.getTime() - session.startedAt.getTime()) / 1000),
+    );
     await this.prisma.userSession.update({
-      where: { id: sessionId },
+      where: { id: session.id },
       data: { endedAt, durationSec },
     });
     await this.log({
@@ -88,6 +103,22 @@ export class ActivityService {
       detail: `${name} went offline`,
       meta: { durationSec },
     });
+  }
+
+  /**
+   * Close any session left open by a previous process. Presence is in-memory and
+   * single-instance, so on a clean boot there are no live sockets yet — every
+   * still-open session is therefore a leftover from a crash or restart. We know
+   * it started but not when it ended, so we stamp `endedAt` without a duration
+   * (null = unknown) rather than invent one, and it stops showing as "online".
+   * Returns how many were closed, for a boot log line.
+   */
+  async closeOrphanedSessions(): Promise<number> {
+    const res = await this.prisma.userSession.updateMany({
+      where: { endedAt: null },
+      data: { endedAt: new Date() },
+    });
+    return res.count;
   }
 
   /** A self-reported module view from the client (the only forgeable action,

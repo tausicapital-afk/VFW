@@ -87,12 +87,22 @@ export function Shell() {
   // Record each screen the user opens for the Logs telemetry. Fire-and-forget:
   // this is the one client-driven event, it can only ever log the caller's own
   // view, and a failure here must never surface to the user.
+  //
+  // Deduped by resolved module (not raw path) within a window, so paging between
+  // records under one module, a re-mount, or StrictMode's double-invoke don't
+  // flood the log — only genuine module transitions are recorded.
+  const lastView = useRef<{ label: string; at: number } | null>(null);
   useEffect(() => {
+    const label = moduleLabel(location.pathname);
+    const now = Date.now();
+    const prev = lastView.current;
+    if (prev && prev.label === label && now - prev.at < 5 * 60_000) return;
+    lastView.current = { label, at: now };
     void api
       .post('/api/activity/track', {
         action: 'MODULE_VIEW',
         module: location.pathname,
-        label: moduleLabel(location.pathname),
+        label,
       })
       .catch(() => undefined);
   }, [location.pathname]);

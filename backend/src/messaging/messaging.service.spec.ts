@@ -73,6 +73,32 @@ describe('createConversation — DM dedupe', () => {
   });
 });
 
+describe('markDeliveredForRecipients — batched fan-out', () => {
+  it('no-ops for an empty recipient set, touching no database', async () => {
+    const { service, prisma } = makeService({ $executeRaw: jest.fn() });
+    const res = await service.markDeliveredForRecipients('c1', [], 5);
+    expect(res).toEqual([]);
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
+  });
+
+  it('advances every recipient in one statement and returns their receipts', async () => {
+    const { service, prisma } = makeService({ $executeRaw: jest.fn().mockResolvedValue(1) });
+    prisma.conversationParticipant.findMany.mockResolvedValue([
+      { userId: 'a', lastReadSeq: 0, lastDeliveredSeq: 5 },
+      { userId: 'b', lastReadSeq: 2, lastDeliveredSeq: 5 },
+    ]);
+
+    const res = await service.markDeliveredForRecipients('c1', ['a', 'b'], 5);
+
+    // One write for the whole set, not one per recipient.
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(res).toEqual([
+      { conversationId: 'c1', userId: 'a', lastReadSeq: 0, lastDeliveredSeq: 5 },
+      { conversationId: 'c1', userId: 'b', lastReadSeq: 2, lastDeliveredSeq: 5 },
+    ]);
+  });
+});
+
 describe('group administration', () => {
   it('a non-admin cannot rename a group', async () => {
     const { service, prisma } = makeService();

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import {
   OnGatewayConnection,
@@ -30,6 +30,19 @@ function readCookie(header: string | undefined, name: string): string | undefine
 const userRoom = (userId: string) => `user:${userId}`;
 const convRoom = (conversationId: string) => `conv:${conversationId}`;
 
+/**
+ * The caller's real address for the activity log. Behind nginx a socket's own
+ * address is the proxy's, so prefer the left-most `x-forwarded-for` hop (the
+ * original client, as nginx sets it) and fall back to the direct address when
+ * there is no proxy in front. Same intent as express `trust proxy` on HTTP.
+ */
+function clientIp(socket: Socket): string | undefined {
+  const xff = socket.handshake.headers['x-forwarded-for'];
+  const raw = Array.isArray(xff) ? xff[0] : xff;
+  const first = raw?.split(',')[0]?.trim();
+  return first || socket.handshake.address || undefined;
+}
+
 type AuthedSocket = Socket & { data: { user?: AuthUser } };
 
 /**
@@ -48,7 +61,9 @@ type AuthedSocket = Socket & { data: { user?: AuthUser } };
  */
 @Injectable()
 @WebSocketGateway({ path: '/api/socket.io', cors: { origin: true, credentials: true } })
-export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class MessagingGateway
+  implements OnGatewayConnection, OnGatewayDisconnect, OnModuleInit
+{
   private readonly logger = new Logger(MessagingGateway.name);
 
   @WebSocketServer()
@@ -86,6 +101,21 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   // --- Lifecycle -----------------------------------------------------------
 
+  /**
+   * On a clean boot no sockets are live yet, so any session still marked open in
+   * the database is a leftover from a previous process that was killed before it
+   * could close them. Sweep them shut so the Logs screen does not show ghosts as
+   * "online". Best-effort — a telemetry sweep must never stop the app starting.
+   */
+  async onModuleInit() {
+    try {
+      const closed = await this.activity.closeOrphanedSessions();
+      if (closed > 0) this.logger.log(`Closed ${closed} orphaned session(s) from a previous run`);
+    } catch (e) {
+      this.logger.warn(`Orphaned-session sweep failed: ${(e as Error).message}`);
+    }
+  }
+
   async handleConnection(socket: AuthedSocket) {
     let user: AuthUser;
     try {
@@ -103,17 +133,21 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
     sockets.add(socket.id);
     this.presence.set(user.id, sockets);
 
-    // First socket for this user opens a session for the Logs screen. Handshake
-    // headers give us the origin; best-effort, never blocks the connection.
+    // First socket for this user opens a session for the Logs screen. Awaited
+    // (not fire-and-forget) so the session id is recorded before a fast
+    // disconnect could race it and leave the row orphaned open; still
+    // best-effort, so a telemetry failure never blocks the connection.
     if (wasOffline) {
       const ctx = {
-        ip: socket.handshake.address,
+        ip: clientIp(socket),
         userAgent: socket.handshake.headers['user-agent'],
       };
-      this.activity
-        .openSession(user.id, user.name, ctx)
-        .then((id) => this.sessionByUser.set(user.id, id))
-        .catch(() => undefined);
+      try {
+        const id = await this.activity.openSession(user.id, user.name, ctx);
+        this.sessionByUser.set(user.id, id);
+      } catch {
+        /* telemetry is best-effort */
+      }
     }
 
     // Join my personal room and every conversation I belong to, so fan-out to a
@@ -147,12 +181,12 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
       await this.messaging.setLastSeen(user.id);
       await this.emitPresence(user.id, false);
 
-      // Last socket gone — close the session and stamp its duration.
+      // Last socket gone — close the session and stamp its duration. Pass the
+      // remembered id as a hint; closeSession falls back to the user's open
+      // session if the map missed it, so a raced open can't orphan a row.
       const sessionId = this.sessionByUser.get(user.id);
-      if (sessionId) {
-        this.sessionByUser.delete(user.id);
-        await this.activity.closeSession(sessionId, user.id, user.name).catch(() => undefined);
-      }
+      this.sessionByUser.delete(user.id);
+      await this.activity.closeSession(user.id, user.name, sessionId).catch(() => undefined);
     }
   }
 
@@ -250,10 +284,20 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
     await this.joinRooms([message.senderId, ...recipientIds], conversationId);
     this.server.to(convRoom(conversationId)).emit('message', { conversationId, message });
 
-    for (const rid of recipientIds) {
-      if (!this.isOnline(rid)) continue;
-      const receipt = await this.messaging.markDelivered(conversationId, rid, message.seq);
-      this.server.to(convRoom(conversationId)).emit('receipt', receipt);
+    // Everyone online right now has it. Advance all their delivered cursors in a
+    // single statement rather than one round-trip per recipient (a large group
+    // otherwise costs N sequential writes on every message), then echo the
+    // per-recipient receipts so the sender's ticks turn ✓✓.
+    const onlineRecipients = recipientIds.filter((rid) => this.isOnline(rid));
+    if (onlineRecipients.length) {
+      const receipts = await this.messaging.markDeliveredForRecipients(
+        conversationId,
+        onlineRecipients,
+        message.seq,
+      );
+      for (const receipt of receipts) {
+        this.server.to(convRoom(conversationId)).emit('receipt', receipt);
+      }
     }
   }
 
