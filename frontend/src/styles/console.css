@@ -278,6 +278,15 @@ th.num{font-family:"IBM Plex Sans"}
 .f.err .msg{display:block}
 .f .help{font-size:11px;color:var(--muted);margin-top:3px}
 .f.wide{grid-column:1/-1}
+
+/* File-upload rows (new-submission attachments, the documents card) hold a bare
+   select and a native file input outside a .f wrapper, so they'd fall back to
+   the browser's light-themed defaults. Give them the same field + button look. */
+.upload select{border:1px solid var(--line);border-radius:var(--r);padding:8px 10px;background:#fff;color:inherit}
+.upload select:focus{border-color:var(--blue);outline:none;box-shadow:0 0 0 3px var(--blue-soft)}
+.upload input[type=file]{color:inherit;font-size:13px;max-width:100%}
+.upload input[type=file]::file-selector-button{margin-right:10px;border:1px solid var(--line);background:#fff;color:inherit;border-radius:var(--r);padding:6px 11px;font:inherit;font-weight:500;cursor:pointer}
+.upload input[type=file]::file-selector-button:hover{background:var(--paper)}
 .checks{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px}
 .chk{display:flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:var(--r);padding:9px 11px;cursor:pointer;background:#fff}
 .chk:hover{border-color:#B9BFC8}
@@ -432,6 +441,8 @@ pre.code{background:var(--ink);color:#D7DCE4;padding:14px;border-radius:var(--r)
 :root[data-theme="dark"] .f textarea,
 :root[data-theme="dark"] .toolbar input[type=search],
 :root[data-theme="dark"] .toolbar select,
+:root[data-theme="dark"] .upload select,
+:root[data-theme="dark"] .upload input[type=file]::file-selector-button,
 :root[data-theme="dark"] .stickybar,
 :root[data-theme="dark"] .modal .box,
 :root[data-theme="dark"] .modal .box .ft,

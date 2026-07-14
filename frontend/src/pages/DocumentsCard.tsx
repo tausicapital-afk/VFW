@@ -3,27 +3,7 @@ import { useRef, useState } from 'react';
 import { api } from '../lib/api';
 import { fmtDate } from '../lib/format';
 import type { DocumentType, SubmissionDocument } from '../lib/types';
-
-const TYPE_LABEL: Record<DocumentType, string> = {
-  contract: 'Signed contract',
-  po: 'Purchase order',
-  receipt: 'Receipt',
-  other: 'Other',
-};
-
-type PresignResponse = {
-  uploadUrl: string;
-  storageKey: string;
-  method: 'PUT';
-  headers: Record<string, string>;
-};
-
-function fmtSize(bytes: number | null): string {
-  if (!bytes) return '';
-  if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(1)} MB`;
-  if (bytes >= 1e3) return `${Math.round(bytes / 1e3)} KB`;
-  return `${bytes} B`;
-}
+import { fmtSize, TYPE_LABEL, uploadDocument } from '../lib/uploads';
 
 /**
  * Documents attached to a submission. The upload is a two-step dance so the file
@@ -45,29 +25,7 @@ export function DocumentsCard({ submissionId }: { submissionId: string }) {
     setError(null);
     setBusy(true);
     try {
-      // 1. Ask our API for a short-lived URL to push the bytes to.
-      const presigned = await api.post<PresignResponse>(
-        `/api/submissions/${submissionId}/documents/presign`,
-        { type, filename: file.name, contentType: file.type || 'application/octet-stream', size: file.size },
-      );
-
-      // 2. PUT the file straight to R2 — no credentials, not through our API.
-      const put = await fetch(presigned.uploadUrl, {
-        method: 'PUT',
-        headers: presigned.headers,
-        body: file,
-      });
-      if (!put.ok) throw new Error(`Upload to storage failed (${put.status})`);
-
-      // 3. Now that the bytes are in R2, record the row that points at them.
-      await api.post(`/api/submissions/${submissionId}/documents`, {
-        type,
-        filename: file.name,
-        storageKey: presigned.storageKey,
-        contentType: file.type || undefined,
-        size: file.size,
-      });
-
+      await uploadDocument(submissionId, file, type);
       void qc.invalidateQueries({ queryKey: ['submission', submissionId, 'documents'] });
       void qc.invalidateQueries({ queryKey: ['submission', submissionId, 'audit'] });
     } catch (e) {
@@ -93,7 +51,7 @@ export function DocumentsCard({ submissionId }: { submissionId: string }) {
         <span className="sm mut">Contract, PO and receipt attach here.</span>
       </div>
       <div className="bd">
-        <div className="rowflex" style={{ gap: 8, marginBottom: 12 }}>
+        <div className="rowflex upload" style={{ gap: 8, marginBottom: 12 }}>
           <select value={type} onChange={(e) => setType(e.target.value as DocumentType)} disabled={busy}>
             {(Object.keys(TYPE_LABEL) as DocumentType[]).map((t) => (
               <option key={t} value={t}>{TYPE_LABEL[t]}</option>

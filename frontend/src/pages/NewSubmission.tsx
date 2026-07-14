@@ -1,10 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { money } from '../lib/format';
-import type { Catalog, Currency, Submission } from '../lib/types';
+import type { Catalog, Currency, DocumentType, Submission } from '../lib/types';
+import { fmtSize, TYPE_LABEL, uploadDocument } from '../lib/uploads';
 import { Page } from '../shell/Shell';
+
+/** A file chosen before the submission exists, held until we have its id. */
+type StagedFile = { file: File; type: DocumentType };
 
 const PAYMENT_METHODS = [
   'Bank Transfer / Wire', 'Credit Card', 'Stripe', 'PayPal',
@@ -43,6 +47,11 @@ export function NewSubmission() {
   const [paymentMethod, setPaymentMethod] = useState(PAYMENT_METHODS[0]);
   const [notes, setNotes] = useState('');
   const [error, setError] = useState<string | null>(null);
+
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [attachType, setAttachType] = useState<DocumentType>('contract');
+  const [staged, setStaged] = useState<StagedFile[]>([]);
+  const [uploading, setUploading] = useState(false);
 
   const event = catalog?.events.find((e) => e.id === eventId);
 
@@ -89,27 +98,72 @@ export function NewSubmission() {
     return { base, addonTotal, subtotal, discount, taxable, rate, tax, total, balance: total - deposit };
   }, [pkg, price, catalog, sellable, addonIds, discountValue, deposit]);
 
+  // Holds the submission once created so that a retry after a failed attachment
+  // upload flushes the remaining files instead of creating a duplicate sale.
+  const createdRef = useRef<Submission | null>(null);
+
   const create = useMutation({
-    mutationFn: () =>
-      api.post<Submission>('/api/submissions', {
-        designer, brand,
-        company: company || undefined,
-        email: email || undefined,
-        country: country || undefined,
-        eventId, packageId, addonIds,
-        discountType: 'PCT',
-        discountValue,
-        deposit,
-        paymentMethod,
-        notes: notes || undefined,
-      }),
+    mutationFn: async () => {
+      let sub = createdRef.current;
+      if (!sub) {
+        sub = await api.post<Submission>('/api/submissions', {
+          designer, brand,
+          company: company || undefined,
+          email: email || undefined,
+          country: country || undefined,
+          eventId, packageId, addonIds,
+          discountType: 'PCT',
+          discountValue,
+          deposit,
+          paymentMethod,
+          notes: notes || undefined,
+        });
+        createdRef.current = sub;
+        // The sale is saved the moment this returns — reflect it in the lists
+        // right away, even if attachments below fail.
+        void qc.invalidateQueries({ queryKey: ['submissions'] });
+        void qc.invalidateQueries({ queryKey: ['queue'] });
+      }
+
+      // Now that we have an id, flush the staged attachments to it. A file that
+      // fails stays staged so the rep can retry without re-sending the sale.
+      if (staged.length) {
+        setUploading(true);
+        const remaining: StagedFile[] = [];
+        const failed: string[] = [];
+        for (const s of staged) {
+          try {
+            await uploadDocument(sub.id, s.file, s.type);
+          } catch {
+            remaining.push(s);
+            failed.push(s.file.name);
+          }
+        }
+        setStaged(remaining);
+        setUploading(false);
+        if (failed.length) {
+          throw new Error(
+            `Submission saved, but these files did not upload: ${failed.join(', ')}. Retry to attach them.`,
+          );
+        }
+      }
+
+      return sub;
+    },
     onSuccess: (sub) => {
-      void qc.invalidateQueries({ queryKey: ['submissions'] });
-      void qc.invalidateQueries({ queryKey: ['queue'] });
       nav(`/submissions?created=${sub.ref}`);
     },
     onError: (e: Error) => setError(e.message),
   });
+
+  function onPickFiles(files: FileList | null) {
+    if (!files?.length) return;
+    setStaged((prev) => [
+      ...prev,
+      ...Array.from(files).map((file) => ({ file, type: attachType })),
+    ]);
+    if (fileRef.current) fileRef.current.value = '';
+  }
 
   if (isLoading) {
     return (
@@ -289,11 +343,73 @@ export function NewSubmission() {
             </div>
           </div>
 
+          <div className="sect">
+            <div className="hd"><h3>Attachments</h3><span className="n">07</span></div>
+            <p className="sm mut" style={{ marginTop: 0 }}>
+              Optional. Attach the signed contract, PO, receipt or any supporting
+              media — they upload once the submission is sent.
+            </p>
+            <div className="rowflex upload" style={{ gap: 8, marginBottom: 12 }}>
+              <select
+                value={attachType}
+                onChange={(e) => setAttachType(e.target.value as DocumentType)}
+                disabled={create.isPending}
+              >
+                {(Object.keys(TYPE_LABEL) as DocumentType[]).map((t) => (
+                  <option key={t} value={t}>{TYPE_LABEL[t]}</option>
+                ))}
+              </select>
+              <input
+                ref={fileRef}
+                type="file"
+                multiple
+                disabled={create.isPending}
+                onChange={(e) => onPickFiles(e.target.files)}
+              />
+            </div>
+            {staged.length > 0 && (
+              <div className="tbl-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Type</th><th>File</th><th /></tr>
+                  </thead>
+                  <tbody>
+                    {staged.map((s, i) => (
+                      <tr key={`${s.file.name}-${i}`}>
+                        <td className="sm">{TYPE_LABEL[s.type]}</td>
+                        <td className="sm">
+                          {s.file.name}
+                          {s.file.size ? <span className="mut"> · {fmtSize(s.file.size)}</span> : null}
+                        </td>
+                        <td>
+                          <button
+                            type="button"
+                            className="btn sm"
+                            disabled={create.isPending}
+                            onClick={() => setStaged((prev) => prev.filter((_, j) => j !== i))}
+                          >
+                            Remove
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
           {error && <div className="note bad" style={{ marginBottom: 14 }}>{error}</div>}
 
           <div className="rowflex">
             <button className="btn primary" disabled={!ready || create.isPending}>
-              {create.isPending ? 'Sending…' : 'Send to Accounting'}
+              {uploading
+                ? 'Uploading attachments…'
+                : create.isPending
+                  ? 'Sending…'
+                  : createdRef.current
+                    ? 'Retry attachments'
+                    : 'Send to Accounting'}
             </button>
             <button type="button" className="btn" onClick={() => nav('/submissions')}>
               Cancel
