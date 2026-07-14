@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { can, type Permission } from '../lib/acl';
@@ -53,6 +54,13 @@ export function Shell() {
   const { user, logout } = useAuth();
   const location = useLocation();
 
+  // On mobile the rail is an off-canvas drawer toggled from the top bar; on
+  // desktop the CSS ignores this and the rail is always in the grid.
+  const [navOpen, setNavOpen] = useState(false);
+  // Any navigation (or route change) closes the drawer so it never sits open
+  // over the page you just moved to.
+  useEffect(() => setNavOpen(false), [location.pathname]);
+
   // Wire the messaging socket for the whole signed-in session: this keeps the
   // conversation cache (and the unread badge below) live from any screen, and
   // tears the socket down on sign-out.
@@ -86,7 +94,14 @@ export function Shell() {
   return (
     // .on is what makes #app visible and lays out the rail + main grid.
     <div id="app" className="on">
-      <aside className="rail">
+      {/* Mobile-only bar with the drawer toggle; CSS hides it on desktop. */}
+      <div className="mtop">
+        <button className="burger" aria-label="Menu" onClick={() => setNavOpen(true)}>☰</button>
+        <div className="mk">VFW</div>
+        <b>Console</b>
+      </div>
+      {navOpen && <button className="rail-backdrop" aria-label="Close menu" onClick={() => setNavOpen(false)} />}
+      <aside className={'rail' + (navOpen ? ' open' : '')}>
         <div className="brand">
           <div className="mk">VFW</div>
           <b>Console</b>

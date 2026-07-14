@@ -118,7 +118,7 @@ function Bubble({
 
 // --- The chat pane ---------------------------------------------------------
 
-function ChatPane({ conv, myId }: { conv: Conversation; myId: string }) {
+function ChatPane({ conv, myId, onBack }: { conv: Conversation; myId: string; onBack: () => void }) {
   const qc = useQueryClient();
   const socket = getSocket();
   const [text, setText] = useState('');
@@ -206,6 +206,7 @@ function ChatPane({ conv, myId }: { conv: Conversation; myId: string }) {
   return (
     <div className="msg-pane">
       <div className="msg-pane-head">
+        <button className="msg-back" aria-label="Back to conversations" onClick={onBack}>‹</button>
         <Avatar
           name={conversationName(conv, myId)}
           colour={group ? '#3A3A46' : other?.user.colour}
@@ -414,7 +415,7 @@ export function Messages() {
 
   return (
     <Page crumb="Work" title="Messages" actions={<button className="btn primary" onClick={() => setNewOpen(true)}>New chat</button>}>
-      <div className="msg-wrap" style={{ height: 'calc(100vh - 150px)' }}>
+      <div className={'msg-wrap' + (active ? ' has-active' : '')} style={{ height: 'calc(100vh - 150px)' }}>
         <div className="msg-list">
           <input className="msg-search" placeholder="Search conversations" value={q} onChange={(e) => setQ(e.target.value)} />
           <div className="msg-convs">
@@ -456,7 +457,7 @@ export function Messages() {
         </div>
 
         {active ? (
-          <ChatPane conv={active} myId={myId} key={active.id} />
+          <ChatPane conv={active} myId={myId} key={active.id} onBack={() => setActiveId(null)} />
         ) : (
           <div className="msg-pane">
             <div className="msg-empty">

@@ -127,12 +127,39 @@ a{color:var(--blue)}
 .topbar .crumb{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);display:block;margin-bottom:1px}
 .topbar .sp{flex:1}
 .wrap{padding:24px 26px 60px;max-width:1440px;width:100%}
+
+/* Mobile top bar carrying the drawer toggle — hidden on desktop, where the
+   rail lives in the grid. */
+.mtop{display:none}
+
 @media(max-width:860px){
   #app.on{grid-template-columns:1fr}
-  .rail{position:static;height:auto;flex-direction:row;flex-wrap:wrap;gap:4px}
-  .rail .brand,.rail .grp{width:100%;padding-bottom:8px}
-  .nav{width:auto}
-  .rail .who{width:100%;margin-top:8px}
+  /* The rail becomes an off-canvas drawer that slides in from the left. */
+  .rail{
+    position:fixed;top:0;left:0;bottom:0;z-index:60;width:262px;
+    height:100vh;height:100dvh;
+    transform:translateX(-100%);transition:transform .22s ease;
+    box-shadow:0 20px 60px -18px rgba(0,0,0,.6);
+  }
+  .rail.open{transform:translateX(0)}
+  .rail-backdrop{position:fixed;inset:0;z-index:50;border:0;padding:0;background:rgba(14,14,17,.5)}
+
+  .mtop{
+    display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:30;
+    background:var(--ink);color:#fff;padding:9px 12px;
+  }
+  .mtop .burger{
+    width:38px;height:38px;flex:0 0 auto;border:0;border-radius:var(--r);
+    background:var(--ink-3);color:#fff;font-size:17px;cursor:pointer;
+    display:grid;place-items:center;
+  }
+  .mtop .burger:hover{background:var(--ink-4)}
+  .mtop .mk{width:30px;height:30px;border-radius:50%;background:#fff;color:#0E0E11;
+    display:grid;place-items:center;font-family:"Archivo";font-weight:800;font-size:11px}
+  .mtop b{font-family:"Archivo";font-weight:700;font-size:13px;letter-spacing:.14em;text-transform:uppercase}
+
+  .topbar{padding:12px 16px;flex-wrap:wrap}
+  .topbar .rowflex{flex-wrap:wrap}
   .wrap{padding:16px}
 }
 
