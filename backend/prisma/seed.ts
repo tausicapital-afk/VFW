@@ -180,6 +180,27 @@ async function main() {
 
   await prisma.settings.upsert({ where: { id: 1 }, update: {}, create: { id: 1 } });
 
+  // Submission refs come from Settings.nextSubmissionSeq, so that counter has to
+  // start above any ref that already exists or the next create reissues a taken
+  // one and trips `ref @unique`. The migration backfills this, but a database
+  // stood up with `prisma db push` (the test harness, a scratch dev box) never
+  // runs migrations — and `db push` does not clear data, so submissions from an
+  // earlier run are still sitting there. Re-derive the high-water mark here so
+  // the seed is correct however the schema arrived.
+  // Max of the NUMERIC tail, not of the string: ordering refs as text would put
+  // S-26-9999 above S-26-10000 and hand the counter back a number already used.
+  const [{ max }] = await prisma.$queryRaw<{ max: number | null }[]>`
+    SELECT MAX(CAST(split_part("ref", '-', 3) AS INTEGER)) AS max
+    FROM "Submission"
+    WHERE "ref" ~ '^S-[0-9]+-[0-9]+$'
+  `;
+  if (max !== null) {
+    await prisma.settings.update({
+      where: { id: 1 },
+      data: { nextSubmissionSeq: { set: max + 1 } },
+    });
+  }
+
   const counts = {
     taxes: await prisma.taxProfile.count(),
     cities: await prisma.city.count(),

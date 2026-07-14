@@ -5,7 +5,7 @@ import * as argon2 from 'argon2';
 import { randomBytes, randomInt } from 'crypto';
 import { ActivityService, ActivityContext } from '../activity/activity.service';
 import { AuditService } from '../audit/audit.service';
-import { AuthUser } from '../common/auth.guard';
+import { AuthUser, SessionClaims } from '../common/auth.guard';
 import { EmailNotConfiguredError, EmailService } from '../common/email';
 import { PrismaService } from '../prisma/prisma.service';
 import { ForgotDto, ResetDto, SignupDto, VerifyOtpDto } from './dto';
@@ -87,7 +87,15 @@ export class AuthService {
       .catch(() => undefined);
 
     const authUser: AuthUser = { id: user.id, email: user.email, name: user.name, role: user.role };
-    return { token: await this.jwt.signAsync(authUser), user: authUser };
+    return { token: await this.sign(authUser, user.tokenVersion), user: authUser };
+  }
+
+  /**
+   * Mint a session. `tv` pins the token to the user's current tokenVersion, so
+   * bumping that column invalidates every session already handed out.
+   */
+  private async sign(user: AuthUser, tokenVersion: number): Promise<string> {
+    return this.jwt.signAsync({ ...user, tv: tokenVersion } satisfies SessionClaims);
   }
 
   /** Record a sign-out for the Logs screen. Best-effort, like login. */
@@ -300,14 +308,20 @@ export class AuthService {
         tx,
       );
       return {
-        id: activated.id,
-        email: activated.email,
-        name: activated.name,
-        role: activated.role,
-      } satisfies AuthUser;
+        user: {
+          id: activated.id,
+          email: activated.email,
+          name: activated.name,
+          role: activated.role,
+        } satisfies AuthUser,
+        tokenVersion: activated.tokenVersion,
+      };
     });
 
-    return { token: await this.jwt.signAsync(authUser), user: authUser };
+    return {
+      token: await this.sign(authUser.user, authUser.tokenVersion),
+      user: authUser.user,
+    };
   }
 
   /**
@@ -399,7 +413,13 @@ export class AuthService {
       const reset = await tx.passwordReset.findUniqueOrThrow({ where: { token: dto.token } });
       const updated = await tx.user.update({
         where: { id: reset.userId },
-        data: { passwordHash },
+        data: {
+          passwordHash,
+          // Sign out everywhere. Whoever prompted this reset may be holding a
+          // live session cookie; changing the password has to take it away, or
+          // the reset only locks a door the intruder is already through.
+          tokenVersion: { increment: 1 },
+        },
       });
 
       // Any other outstanding link for this account is now stale — a password

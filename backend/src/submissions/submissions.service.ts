@@ -79,10 +79,63 @@ export class SubmissionsService {
   }
 
   /**
+   * Find (or create) the contact this sale is against.
+   *
+   * A brand is one customer, so selling to a brand somebody else already entered
+   * links to their contact rather than making a second one. What it must NOT do
+   * is *overwrite* that contact's details. Reads are row-scoped — a rep cannot
+   * see another rep's customers — and this write is scoped to match: submitting
+   * against a brand you cannot see links to it and leaves its details alone.
+   * Without that check, `upsert` here is a blind cross-rep write, letting any rep
+   * silently replace the email and phone of a customer they are not allowed to
+   * read, just by guessing the brand name.
+   */
+  private async resolveContact(
+    tx: Prisma.TransactionClient,
+    dto: CreateSubmissionDto,
+    user: AuthUser,
+  ) {
+    const details = {
+      designer: dto.designer,
+      company: dto.company,
+      email: dto.email,
+      phone: dto.phone,
+      country: dto.country,
+    };
+
+    const existing = await tx.contact.findUnique({ where: { brand: dto.brand } });
+    if (!existing) {
+      // Still an upsert, so two reps racing the same new brand cannot both
+      // insert it — but with an empty `update`, so the loser of the race links
+      // to the winner's contact instead of clobbering it.
+      return tx.contact.upsert({
+        where: { brand: dto.brand },
+        update: {},
+        create: { brand: dto.brand, ...details, createdById: user.id },
+      });
+    }
+
+    const mayEdit =
+      can('submission.viewAll', user.role) ||
+      existing.createdById === user.id ||
+      (await tx.submission.count({ where: { contactId: existing.id, repId: user.id } })) > 0;
+
+    if (!mayEdit) return existing;
+
+    return tx.contact.update({ where: { id: existing.id }, data: details });
+  }
+
+  /**
    * Validate what was sold and price it. Shared by create and edit/resubmit so
    * the two cannot drift into pricing a sale by two subtly different rules.
+   *
+   * `repId` is the rep the sale BELONGS to, which is not always the caller: when
+   * Accounting edits a rep's submission under `submission.editAny`, commission
+   * and department must still come from that rep. Pricing it against the editor
+   * would recompute the deal at Accounting's 0% and quietly zero the rep's
+   * commission.
    */
-  private async resolveSale(dto: CreateSubmissionDto, user: AuthUser) {
+  private async resolveSale(dto: CreateSubmissionDto, repId: string) {
     const event = await this.prisma.event.findUnique({
       where: { id: dto.eventId },
       include: { city: true },
@@ -128,7 +181,7 @@ export class SubmissionsService {
       throw new BadRequestException('A percentage discount cannot exceed 100%');
     }
 
-    const rep = await this.prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    const rep = await this.prisma.user.findUniqueOrThrow({ where: { id: repId } });
 
     const priced = this.pricing.compute({
       packagePrice: price.price,
@@ -149,30 +202,11 @@ export class SubmissionsService {
   }
 
   async create(dto: CreateSubmissionDto, user: AuthUser) {
-    const { event, pkg, price, discountType, rep, priced } = await this.resolveSale(dto, user);
+    // On create the caller is the rep — they are selling their own deal.
+    const { event, pkg, price, discountType, rep, priced } = await this.resolveSale(dto, user.id);
 
     return this.prisma.$transaction(async (tx) => {
-      // A brand is one customer. The mockup auto-creates the contact the first
-      // time a sale is submitted for a brand nobody has sold to before.
-      const contact = await tx.contact.upsert({
-        where: { brand: dto.brand },
-        update: {
-          designer: dto.designer,
-          company: dto.company,
-          email: dto.email,
-          phone: dto.phone,
-          country: dto.country,
-        },
-        create: {
-          brand: dto.brand,
-          designer: dto.designer,
-          company: dto.company,
-          email: dto.email,
-          phone: dto.phone,
-          country: dto.country,
-          createdById: user.id,
-        },
-      });
+      const contact = await this.resolveContact(tx, dto, user);
 
       const ref = await this.nextRef(tx);
 
@@ -598,12 +632,23 @@ export class SubmissionsService {
   /**
    * Edit and resubmit. A RETURNED (or DRAFT) submission is a dead end until the
    * rep can fix it: this re-prices the sale server-side from the catalogue and
-   * sends it back to PENDING. A rep may only touch their own record — anyone
-   * else gets the same 404 as a record that does not exist.
+   * sends it back to PENDING.
+   *
+   * Two ways to be allowed in. A rep may edit their OWN record
+   * (`submission.editOwn`); ACCT/ADMIN hold `submission.editAny` and may fix
+   * anyone's, which is what lets Accounting correct a rep's mistake rather than
+   * bouncing it back and waiting. Anyone else gets the same 404 as a record that
+   * does not exist, so this cannot be used to probe for other reps' deals.
    */
   async update(id: string, dto: CreateSubmissionDto, user: AuthUser) {
     const existing = await this.prisma.submission.findUnique({ where: { id } });
-    if (!existing || existing.repId !== user.id) throw new NotFoundException('Submission not found');
+    if (!existing) throw new NotFoundException('Submission not found');
+
+    const mayEdit =
+      can('submission.editAny', user.role) ||
+      (can('submission.editOwn', user.role) && existing.repId === user.id);
+    if (!mayEdit) throw new NotFoundException('Submission not found');
+
     if (
       existing.status !== SubmissionStatus.DRAFT &&
       existing.status !== SubmissionStatus.RETURNED
@@ -613,28 +658,11 @@ export class SubmissionsService {
       );
     }
 
-    const { event, price, discountType, rep, priced } = await this.resolveSale(dto, user);
+    // Price against the rep who OWNS the submission, not whoever is editing it.
+    const { event, price, discountType, rep, priced } = await this.resolveSale(dto, existing.repId);
 
     return this.prisma.$transaction(async (tx) => {
-      const contact = await tx.contact.upsert({
-        where: { brand: dto.brand },
-        update: {
-          designer: dto.designer,
-          company: dto.company,
-          email: dto.email,
-          phone: dto.phone,
-          country: dto.country,
-        },
-        create: {
-          brand: dto.brand,
-          designer: dto.designer,
-          company: dto.company,
-          email: dto.email,
-          phone: dto.phone,
-          country: dto.country,
-          createdById: user.id,
-        },
-      });
+      const contact = await this.resolveContact(tx, dto, user);
 
       await tx.submissionAddon.deleteMany({ where: { submissionId: id } });
 
@@ -699,12 +727,20 @@ export class SubmissionsService {
 
   /**
    * Refs are human-facing and appear on invoices, so they must be sequential
-   * and gapless per fiscal year rather than random.
+   * and gapless rather than random.
+   *
+   * Allocated by incrementing the pinned Settings row, which takes a row lock
+   * for the rest of the transaction — exactly as {@link allocateInvoice} does.
+   * Deriving the number from `submission.count()` instead would read the same
+   * count in two concurrent creates and hand both the same ref, which `ref
+   * @unique` then rejects with a 500.
    */
   private async nextRef(tx: Prisma.TransactionClient): Promise<string> {
-    const settings = await tx.settings.findUniqueOrThrow({ where: { id: 1 } });
+    const settings = await tx.settings.update({
+      where: { id: 1 },
+      data: { nextSubmissionSeq: { increment: 1 } },
+    });
     const yy = String(settings.fiscalYear).slice(-2);
-    const count = await tx.submission.count();
-    return `S-${yy}-${1000 + count + 1}`;
+    return `S-${yy}-${settings.nextSubmissionSeq - 1}`;
   }
 }

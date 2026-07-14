@@ -2,6 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import type { Role } from '@prisma/client';
 import { createTestApp, http, loginCookie } from '../../test/app';
 import { ACL, can, type Permission } from '../common/acl';
+import { PrismaService } from '../prisma/prisma.service';
 
 /**
  * The ACL matrix in common/acl.ts is a table, so this test is a table too: one
@@ -25,6 +26,8 @@ const ACCOUNTS: Record<string, { email: string; role: Role }> = {
 // isolating the authorization decision from everything else.
 type Ep = { name: string; method: 'get' | 'post' | 'patch'; path: string; permission: Permission; body?: object };
 const ENDPOINTS: Ep[] = [
+  { name: 'GET  /contacts', method: 'get', path: '/api/contacts', permission: 'contacts.view' },
+  { name: 'POST /contacts', method: 'post', path: '/api/contacts', permission: 'contacts.create', body: { brand: '' } },
   { name: 'GET  /queue', method: 'get', path: '/api/submissions/queue', permission: 'submission.approve' },
   { name: 'POST /approve', method: 'post', path: '/api/submissions/no-such-id/approve', permission: 'submission.approve' },
   { name: 'POST /reject', method: 'post', path: '/api/submissions/no-such-id/reject', permission: 'submission.reject', body: { reason: 'x' } },
@@ -117,6 +120,115 @@ describe('ACL boundary (server-side authorization)', () => {
       expect(res.status).toBe(400);
       const msg = JSON.stringify(res.body.message);
       expect(msg).toMatch(/total/i);
+    });
+  });
+
+  // ---- INTERN has no seeded login, so assert its matrix at the unit level ----
+  describe('INTERN is a restricted rep, not a synonym for SALES', () => {
+    it('drafts sales like a rep', () => {
+      expect(can('submission.create', 'INTERN')).toBe(true);
+      expect(can('submission.editOwn', 'INTERN')).toBe(true);
+      expect(can('leaderboard.view', 'INTERN')).toBe(true);
+      expect(can('messaging.use', 'INTERN')).toBe(true);
+    });
+
+    it('does NOT get the customer book or feedback', () => {
+      expect(can('contacts.view', 'INTERN')).toBe(false);
+      expect(can('contacts.create', 'INTERN')).toBe(false);
+      expect(can('feedback.record', 'INTERN')).toBe(false);
+    });
+
+    it('never gets anything an ADMIN-only permission guards', () => {
+      expect(can('admin.manage', 'INTERN')).toBe(false);
+      expect(can('activity.view', 'INTERN')).toBe(false);
+    });
+  });
+
+  // ---- sessions are revocable: the token is a claim, not a standing grant ----
+  describe('session revocation', () => {
+    let prisma: PrismaService;
+    beforeAll(() => {
+      prisma = app.get(PrismaService);
+    });
+
+    it('disabling an account kills its live session immediately', async () => {
+      const cookie = await loginCookie(app, 'priya@vanfashionweek.com');
+      expect((await http(app).get('/api/submissions').set('Cookie', cookie)).status).toBe(200);
+
+      await prisma.user.update({
+        where: { email: 'priya@vanfashionweek.com' },
+        data: { status: 'DISABLED' },
+      });
+      try {
+        const res = await http(app).get('/api/submissions').set('Cookie', cookie);
+        expect(res.status).toBe(401);
+      } finally {
+        await prisma.user.update({
+          where: { email: 'priya@vanfashionweek.com' },
+          data: { status: 'ACTIVE' },
+        });
+      }
+    });
+
+    it('a role change takes effect on the next request, not in 30 days', async () => {
+      const cookie = await loginCookie(app, 'aiko@vanfashionweek.com');
+      // As SALES, the approval queue is off limits.
+      expect((await http(app).get('/api/submissions/queue').set('Cookie', cookie)).status).toBe(403);
+
+      await prisma.user.update({ where: { email: 'aiko@vanfashionweek.com' }, data: { role: 'ACCT' } });
+      try {
+        // Same cookie, minted while they were SALES — the guard re-reads the role.
+        const res = await http(app).get('/api/submissions/queue').set('Cookie', cookie);
+        expect(res.status).toBe(200);
+      } finally {
+        await prisma.user.update({ where: { email: 'aiko@vanfashionweek.com' }, data: { role: 'SALES' } });
+      }
+    });
+
+    it('bumping tokenVersion (as a password reset does) invalidates the cookie', async () => {
+      const cookie = await loginCookie(app, 'diego@vanfashionweek.com');
+      expect((await http(app).get('/api/submissions').set('Cookie', cookie)).status).toBe(200);
+
+      await prisma.user.update({
+        where: { email: 'diego@vanfashionweek.com' },
+        data: { tokenVersion: { increment: 1 } },
+      });
+      const res = await http(app).get('/api/submissions').set('Cookie', cookie);
+      expect(res.status).toBe(401);
+    });
+  });
+
+  // ---- the contact write path is scoped like the read path ----
+  describe('contacts cannot be overwritten across reps', () => {
+    it("rep B submitting for rep A's brand does not clobber A's contact details", async () => {
+      const brand = `Overwrite Probe ${Date.now()}`;
+      const created = await http(app)
+        .post('/api/submissions')
+        .set('Cookie', cookies.SALES)
+        .send({
+          designer: 'Real Designer', brand, email: 'real@brand.com', phone: '+1 111',
+          eventId: 'VFW-FW26', packageId: 'VFW-BRONZE',
+        });
+      expect(created.status).toBe(201);
+
+      // Rep B cannot even see this contact, but can guess the brand name.
+      const repB = await loginCookie(app, 'diego@vanfashionweek.com');
+      const attack = await http(app)
+        .post('/api/submissions')
+        .set('Cookie', repB)
+        .send({
+          designer: 'Attacker', brand, email: 'attacker@evil.com', phone: '+1 999',
+          eventId: 'VFW-FW26', packageId: 'VFW-BRONZE',
+        });
+      expect(attack.status).toBe(201);
+
+      // The sale links to the same contact, but the details are untouched.
+      const asAcct = await http(app).get('/api/contacts').set('Cookie', cookies.ACCT);
+      const contact = (asAcct.body as { brand: string; email: string; designer: string }[])
+        .find((c) => c.brand === brand);
+      expect(contact).toBeDefined();
+      expect(contact!.email).toBe('real@brand.com');
+      expect(contact!.designer).toBe('Real Designer');
     });
   });
 });

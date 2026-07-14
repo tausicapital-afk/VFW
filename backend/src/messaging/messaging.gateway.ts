@@ -11,6 +11,7 @@ import type { Server, Socket } from 'socket.io';
 import { ActivityService } from '../activity/activity.service';
 import { AuthUser, verifySession } from '../common/auth.guard';
 import { SESSION_COOKIE } from '../common/cookie';
+import { PrismaService } from '../prisma/prisma.service';
 import { MessagingService } from './messaging.service';
 
 function readCookie(header: string | undefined, name: string): string | undefined {
@@ -62,6 +63,7 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   constructor(
     private readonly jwt: JwtService,
+    private readonly prisma: PrismaService,
     private readonly messaging: MessagingService,
     private readonly activity: ActivityService,
   ) {}
@@ -82,7 +84,7 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
     let user: AuthUser;
     try {
       const token = readCookie(socket.handshake.headers.cookie, SESSION_COOKIE);
-      user = await verifySession(this.jwt, token);
+      user = await verifySession(this.jwt, this.prisma, token);
     } catch {
       // No valid session — nothing on the other end is entitled to anything.
       socket.disconnect(true);

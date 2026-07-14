@@ -9,8 +9,9 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
-import { Role } from '@prisma/client';
+import { Role, UserStatus } from '@prisma/client';
 import { Request } from 'express';
+import { PrismaService } from '../prisma/prisma.service';
 import { Permission, can } from './acl';
 import { SESSION_COOKIE } from './cookie';
 
@@ -29,24 +30,62 @@ export interface AuthUser {
   role: Role;
 }
 
+/** What we actually sign. `tv` pins the token to a User.tokenVersion. */
+export interface SessionClaims extends AuthUser {
+  tv: number;
+}
+
 export const CurrentUser = createParamDecorator(
   (_data: unknown, ctx: ExecutionContext): AuthUser =>
     ctx.switchToHttp().getRequest<Request & { user: AuthUser }>().user,
 );
 
 /**
- * Verify a session JWT and return its user. The single definition of "who is
- * this token", shared by the HTTP guard below and the WebSocket gateway — the
- * gateway authenticates its handshake with the same cookie, and must not grow a
- * second, subtly different copy of this rule. Throws on a missing/invalid token.
+ * Verify a session and return its user. The single definition of "who is this
+ * token", shared by the HTTP guard below and the WebSocket gateway — the gateway
+ * authenticates its handshake with the same cookie, and must not grow a second,
+ * subtly different copy of this rule.
+ *
+ * A valid signature is necessary but not sufficient. The token is a claim about
+ * who signed in, not a standing grant, so role and status are re-read from the
+ * database on every request rather than trusted from the payload. Without that
+ * read, a 30-day JWT means a demoted admin keeps admin for 30 days and a
+ * disabled account keeps working for 30 days — the token has no idea anything
+ * changed. One indexed primary-key lookup is the price of being able to revoke.
  */
-export async function verifySession(jwt: JwtService, token?: string): Promise<AuthUser> {
+export async function verifySession(
+  jwt: JwtService,
+  prisma: PrismaService,
+  token?: string,
+): Promise<AuthUser> {
   if (!token) throw new UnauthorizedException('Not signed in');
+
+  let claims: SessionClaims;
   try {
-    return await jwt.verifyAsync<AuthUser>(token);
+    claims = await jwt.verifyAsync<SessionClaims>(token);
   } catch {
     throw new UnauthorizedException('Session expired');
   }
+
+  const user = await prisma.user.findUnique({
+    where: { id: claims.id },
+    select: { id: true, email: true, name: true, role: true, status: true, tokenVersion: true },
+  });
+
+  // Deleted, disabled, rejected, or still awaiting email verification — none of
+  // those may act, whatever the token says.
+  if (!user || user.status !== UserStatus.ACTIVE) {
+    throw new UnauthorizedException('This account is no longer active');
+  }
+
+  // Explicitly revoked (password reset, forced sign-out) since this was minted.
+  if ((claims.tv ?? 0) !== user.tokenVersion) {
+    throw new UnauthorizedException('Session expired');
+  }
+
+  // Note the role comes from `user`, not `claims`: a role change takes effect on
+  // the very next request.
+  return { id: user.id, email: user.email, name: user.name, role: user.role };
 }
 
 /**
@@ -59,6 +98,7 @@ export class AuthGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly jwt: JwtService,
+    private readonly prisma: PrismaService,
   ) {}
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
@@ -75,7 +115,7 @@ export class AuthGuard implements CanActivate {
     if (isPublic) return true;
 
     const req = ctx.switchToHttp().getRequest<Request & { user?: AuthUser }>();
-    const payload = await verifySession(this.jwt, req.cookies?.[SESSION_COOKIE]);
+    const payload = await verifySession(this.jwt, this.prisma, req.cookies?.[SESSION_COOKIE]);
     req.user = payload;
 
     const permission = this.reflector.getAllAndOverride<Permission>(PERMISSION_KEY, [

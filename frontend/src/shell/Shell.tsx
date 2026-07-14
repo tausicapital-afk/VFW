@@ -27,7 +27,7 @@ const NAV: NavItem[] = [
   { to: '/', label: 'Dashboard', ic: '◧', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
   { to: '/new', label: 'New submission', ic: '+', roles: ['SALES', 'INTERN', 'ADMIN'] },
   { to: '/submissions', label: 'Submissions', ic: '▤', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
-  { to: '/contacts', label: 'Contacts', ic: '◈', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
+  { to: '/contacts', label: 'Contacts', ic: '◈', roles: ['SALES', 'ACCT', 'MGR', 'ADMIN'] },
   { to: '/messages', label: 'Messages', ic: '✉', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'], badge: 'messages' },
   { to: '/queue', label: 'Approval queue', ic: '⚑', roles: ['ACCT', 'ADMIN'], badge: 'queue' },
   { to: '/qbo', label: 'QuickBooks', ic: '⇪', roles: ['ACCT', 'ADMIN'] },
@@ -75,6 +75,15 @@ export function Shell() {
   // over the page you just moved to.
   useEffect(() => setNavOpen(false), [location.pathname]);
 
+  // Desktop-only: collapse the rail to an icon strip. Persisted so the choice
+  // survives reloads; the mobile drawer ignores it (it's full-width there).
+  const [collapsed, setCollapsed] = useState(
+    () => localStorage.getItem('rail:collapsed') === '1',
+  );
+  useEffect(() => {
+    localStorage.setItem('rail:collapsed', collapsed ? '1' : '0');
+  }, [collapsed]);
+
   // Record each screen the user opens for the Logs telemetry. Fire-and-forget:
   // this is the one client-driven event, it can only ever log the caller's own
   // view, and a failure here must never surface to the user.
@@ -120,7 +129,7 @@ export function Shell() {
 
   return (
     // .on is what makes #app visible and lays out the rail + main grid.
-    <div id="app" className="on">
+    <div id="app" className={'on' + (collapsed ? ' collapsed' : '')}>
       {/* Mobile-only bar with the drawer toggle; CSS hides it on desktop. */}
       <div className="mtop">
         <button className="burger" aria-label="Menu" onClick={() => setNavOpen(true)}>☰</button>
@@ -132,6 +141,15 @@ export function Shell() {
         <div className="brand">
           <div className="mk">VFW</div>
           <b>Console</b>
+          <button
+            className="rail-collapse"
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-expanded={!collapsed}
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            onClick={() => setCollapsed((c) => !c)}
+          >
+            {collapsed ? '»' : '«'}
+          </button>
         </div>
 
         <div id="nav">

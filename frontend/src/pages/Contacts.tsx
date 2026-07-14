@@ -37,7 +37,9 @@ export function Contacts() {
         {q && <button className="btn sm" onClick={() => setQ('')}>Clear</button>}
         <div style={{ flex: 1 }} />
         <span className="sm mut">{scope}</span>
-        <button className="btn sm primary" onClick={() => setAdding(true)}>+ New contact</button>
+        {can('contacts.create', user?.role) && (
+          <button className="btn sm primary" onClick={() => setAdding(true)}>+ New contact</button>
+        )}
       </div>
 
       <div className="card">

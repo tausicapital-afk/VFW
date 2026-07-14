@@ -47,6 +47,11 @@ model User {
   role          Role
   department    String?
   status        UserStatus @default(PENDING)
+  // Bumped to invalidate every session this user currently holds. The session
+  // JWT carries the value it was minted with; the guard refuses a token whose
+  // value has fallen behind. A password reset bumps it, so a stolen session
+  // dies with the password that leaked it.
+  tokenVersion  Int        @default(0)
   commissionPct Decimal    @default(0) @db.Decimal(5, 2)
   target        Decimal    @default(0) @db.Decimal(14, 2)
   colour        String     @default("#0E0E11")
@@ -501,6 +506,10 @@ model Settings {
   fiscalYear          Int     @default(2026)
   invoicePrefix       String  @default("VFW-")
   nextInvoiceSeq      Int     @default(2041)
+  // Allocated the same way as nextInvoiceSeq — by incrementing this row inside
+  // the creating transaction, which takes a row lock. Counting submissions
+  // instead would hand the same ref to two concurrent creates.
+  nextSubmissionSeq   Int     @default(1001)
   // Discounts above this percentage need explicit accounting sign-off.
   discountApprovalPct Decimal @default(15) @db.Decimal(5, 2)
   qbRealmId           String?

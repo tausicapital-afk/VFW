@@ -1,7 +1,15 @@
 import { Role } from '@prisma/client';
 
 /**
- * The permission matrix, ported verbatim from vfw-console.html (line 481).
+ * The permission matrix, originally ported from vfw-console.html (line 481) and
+ * since tightened where the mockup was silent:
+ *
+ * - `contacts.view` / `contacts.create` are ours. The mockup left contact
+ *   endpoints ungoverned, which meant any signed-in user could hand-enter a
+ *   customer, and an INTERN had the full CRM.
+ * - INTERN is no longer a synonym for SALES. It keeps submissions, the
+ *   dashboard, the leaderboard and messaging, but not the customer book and not
+ *   feedback — a trainee who can draft a sale without holding designer PII.
  *
  * This is the single source of truth for authorization. The frontend has a copy
  * for deciding what to *render*; this copy decides what is *allowed*. Never
@@ -20,8 +28,15 @@ export const ACL = {
   'invoice.generate': ['ACCT', 'ADMIN'],
   'reports.view': ['ACCT', 'MGR', 'ADMIN'],
   'leaderboard.view': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
+  // The customer book is PII — designers' direct emails and phone numbers. An
+  // intern is a supervised trainee who drafts sales; they do not get the CRM.
+  'contacts.view': ['SALES', 'ACCT', 'MGR', 'ADMIN'],
+  // Hand-entering a customer is an intake job. It mirrors submission.create
+  // (plus Accounting) — a manager who cannot create a submission has no reason
+  // to create a contact either.
+  'contacts.create': ['SALES', 'ACCT', 'ADMIN'],
   'feedback.view': ['MGR', 'ADMIN', 'ACCT'],
-  'feedback.record': ['MGR', 'ADMIN', 'ACCT', 'SALES', 'INTERN'],
+  'feedback.record': ['MGR', 'ADMIN', 'ACCT', 'SALES'],
   'internal.comment': ['ACCT', 'MGR', 'ADMIN'],
   'internal.view': ['ACCT', 'MGR', 'ADMIN'],
   'messaging.use': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
