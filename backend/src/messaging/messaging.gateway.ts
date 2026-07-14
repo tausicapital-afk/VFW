@@ -13,6 +13,7 @@ import { AuthUser, verifySession } from '../common/auth.guard';
 import { SESSION_COOKIE } from '../common/cookie';
 import { PrismaService } from '../prisma/prisma.service';
 import { MessagingService } from './messaging.service';
+import { SocketThrottle } from './socket-throttle';
 
 function readCookie(header: string | undefined, name: string): string | undefined {
   if (!header) return undefined;
@@ -60,6 +61,11 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
   // userId -> the id of their currently-open UserSession row. One session spans
   // a whole online period (first connect to last disconnect), not one socket.
   private readonly sessionByUser = new Map<string, string>();
+
+  // Flood protection for inbound socket events, keyed by the authenticated user
+  // rather than by IP (see socket-throttle.ts). The HTTP throttler is a guard
+  // over an Express request and cannot see any of this.
+  private readonly throttle = new SocketThrottle();
 
   constructor(
     private readonly jwt: JwtService,
@@ -158,10 +164,36 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   // --- Client -> server events ---------------------------------------------
 
+  /**
+   * Charge this event to the sender's rate-limit buckets.
+   *
+   * On a breach the socket is told, with a typed `rate_limited` event carrying
+   * how long to wait, rather than being silently ignored (a client that cannot
+   * tell the difference between "throttled" and "lost" will simply retry and
+   * make it worse) or hard-disconnected (which would take out a legitimate
+   * user's other tabs over one runaway one).
+   */
+  private allow(socket: AuthedSocket, event: string): boolean {
+    const user = socket.data.user;
+    if (!user) return false;
+
+    const verdict = this.throttle.check(user.id, event);
+    if (verdict.allowed) return true;
+
+    socket.emit('rate_limited', {
+      event,
+      bucket: verdict.bucket,
+      retryAfterMs: verdict.retryAfterMs,
+    });
+    this.logger.warn(`socket ${event} rate-limited for user ${user.id} (${verdict.bucket})`);
+    return false;
+  }
+
   @SubscribeMessage('typing')
   onTyping(socket: AuthedSocket, data: { conversationId: string; isTyping: boolean }) {
     const user = socket.data.user;
     if (!user || !data?.conversationId) return;
+    if (!this.allow(socket, 'typing')) return;
     // to() excludes the sender's own socket — you never see your own indicator.
     socket.to(convRoom(data.conversationId)).emit('typing', {
       conversationId: data.conversationId,
@@ -174,6 +206,7 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
   async onRead(socket: AuthedSocket, data: { conversationId: string; seq?: number }) {
     const user = socket.data.user;
     if (!user || !data?.conversationId) return;
+    if (!this.allow(socket, 'read')) return;
     try {
       const receipt = await this.messaging.markRead(data.conversationId, user.id, data.seq);
       this.server.to(convRoom(data.conversationId)).emit('receipt', receipt);
@@ -186,6 +219,7 @@ export class MessagingGateway implements OnGatewayConnection, OnGatewayDisconnec
   async onDelivered(socket: AuthedSocket, data: { conversationId: string; seq: number }) {
     const user = socket.data.user;
     if (!user || !data?.conversationId || !data?.seq) return;
+    if (!this.allow(socket, 'delivered')) return;
     try {
       const receipt = await this.messaging.markDelivered(data.conversationId, user.id, data.seq);
       this.server.to(convRoom(data.conversationId)).emit('receipt', receipt);
