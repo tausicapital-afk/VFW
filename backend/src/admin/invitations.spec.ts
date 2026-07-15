@@ -277,16 +277,22 @@ describe('pending sign-ups — edit and soft delete', () => {
       .expect(400);
   });
 
-  it('refuses to edit an account that is no longer pending', async () => {
+  // Editing is no longer pending-only — Users & roles maintains established
+  // accounts through the same PATCH. What stays refused is deciding the approval
+  // through it: an account becomes ACTIVE by being approved, with a reason on
+  // record, and never by way of a form that edits a phone number.
+  it('will not approve an account by writing its status', async () => {
     const u = await newSignup();
-    await http(app).post(`/api/users/${u.id}/approve`).set('Cookie', admin).expect(201);
 
     const res = await http(app)
       .patch(`/api/users/${u.id}`)
       .set('Cookie', admin)
-      .send({ role: 'ADMIN' })
+      .send({ status: 'ACTIVE' })
       .expect(400);
-    expect(res.body.message).toMatch(/not pending/i);
+    expect(res.body.message).toMatch(/use approve or reject/i);
+
+    const row = await prisma.user.findUniqueOrThrow({ where: { id: u.id } });
+    expect(row.status).toBe('PENDING');
   });
 
   it('soft delete takes the sign-up out of the queue but keeps the row', async () => {

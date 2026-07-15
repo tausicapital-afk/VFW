@@ -28,10 +28,11 @@ Roles are declared in four places that must agree:
 - `frontend/src/lib/types.ts` — the `Role` union
 - `frontend/src/lib/acl.ts` — a render-only mirror of the matrix
 
-> **`INTERN` currently has privileges identical to `SALES`** — the same entry in
-> every one of the 19 permissions, and the same navigation. It is a label, not a
-> privilege level. If interns are meant to be more restricted, that restriction
-> does not exist yet.
+> **`INTERN` is a restricted rep, not a synonym for `SALES`.** It drafts sales,
+> and keeps the dashboard, leaderboard and messaging. It does **not** get the
+> customer book (`contacts.view`/`contacts.create` — designer PII), designer
+> feedback, or the approval queue. A trainee can draft a sale without holding a
+> designer's direct line.
 
 ## Modules by role
 
@@ -42,29 +43,46 @@ From the nav in `frontend/src/shell/Shell.tsx`, enforced server-side by
 | --- | :-: | :-: | :-: | :-: | :-: |
 | Dashboard | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Submissions | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Contacts | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Contacts | ✓ | — | ✓ | ✓ | ✓ |
 | Messages | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Leaderboard | ✓ | ✓ | ✓ | ✓ | ✓ |
-| New submission | ✓ | ✓ | — | — | ✓ | (Give access to all )
-| Approval queue | — | — | ✓ | — | ✓ | (Give sales access)
+| New submission | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Approval queue | ✓ | — | ✓ | — | ✓ |
 | QuickBooks | — | — | ✓ | — | ✓ |
 | Designer feedback | — | — | ✓ | ✓ | ✓ |
 | Internal notes | — | — | ✓ | ✓ | ✓ |
 | Reports | — | — | ✓ | ✓ | ✓ |
 | Audit trail | — | — | ✓ | ✓ | ✓ |
-| Administration | — | — | — | — | ✓ | (Give to accountant)
+| Administration | — | — | ✓ | — | ✓ |
 | Logs | — | — | — | — | ✓ |
 
-**Common to everyone:** Dashboard, Submissions, Contacts, Messages, Leaderboard.
+**Common to everyone:** Dashboard, Submissions, Messages, Leaderboard, and now
+New submission — every role may file a sale. Contacts is everyone but `INTERN`.
 
-**Admin-only:** Administration (`admin.manage`) and Logs (`activity.view`) — the
-only two permissions restricted to a single role. Logs is user-monitoring (who
-signed in, what they opened, who they messaged), so it is treated as
-HR/security-sensitive.
+**Reading the approval queue is not deciding on it.** A rep opens the queue to
+see where their own submission sits; the buttons are not there, and the server
+holds `submission.approve`/`reject`/`return` to Accounting and Admin regardless
+of what the page renders. The rep's view is row-scoped like every other
+submission read (see below), so a rep sees their own pending rows and no one
+else's. **The maker must not be the checker:** if approve is ever widened to
+`SALES`, a rep can approve their own deal straight through to QuickBooks, and
+nothing else in the system would stop it.
 
-**The Sales Manager is oversight, not operations.** A manager sees everything
-(all submissions, Reports, Audit, Feedback, Internal notes) but cannot *create* a
-submission, and cannot approve, reject, or export one. Approval and the
+**Administration is Accounting and Admin.** `admin.manage` has a second
+keyholder so that account recovery does not depend on one admin being reachable.
+Be clear about the size of that grant: Administration *is* role management, so
+`ACCT` can raise its own role to `ADMIN` and thereby reach everything below —
+including the Logs it does not otherwise hold. It is a trust decision, not a
+partial one, and it is not enforceable as anything narrower without splitting
+the permission.
+
+**Logs is the only single-role permission.** `activity.view` is user-monitoring
+(who signed in, what they opened, who they messaged), so it is treated as
+HR/security-sensitive and stays with `ADMIN` alone.
+
+**The Sales Manager is oversight, plus intake.** A manager sees everything (all
+submissions, Reports, Audit, Feedback, Internal notes) and may now create a
+submission, but still cannot approve, reject, or export one. Approval and the
 QuickBooks hand-off belong to Accounting and Admin.
 
 ## Row-level scoping: what a rep can see
@@ -122,7 +140,10 @@ review for detail.
   demoting an admin does not take effect until the token expires.
 - **`submission.editAny` is declared but enforced nowhere.** A dead permission
   that reads like a capability Accounting has, and does not.
-- **`INTERN` is indistinguishable from `SALES`** (see above).
+- **`ACCT` can promote itself to `ADMIN`** via Administration, which is the one
+  way it reaches `activity.view`. Accepted when Administration was widened to
+  Accounting, not overlooked — but it means "Logs is admin-only" is a statement
+  about the nav, not a guarantee about who can end up reading it.
 - **Contact details are writable outside the read scope.** Submitting for an
   existing brand upserts the contact, so a rep can overwrite the details of a
   contact they are not allowed to read.

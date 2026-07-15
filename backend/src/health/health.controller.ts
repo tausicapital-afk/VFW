@@ -2,17 +2,8 @@ import { Controller, Get, Module, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { ConfigService } from '../config/config.service';
 import { Public } from '../common/auth.guard';
-import { PageData, Overall, overallOf, renderStatusPage } from './health.page';
+import { PageData, overallOf, renderStatusPage } from './health.page';
 import { COMPONENTS, HealthService, ProbeResult, RETENTION_DAYS } from './health.service';
-
-/** The banner verdict, in the JSON shape the page's poller reads back. */
-const OVERALL: Record<Overall, Overall> = {
-  operational: 'operational',
-  degraded: 'degraded',
-  partial_outage: 'partial_outage',
-  major_outage: 'major_outage',
-  unknown: 'unknown',
-};
 
 /**
  * How long a rendered page is reused. The prober only moves the numbers once a
@@ -75,7 +66,7 @@ export class HealthController {
       ok: true,
       service: 'vfw-api',
       time: new Date().toISOString(),
-      status: OVERALL[overallOf(results)],
+      status: overallOf(results),
       checks: results.map((r) => ({
         component: r.component,
         label: COMPONENTS.find((c) => c.id === r.component)?.label ?? r.component,

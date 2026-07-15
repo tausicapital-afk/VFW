@@ -3,8 +3,9 @@ import { useState } from 'react';
 import { api } from '../lib/api';
 import { fmtDate, money } from '../lib/format';
 import type {
-  AdminCatalogue, AdminUser, Currency, Invitation, Role, Settings,
+  AdminCatalogue, AdminUser, Currency, Invitation, Role, Settings, UserStatus,
 } from '../lib/types';
+import { useAuth } from '../auth/AuthContext';
 import { ExportMenu } from '../shell/ExportMenu';
 import { Page } from '../shell/Shell';
 import { ConfigTab } from './AdminConfig';
@@ -732,11 +733,15 @@ function PendingUserDetailModal({
 // ---------------------------------------------------------------------------
 
 function UsersTab() {
+  const qc = useQueryClient();
+  const [viewing, setViewing] = useState<string | null>(null);
+
   const { data } = useQuery({
     queryKey: ['users'],
     queryFn: () => api.get<{ users: AdminUser[] }>('/api/users'),
   });
   const users = data?.users ?? [];
+  const user = users.find((u) => u.id === viewing) ?? null;
 
   return (
     <div className="card">
@@ -755,7 +760,12 @@ function UsersTab() {
           </thead>
           <tbody>
             {users.map((u) => (
-              <tr key={u.id}>
+              <tr
+                key={u.id}
+                className="clickable"
+                title="Open to view or edit"
+                onClick={() => setViewing(u.id)}
+              >
                 <td className="b">{u.name}</td>
                 <td className="sm">{u.email}</td>
                 <td><span className={'pill ' + ROLE_PILL[u.role]}>{ROLE_LABEL[u.role]}</span></td>
@@ -767,6 +777,207 @@ function UsersTab() {
             ))}
           </tbody>
         </table>
+      </div>
+
+      {user && (
+        <UserDetailModal
+          user={user}
+          onClose={() => setViewing(null)}
+          onSaved={() => void qc.invalidateQueries({ queryKey: ['users'] })}
+          onDeleted={() => {
+            setViewing(null);
+            void qc.invalidateQueries({ queryKey: ['users'] });
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * An established account, as opposed to the sign-up under review that
+ * PendingUserDetailModal handles. Everything the tab shows is editable here
+ * except the email — see UpdateUserDto on the server for why.
+ */
+function UserDetailModal({
+  user, onClose, onSaved, onDeleted,
+}: {
+  user: AdminUser;
+  onClose: () => void;
+  onSaved: () => void;
+  onDeleted: () => void;
+}) {
+  const { user: me } = useAuth();
+  const [name, setName] = useState(user.name);
+  const [phone, setPhone] = useState(user.phone ?? '');
+  const [role, setRole] = useState<Role>(user.role);
+  const [department, setDepartment] = useState(user.department ?? '');
+  const [commissionPct, setCommission] = useState(String(user.commissionPct));
+  const [target, setTarget] = useState(String(user.target));
+  const [status, setStatus] = useState<UserStatus>(user.status);
+  const [error, setError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+
+  // The server refuses these too — this only spares the admin a round trip to be
+  // told what the form could have said up front.
+  const isSelf = me?.id === user.id;
+  // An account still in the approval queue is decided there, not here.
+  const decided = user.status === 'ACTIVE' || user.status === 'DISABLED';
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.patch(`/api/users/${user.id}`, {
+        name: name.trim(),
+        phone: phone.trim() || null,
+        role,
+        department: department || null,
+        commissionPct,
+        target,
+        ...(decided ? { status } : {}),
+      }),
+    onSuccess: () => { onSaved(); onClose(); },
+    onError: (e: Error) => setError(e.message),
+  });
+
+  const remove = useMutation({
+    mutationFn: () => api.del(`/api/users/${user.id}`),
+    onSuccess: onDeleted,
+    onError: (e: Error) => { setConfirming(false); setError(e.message); },
+  });
+
+  const dirty =
+    name !== user.name ||
+    phone !== (user.phone ?? '') ||
+    role !== user.role ||
+    department !== (user.department ?? '') ||
+    commissionPct !== String(user.commissionPct) ||
+    target !== String(user.target) ||
+    status !== user.status;
+
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="box" onClick={(e) => e.stopPropagation()}>
+        <div className="hd">
+          <h3>{user.name}</h3>
+          <span className={'pill ' + USER_PILL[user.status]}>{user.status}</span>
+          <div className="sp" style={{ flex: 1 }} />
+          <button className="btn sm" onClick={onClose}>Close</button>
+        </div>
+
+        <div className="bd">
+          {isSelf && (
+            <div className="note" style={{ marginBottom: 12 }}>
+              This is your own account. You can edit your details, but not your own role or
+              status — that is the change that would lock you out of this screen.
+            </div>
+          )}
+
+          <div className="fields">
+            <div className="f">
+              <label>Name</label>
+              <input value={name} onChange={(e) => setName(e.target.value)} />
+            </div>
+            <div className="f">
+              <label>Phone</label>
+              <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="—" />
+            </div>
+            <div className="f">
+              <label>Role</label>
+              <select
+                value={role}
+                disabled={isSelf}
+                onChange={(e) => setRole(e.target.value as Role)}
+              >
+                {(Object.keys(ROLE_LABEL) as Role[]).map((r) => (
+                  <option key={r} value={r}>{ROLE_LABEL[r]}</option>
+                ))}
+              </select>
+              <div className="help">Takes effect on their next request — no need to sign back in.</div>
+            </div>
+            <div className="f">
+              <label>Department</label>
+              <select value={department} onChange={(e) => setDepartment(e.target.value)}>
+                <option value="">—</option>
+                {DEPARTMENTS.map((d) => <option key={d}>{d}</option>)}
+              </select>
+            </div>
+            <div className="f">
+              <label>Commission %</label>
+              <input
+                inputMode="decimal"
+                value={commissionPct}
+                onChange={(e) => setCommission(e.target.value)}
+              />
+            </div>
+            <div className="f">
+              <label>Target (CAD)</label>
+              <input inputMode="decimal" value={target} onChange={(e) => setTarget(e.target.value)} />
+            </div>
+            {decided && (
+              <div className="f">
+                <label>Status</label>
+                <select
+                  value={status}
+                  disabled={isSelf}
+                  onChange={(e) => setStatus(e.target.value as UserStatus)}
+                >
+                  <option value="ACTIVE">Active</option>
+                  <option value="DISABLED">Disabled</option>
+                </select>
+                <div className="help">
+                  Disabling signs them out straight away and blocks them at login. Use it for an
+                  account that should come back — delete is for one that should not.
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="note" style={{ marginTop: 12 }}>
+            Changing a commission rate applies to <b>future</b> sales. It never rewrites a
+            submission that has already been made — each one carries the rate it was made at.
+          </div>
+
+          <div className="totals" style={{ marginTop: 12 }}>
+            <div className="r"><span>Email</span><span className="b">{user.email}</span></div>
+            {user.employeeId && (
+              <div className="r"><span>Employee ID</span><span className="mono">{user.employeeId}</span></div>
+            )}
+            <div className="r"><span>Joined</span><span>{fmtDate(user.createdAt)}</span></div>
+          </div>
+
+          {error && <div className="note bad" style={{ marginTop: 12 }}>{error}</div>}
+        </div>
+
+        <div className="ft">
+          {confirming ? (
+            <DeleteFooter
+              label="Delete this account? Disable it instead if they may return."
+              pending={remove.isPending}
+              onCancel={() => setConfirming(false)}
+              onConfirm={() => remove.mutate()}
+            />
+          ) : (
+            <>
+              <button
+                className="btn dgr"
+                style={{ marginRight: 'auto' }}
+                disabled={isSelf}
+                title={isSelf ? 'You cannot delete your own account' : undefined}
+                onClick={() => { setError(null); setConfirming(true); }}
+              >
+                Delete
+              </button>
+              <button className="btn" onClick={onClose}>Cancel</button>
+              <button
+                className="btn primary"
+                disabled={!dirty || save.isPending}
+                onClick={() => { setError(null); save.mutate(); }}
+              >
+                {save.isPending ? 'Saving…' : 'Save changes'}
+              </button>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
