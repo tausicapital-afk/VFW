@@ -25,11 +25,11 @@ type NavItem =
 const NAV: NavItem[] = [
   { grp: 'Work' },
   { to: '/', label: 'Dashboard', ic: '◧', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
-  { to: '/new', label: 'New submission', ic: '+', roles: ['SALES', 'INTERN', 'ADMIN'] },
+  { to: '/new', label: 'New submission', ic: '+', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
   { to: '/submissions', label: 'Submissions', ic: '▤', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
   { to: '/contacts', label: 'Contacts', ic: '◈', roles: ['SALES', 'ACCT', 'MGR', 'ADMIN'] },
   { to: '/messages', label: 'Messages', ic: '✉', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'], badge: 'messages' },
-  { to: '/queue', label: 'Approval queue', ic: '⚑', roles: ['ACCT', 'ADMIN'], badge: 'queue' },
+  { to: '/queue', label: 'Approval queue', ic: '⚑', roles: ['SALES', 'ACCT', 'ADMIN'], badge: 'queue' },
   { to: '/qbo', label: 'QuickBooks', ic: '⇪', roles: ['ACCT', 'ADMIN'] },
   { grp: 'People' },
   { to: '/board', label: 'Leaderboard', ic: '★', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
@@ -39,7 +39,7 @@ const NAV: NavItem[] = [
   { to: '/reports', label: 'Reports', ic: '▦', roles: ['ACCT', 'MGR', 'ADMIN'] },
   { to: '/audit', label: 'Audit trail', ic: '◷', roles: ['ACCT', 'MGR', 'ADMIN'] },
   { grp: 'System' },
-  { to: '/admin', label: 'Administration', ic: '⚙', roles: ['ADMIN'] },
+  { to: '/admin', label: 'Administration', ic: '⚙', roles: ['ACCT', 'ADMIN'] },
   { to: '/logs', label: 'Logs', ic: '❈', roles: ['ADMIN'] },
 ];
 
@@ -112,9 +112,10 @@ export function Shell() {
   // tears the socket down on sign-out.
   useMessagingRealtime();
 
-  // Only Accounting/Admin can read the queue, so only they may ask for its
-  // depth — otherwise this fires a request that is guaranteed to 403.
-  const showQueue = can('submission.approve', user?.role);
+  // Only a role that can read the queue may ask for its depth — otherwise this
+  // fires a request that is guaranteed to 403. For a rep the count is their own
+  // pending rows, since the queue read is row-scoped.
+  const showQueue = can('submission.queueView', user?.role);
   const { data: queue } = useQuery({
     queryKey: ['queue'],
     queryFn: () => api.get<Submission[]>('/api/submissions/queue'),

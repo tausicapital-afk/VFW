@@ -27,7 +27,7 @@ export class SubmissionsController {
 
   // Declared before :id so "queue" is not swallowed as an id.
   @Get('queue')
-  @Can('submission.approve')
+  @Can('submission.queueView')
   queue(@CurrentUser() user: AuthUser) {
     return this.submissions.queue(user);
   }

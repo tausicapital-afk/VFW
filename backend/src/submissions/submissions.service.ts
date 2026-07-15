@@ -69,10 +69,19 @@ export class SubmissionsService {
     return submission;
   }
 
+  /**
+   * The review pipeline. Accounting works it; a rep reads it to see where their
+   * own submission sits. The row scope is what makes that second audience safe —
+   * without it this returns every rep's brand, discount and total, which is
+   * exactly what `scopeFor` exists to prevent.
+   */
   async queue(user: AuthUser) {
-    if (!can('submission.approve', user.role)) throw new ForbiddenException();
+    if (!can('submission.queueView', user.role)) throw new ForbiddenException();
     return this.prisma.submission.findMany({
-      where: { status: { in: [SubmissionStatus.PENDING, SubmissionStatus.RETURNED] } },
+      where: {
+        ...this.scopeFor(user),
+        status: { in: [SubmissionStatus.PENDING, SubmissionStatus.RETURNED] },
+      },
       include: DETAIL,
       orderBy: { submittedAt: 'asc' },
     });

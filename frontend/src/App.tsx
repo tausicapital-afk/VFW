@@ -78,7 +78,7 @@ function Routed() {
         <Route path="/contacts" element={<Contacts />} />
         <Route path="/contacts/:id" element={<ContactDetail />} />
         <Route path="/messages" element={<Guard permission="messaging.use"><Messages /></Guard>} />
-        <Route path="/queue" element={<Guard permission="submission.approve"><Queue /></Guard>} />
+        <Route path="/queue" element={<Guard permission="submission.queueView"><Queue /></Guard>} />
         <Route path="/board" element={<Guard permission="leaderboard.view"><Board /></Guard>} />
         <Route path="/feedback" element={<Guard permission="feedback.view"><Feedback /></Guard>} />
         <Route path="/internal" element={<Guard permission="internal.view"><Internal /></Guard>} />

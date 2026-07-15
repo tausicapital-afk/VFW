@@ -16,10 +16,16 @@ import { Role } from '@prisma/client';
  * trust the frontend's answer.
  */
 export const ACL = {
-  'submission.create': ['SALES', 'INTERN', 'ADMIN'],
-  'submission.editOwn': ['SALES', 'INTERN', 'ADMIN'],
+  'submission.create': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
+  'submission.editOwn': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
   'submission.editAny': ['ACCT', 'ADMIN'],
   'submission.viewAll': ['ACCT', 'MGR', 'ADMIN'],
+  // Reading the queue is not deciding on it. SALES holds this so a rep can see
+  // where their own submission sits in the review pipeline; the queue read is
+  // row-scoped like every other submission read, so a rep sees their rows only.
+  // Acting on a submission stays with the approve/reject/return trio below —
+  // the maker and the checker must not be the same person.
+  'submission.queueView': ['SALES', 'ACCT', 'ADMIN'],
   'submission.approve': ['ACCT', 'ADMIN'],
   'submission.reject': ['ACCT', 'ADMIN'],
   'submission.return': ['ACCT', 'ADMIN'],
@@ -40,10 +46,15 @@ export const ACL = {
   'internal.comment': ['ACCT', 'MGR', 'ADMIN'],
   'internal.view': ['ACCT', 'MGR', 'ADMIN'],
   'messaging.use': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
-  'admin.manage': ['ADMIN'],
+  // Administration is user and role management: create an account, disable one,
+  // change anyone's role. ACCT holds it as a second keyholder so account
+  // recovery does not depend on a single admin being reachable. Note the
+  // consequence — a role that can edit roles can raise its own to ADMIN, so
+  // this grant is effectively a grant of everything below it.
+  'admin.manage': ['ACCT', 'ADMIN'],
   // The activity/logs screen is user-monitoring — who signed in, what they
-  // opened, who they messaged. HR/security-sensitive, so admin-only, the same
-  // set as admin.manage.
+  // opened, who they messaged. HR/security-sensitive, so it stays admin-only:
+  // the one permission no second role holds.
   'activity.view': ['ADMIN'],
 } as const satisfies Record<string, readonly Role[]>;
 

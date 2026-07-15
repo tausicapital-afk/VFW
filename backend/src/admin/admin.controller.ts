@@ -10,9 +10,9 @@ import {
   UpdateAddonDto,
   UpdateInvitationDto,
   UpdatePackageDto,
-  UpdatePendingUserDto,
   UpdateSettingsDto,
   UpdateTaxDto,
+  UpdateUserDto,
 } from './dto';
 import { FeedbackController, FeedbackService } from '../feedback/feedback.controller';
 import { InternalController, InternalService } from '../internal/internal.controller';
@@ -98,12 +98,12 @@ export class AdminController {
 
   @Patch('users/:id')
   @Can('admin.manage')
-  updatePendingUser(
+  updateUser(
     @Param('id') id: string,
-    @Body() dto: UpdatePendingUserDto,
+    @Body() dto: UpdateUserDto,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.admin.updatePendingUser(id, dto, user);
+    return this.admin.updateUser(id, dto, user);
   }
 
   @Delete('users/:id')

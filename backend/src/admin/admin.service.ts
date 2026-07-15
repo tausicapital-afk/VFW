@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { Invitation, Prisma, UserStatus } from '@prisma/client';
+import { Invitation, Prisma, Role, UserStatus } from '@prisma/client';
 import { randomInt } from 'crypto';
 import { Decimal } from 'decimal.js';
 import { AuditService } from '../audit/audit.service';
@@ -15,9 +15,9 @@ import {
   UpdateAddonDto,
   UpdateInvitationDto,
   UpdatePackageDto,
-  UpdatePendingUserDto,
   UpdateSettingsDto,
   UpdateTaxDto,
+  UpdateUserDto,
 } from './dto';
 
 /** No I, O, 0 or 1 — these codes get read off a screen and typed by hand. */
@@ -317,48 +317,125 @@ export class AdminService {
   }
 
   /**
-   * Corrections made while reviewing a signup — the role and department someone
-   * typed into the form are a request, not a fact, and an admin fixing them
-   * before approving beats approving and then re-editing.
-   *
-   * Email is not editable: it is the login identity, it is what the OTP was
-   * sent to, and it is the one field the account holder has already proved.
+   * How many accounts could still administer this system if `excluding` were
+   * gone. Hidden accounts count: `hidden` only keeps a login off the listings,
+   * it does not stop it authenticating, so a hidden ADMIN really can still get
+   * in. Deleted and non-ACTIVE ones cannot, so they do not count.
    */
-  async updatePendingUser(id: string, dto: UpdatePendingUserDto, actor: AuthUser) {
+  private async otherActiveAdmins(excluding: string, tx?: Prisma.TransactionClient) {
+    return (tx ?? this.prisma).user.count({
+      where: {
+        id: { not: excluding },
+        role: Role.ADMIN,
+        status: UserStatus.ACTIVE,
+        deletedAt: null,
+      },
+    });
+  }
+
+  /**
+   * The one way an account is edited, from either screen — the approvals queue
+   * fixing what someone typed before they are let in, and Users & roles keeping
+   * an established account right. See UpdateUserDto for what is deliberately not
+   * editable here.
+   *
+   * Two things it refuses, both of them ways to lock the console:
+   *   - changing your OWN role or status (demote or suspend yourself and the
+   *     next request is the one that logs you out),
+   *   - leaving the system with no-one who can administer it.
+   *
+   * Note what is NOT here: editing commission does not touch a sale that has
+   * already been made. Submission copies commissionPct onto the record at
+   * creation and re-pricing reads it back off the record, exactly as the rate
+   * card does — this rate is what the next sale will use, not the last one.
+   */
+  async updateUser(id: string, dto: UpdateUserDto, actor: AuthUser) {
     const user = await this.prisma.user.findFirst({ where: { id, deletedAt: null } });
     if (!user) throw new NotFoundException('User not found');
-    if (user.status !== UserStatus.PENDING) {
-      throw new BadRequestException(`That account is ${user.status}, not pending`);
+
+    const isSelf = user.id === actor.id;
+    const demoting = dto.role !== undefined && dto.role !== user.role && user.role === Role.ADMIN;
+    const suspending = dto.status === UserStatus.DISABLED && user.status !== UserStatus.DISABLED;
+
+    if (isSelf && dto.role !== undefined && dto.role !== user.role) {
+      throw new BadRequestException('You cannot change your own role');
+    }
+    if (isSelf && dto.status !== undefined && dto.status !== user.status) {
+      throw new BadRequestException('You cannot change your own status');
+    }
+
+    // Approval is a decision with a reason attached; it does not happen by way
+    // of a form that edits a phone number.
+    if (
+      dto.status !== undefined &&
+      dto.status !== user.status &&
+      user.status !== UserStatus.ACTIVE &&
+      user.status !== UserStatus.DISABLED
+    ) {
+      throw new BadRequestException(
+        `That account is ${user.status} — use Approve or Reject to decide it`,
+      );
+    }
+
+    if ((demoting || suspending) && !(await this.otherActiveAdmins(user.id))) {
+      throw new BadRequestException(
+        'That is the last administrator — promote someone else first',
+      );
     }
 
     const before: Record<string, Prisma.InputJsonValue | null> = {};
     const after: Record<string, Prisma.InputJsonValue | null> = {};
     const data: Prisma.UserUpdateInput = {};
 
+    const set = (field: string, from: Prisma.InputJsonValue | null, to: Prisma.InputJsonValue | null) => {
+      before[field] = from;
+      after[field] = to;
+    };
+
     const name = dto.name?.trim();
     if (name !== undefined && name !== user.name) {
-      before.name = user.name;
-      after.name = name;
+      set('name', user.name, name);
       data.name = name;
     }
     if (dto.phone !== undefined && dto.phone !== user.phone) {
-      before.phone = user.phone;
-      after.phone = dto.phone;
+      set('phone', user.phone, dto.phone);
       data.phone = dto.phone;
     }
     if (dto.role !== undefined && dto.role !== user.role) {
-      before.role = user.role;
-      after.role = dto.role;
+      set('role', user.role, dto.role);
       data.role = dto.role;
     }
     if (dto.department !== undefined && dto.department !== user.department) {
-      before.department = user.department;
-      after.department = dto.department;
+      set('department', user.department, dto.department);
       data.department = dto.department;
+    }
+    if (dto.commissionPct !== undefined) {
+      const pct = decimal(dto.commissionPct, 'Commission %');
+      if (pct.greaterThan(100)) throw new BadRequestException('Commission % cannot exceed 100');
+      const next = pct.toFixed(2);
+      if (next !== user.commissionPct.toFixed(2)) {
+        set('commissionPct', user.commissionPct.toFixed(2), next);
+        data.commissionPct = next;
+      }
+    }
+    if (dto.target !== undefined) {
+      const next = decimal(dto.target, 'Target').toFixed(2);
+      if (next !== user.target.toFixed(2)) {
+        set('target', user.target.toFixed(2), next);
+        data.target = next;
+      }
+    }
+    if (dto.status !== undefined && dto.status !== user.status) {
+      set('status', user.status, dto.status);
+      data.status = dto.status;
+      // A suspended account must stop acting now, not when its token expires.
+      if (dto.status === UserStatus.DISABLED) data.tokenVersion = { increment: 1 };
     }
 
     if (!Object.keys(data).length) {
-      return { user: await this.prisma.user.findUniqueOrThrow({ where: { id }, select: this.userFields }) };
+      return {
+        user: await this.prisma.user.findUniqueOrThrow({ where: { id }, select: this.userFields }),
+      };
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -367,7 +444,7 @@ export class AdminService {
         {
           actorId: actor.id,
           action: 'USER_UPDATED',
-          detail: `Edited pending account for ${user.name} (${Object.keys(after).join(', ')})`,
+          detail: `Edited ${user.name} (${Object.keys(after).join(', ')})`,
           payload: { userId: id, email: user.email, before, after },
         },
         tx,
@@ -377,16 +454,23 @@ export class AdminService {
   }
 
   /**
-   * Soft delete, for a signup that should never have reached the queue at all —
-   * spam, a duplicate, a typo'd address. Distinct from reject, which is a
-   * decision on record about a real request; this is a decision that there was
-   * no real request. The row stays for the audit trail, and tokenVersion is
-   * bumped so anything already holding a session for it dies now.
+   * Soft delete. From the approvals queue this is for a signup that should never
+   * have arrived — spam, a duplicate, a typo'd address — and it is distinct from
+   * reject, which is a decision on record about a real request; this says there
+   * was no real request. From Users & roles it retires an account for good,
+   * where DISABLED would be the choice for one that is meant to come back.
+   *
+   * Either way the row stays for the audit trail it is named in, and
+   * tokenVersion is bumped so anything already holding a session for it dies
+   * now rather than at expiry.
    */
   async deleteUser(id: string, actor: AuthUser) {
     const user = await this.prisma.user.findFirst({ where: { id, deletedAt: null } });
     if (!user) throw new NotFoundException('User not found');
     if (user.id === actor.id) throw new BadRequestException('You cannot delete your own account');
+    if (user.role === Role.ADMIN && !(await this.otherActiveAdmins(user.id))) {
+      throw new BadRequestException('That is the last administrator — promote someone else first');
+    }
 
     return this.prisma.$transaction(async (tx) => {
       await tx.user.update({

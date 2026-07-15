@@ -8,10 +8,11 @@ import type { Role } from './types';
  * If the two ever disagree, the server wins.
  */
 export const ACL = {
-  'submission.create': ['SALES', 'INTERN', 'ADMIN'],
-  'submission.editOwn': ['SALES', 'INTERN', 'ADMIN'],
+  'submission.create': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
+  'submission.editOwn': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
   'submission.editAny': ['ACCT', 'ADMIN'],
   'submission.viewAll': ['ACCT', 'MGR', 'ADMIN'],
+  'submission.queueView': ['SALES', 'ACCT', 'ADMIN'],
   'submission.approve': ['ACCT', 'ADMIN'],
   'submission.reject': ['ACCT', 'ADMIN'],
   'submission.return': ['ACCT', 'ADMIN'],
@@ -27,7 +28,7 @@ export const ACL = {
   'internal.comment': ['ACCT', 'MGR', 'ADMIN'],
   'internal.view': ['ACCT', 'MGR', 'ADMIN'],
   'messaging.use': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
-  'admin.manage': ['ADMIN'],
+  'admin.manage': ['ACCT', 'ADMIN'],
   'activity.view': ['ADMIN'],
 } as const satisfies Record<string, readonly Role[]>;
 

@@ -130,6 +130,13 @@ export class HealthService implements OnModuleInit, OnApplicationShutdown {
   ) {}
 
   onModuleInit() {
+    // Tests boot the whole AppModule. Left to itself the prober would open a
+    // real SMTP connection to the configured mail host and write probe rows
+    // into the test database on every boot — a test suite has no business
+    // reaching a third party. Anything testing the prober calls runCycle()
+    // directly.
+    if (process.env.NODE_ENV === 'test') return;
+
     // Probe once at boot so the first caller sees real state rather than
     // "checking…", then settle into the cycle.
     void this.runCycle();

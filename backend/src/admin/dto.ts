@@ -1,10 +1,11 @@
-import { Currency, Role } from '@prisma/client';
+import { Currency, Role, UserStatus } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
   IsEmail,
   IsEnum,
+  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
@@ -64,8 +65,21 @@ export class UpdateInvitationDto {
   email?: string | null;
 }
 
-/** Corrections an admin makes while reviewing a signup, before approving it. */
-export class UpdatePendingUserDto {
+/**
+ * One shape for both places an account gets edited: the approvals queue, where
+ * an admin fixes what someone typed before letting them in, and Users & roles,
+ * where an established account is maintained. Same resource, so one PATCH —
+ * each screen simply sends the subset it shows.
+ *
+ * Email is absent on purpose: it is the login identity, it is where the OTP was
+ * sent, and it is the one field the account holder has already proved.
+ *
+ * `status` only spans ACTIVE and DISABLED — suspending an account and bringing
+ * it back. PENDING and REJECTED are the approval lifecycle, and they are decided
+ * by approve/reject, which record *why*. Letting this endpoint write them would
+ * be a way to approve someone with no approval on record.
+ */
+export class UpdateUserDto {
   @IsOptional()
   @IsString()
   @MinLength(1)
@@ -81,6 +95,22 @@ export class UpdatePendingUserDto {
   @IsOptional()
   @IsEnum(Role)
   role?: Role;
+
+  @IsOptional()
+  @IsEnum(UserStatus)
+  @IsIn([UserStatus.ACTIVE, UserStatus.DISABLED])
+  status?: UserStatus;
+
+  // Money and rates arrive as strings and are parsed with decimal.js — see the
+  // note above the catalogue DTOs. A commission that round-trips through a JS
+  // float is a commission that is quietly wrong.
+  @IsOptional()
+  @IsString()
+  commissionPct?: string;
+
+  @IsOptional()
+  @IsString()
+  target?: string;
 
   @IsOptional()
   @ValidateIf((_, v) => v !== null)
