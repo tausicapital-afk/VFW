@@ -449,9 +449,44 @@ export class EmailService {
     return `${account.fromName || brandName()} <${account.fromAddress}>`;
   }
 
-  /** Where the SPA lives, so an emailed link points at something real. */
-  get appUrl() {
-    return (this.config.get('APP_URL') ?? 'http://localhost:5173').replace(/\/$/, '');
+  /**
+   * Where the SPA lives, so an emailed link points at something real.
+   *
+   * In production an unset APP_URL throws rather than falling back to
+   * localhost. That fallback is the exact failure this module's header warns
+   * about — "a silent local fallback looks like it works right up until the
+   * first real user cannot get into their account". It did: production sent a
+   * real invitation whose only link was `http://localhost:5173/signup/…`, the
+   * send reported success, and nothing anywhere said otherwise. A password reset
+   * is worse still — the link IS the email.
+   *
+   * Failing here is safe and lands well. The builders are called inside the
+   * caller's try (see AdminService.createInvitation), so an admin gets this
+   * sentence plus the code to send by hand, instead of the invitee getting a
+   * dead link. `welcome` and `otp` carry a code rather than a link and never
+   * touch this, so OTP signup keeps working regardless.
+   *
+   * An explicit localhost value in production is treated the same as unset: it
+   * is how the value arrives when someone copies `.env` to the server, and the
+   * resulting email is equally dead either way.
+   */
+  get appUrl(): string {
+    const configured = this.config.get('APP_URL')?.trim().replace(/\/$/, '');
+    const production = process.env.NODE_ENV === 'production';
+    const isLocal = (u: string) => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::|\/|$)/i.test(u);
+
+    if (configured && !(production && isLocal(configured))) return configured;
+
+    if (production) {
+      this.log.error(
+        `APP_URL is ${configured ? `"${configured}"` : 'not set'} in production — refusing to email a link that points at localhost`,
+      );
+      throw new ServiceUnavailableException(
+        "APP_URL is not set to this console's public address, so an emailed link " +
+          'would point at localhost. Set it under Administration → Configuration.',
+      );
+    }
+    return 'http://localhost:5173';
   }
 
   /**
