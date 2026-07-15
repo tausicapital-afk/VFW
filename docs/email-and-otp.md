@@ -3,6 +3,13 @@
 The system's outbound email — welcome, verification, password reset — and the
 email-OTP signup flow that replaced administrator approval. Written 2026-07-14.
 
+> **Looking at this because mail is not arriving? Read
+> [`email-delivery.md`](email-delivery.md) first.** This file covers *what* the
+> app sends. That one covers *how a message physically gets out* — the mail
+> accounts, the relay, and why Railway cannot use SMTP at all. Nearly every
+> "email is broken" symptom is answered there, and the answer is almost never the
+> mailbox settings.
+
 ---
 
 ## What this covers

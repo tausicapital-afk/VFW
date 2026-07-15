@@ -126,11 +126,16 @@ Or just open it in a browser — same URL, and you get the status page
   storage (`R2_*`) and Outbound email**: neither is set on the backend service,
   so uploads and OTP/invite/reset emails cannot work there.
 
-  For **email**, the fix needs no variables and no redeploy: *Administration →
+  **Email is now working in production** via the relay on the cPanel box — see
+  [`email-delivery.md`](email-delivery.md), which is the first thing to read if
+  mail stops. Railway drops all outbound SMTP, so a plain `smtp` account can
+  never deliver from there; that is measured, not assumed.
+
+  Mailboxes live in the database, not in `MAIL_*`: *Administration →
   Configuration → Mail accounts → Add account*, then **Send test** on the row
-  before making it active. Mailboxes live in the database now, not in `MAIL_*`
-  (see `docs/email-and-otp.md`). To bootstrap one without clicking — note it must
-  run through `railway run` so it encrypts with production's key:
+  before making it active. No variables, no redeploy. To bootstrap one without
+  clicking — note it must run through `railway run` so it encrypts with
+  production's key:
 
   ```bash
   railway run --service backend npm run mail:add -- \
