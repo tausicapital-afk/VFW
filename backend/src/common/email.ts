@@ -2,15 +2,16 @@ import { Global, Injectable, Logger, Module, ServiceUnavailableException } from 
 import * as nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
 import { ConfigService } from '../config/config.service';
+import { MailAccountService, SmtpAccount } from '../config/mail-account.service';
 
 /**
  * Outbound email — one transport, one global template, and one fallback:
  * **failing loudly**.
  *
- * Transport is SMTP (cPanel / any provider) over nodemailer. Every message is
- * poured through the same {@link layout} so the whole system speaks with one
- * voice: change the header, the colours or the footer once and every email —
- * welcome, OTP, password reset — moves together.
+ * Transport is SMTP (cPanel / Gmail / any provider) over nodemailer. Every
+ * message is poured through the same {@link layout} so the whole system speaks
+ * with one voice: change the header, the colours or the footer once and every
+ * email — welcome, OTP, password reset — moves together.
  *
  * What this deliberately does NOT do is log the code or link to the console and
  * carry on. A silent local fallback looks like it works right up until the first
@@ -18,22 +19,31 @@ import { ConfigService } from '../config/config.service';
  * evidence is worthless. If the transport is not configured, send() throws and
  * the endpoint returns 503. That is a correct answer; a console.log is not.
  *
- * Configure with (cPanel SMTP example):
- *   MAIL_HOST=mail.veeb.co.ke
- *   MAIL_PORT=465
- *   MAIL_USERNAME=patriotic@veeb.co.ke
- *   MAIL_PASSWORD=********
- *   MAIL_ENCRYPTION=ssl            # ssl | tls | none
- *   MAIL_FROM_ADDRESS=patriotic@veeb.co.ke
- *   MAIL_FROM_NAME="Patriotic Payroll"
- *   APP_URL=https://app.yourdomain.com   (used to build the links)
+ * WHERE THE CREDENTIALS COME FROM, in order:
+ *
+ *  1. The active row in MailAccount — mailboxes an admin manages from the
+ *     Configuration screen. This is the normal path (see mail-account.service).
+ *  2. The MAIL_* settings, resolved DB-then-env by ConfigService, used ONLY
+ *     while that table is empty, so a deployment that predates it keeps sending
+ *     with no intervention:
+ *
+ *       MAIL_HOST=mail.veeb.co.ke      # a hostname, never an email address
+ *       MAIL_PORT=465
+ *       MAIL_USERNAME=vfw@veeb.co.ke
+ *       MAIL_PASSWORD=********
+ *       MAIL_ENCRYPTION=ssl            # ssl | tls | none
+ *       MAIL_FROM_ADDRESS=vfw@veeb.co.ke
+ *       MAIL_FROM_NAME="VFW Console"
+ *
+ * APP_URL (used to build every emailed link) stays global config either way — it
+ * is a property of the deployment, not of the mailbox.
  */
 
 export class EmailNotConfiguredError extends ServiceUnavailableException {
   constructor() {
     super(
       'Email is not configured on this server, so the message could not be sent. ' +
-        'Set MAIL_HOST, MAIL_USERNAME, MAIL_PASSWORD and MAIL_FROM_ADDRESS.',
+        'Add a mail account under Administration → Configuration.',
     );
   }
 }
@@ -55,22 +65,59 @@ export interface Mail {
 // ---------------------------------------------------------------------------
 
 // The template helpers below are module-level (they are called from inside
-// `layout()` / `button()`), so they cannot reach the injected ConfigService
-// through `this`. EmailService sets this reference in its constructor, so brand
-// name/colour follow whatever the admin has configured — DB first, then env.
+// `layout()` / `button()`), so they cannot reach the injected services through
+// `this`. EmailService sets these references in its constructor, so brand
+// name/colour follow whatever the admin has configured.
 let cfg: ConfigService | null = null;
+let acctSvc: MailAccountService | null = null;
 
 function conf(key: string): string {
   return (cfg?.get(key) ?? process.env[key]?.trim() ?? '').trim();
 }
+
+/**
+ * The brand shown at the top of every email. The sending mailbox's own "from
+ * name" wins, so switching account can switch the brand with it; MAIL_FROM_NAME
+ * is the deployment-wide default for accounts that do not set one.
+ */
+let brandOverride: string | undefined;
 function brandName() {
-  return conf('MAIL_FROM_NAME') || 'VFW Console';
+  return (
+    brandOverride ||
+    acctSvc?.active()?.fromName ||
+    conf('MAIL_FROM_NAME') ||
+    'VFW Console'
+  );
 }
+
+/**
+ * Render `fn` as though `name` were the brand. Used when testing a mailbox that
+ * is not the active one, so the test email wears the brand of the account being
+ * tested rather than the one that happens to be live.
+ *
+ * `fn` must be synchronous — the override is module-level, and an await inside
+ * would leak it into whatever else rendered in the gap.
+ */
+function withBrand<T>(name: string | undefined, fn: () => T): T {
+  const previous = brandOverride;
+  brandOverride = name;
+  try {
+    return fn();
+  } finally {
+    brandOverride = previous;
+  }
+}
+
 function brandColour() {
   return conf('MAIL_BRAND_COLOUR') || '#0C7A4D';
 }
 function supportAddress() {
-  return conf('MAIL_SUPPORT_ADDRESS') || conf('MAIL_FROM_ADDRESS') || '';
+  return (
+    conf('MAIL_SUPPORT_ADDRESS') ||
+    acctSvc?.active()?.fromAddress ||
+    conf('MAIL_FROM_ADDRESS') ||
+    ''
+  );
 }
 
 /** Escape anything interpolated into HTML that came from a person or the DB. */
@@ -167,32 +214,68 @@ function textLayout(lines: string[]): string {
   return [...lines, ...footer].join('\n');
 }
 
+/** 465 is implicit TLS (secure); 587/25 start plaintext and upgrade via STARTTLS. */
+function isSecure(account: SmtpAccount): boolean {
+  const enc = account.encryption?.toLowerCase();
+  if (enc === 'ssl') return true;
+  if (enc === 'tls' || enc === 'none') return false;
+  return account.port === 465;
+}
+
 @Injectable()
 export class EmailService {
   private readonly log = new Logger(EmailService.name);
   private transporter?: Transporter;
-  /** The config version the memoised transporter was built against. */
-  private transporterVersion = -1;
+  /** Identifies the account+config the memoised transporter was built against. */
+  private transporterKey = '';
 
-  constructor(private readonly config: ConfigService) {
-    // Let the module-level template helpers read live config too.
+  constructor(
+    private readonly config: ConfigService,
+    private readonly accounts: MailAccountService,
+  ) {
+    // Let the module-level template helpers read live config and the active
+    // mailbox too — they have no `this` to reach these through.
     cfg = config;
+    acctSvc = accounts;
   }
 
-  private get host() {
-    return this.config.get('MAIL_HOST') ?? '';
+  /**
+   * The mailbox that sends. The active MailAccount row first; the legacy MAIL_*
+   * settings only while that table is empty.
+   *
+   * Note what does NOT happen: if rows exist but the active one's password will
+   * not decrypt, this returns undefined rather than quietly falling back to the
+   * env vars. Sending from a different mailbox than the one the screen says is
+   * active is worse than not sending — the admin gets a 503 and a decrypt error
+   * on the row, which points at the real problem.
+   */
+  private resolve(): SmtpAccount | undefined {
+    const active = this.accounts.active();
+    if (active) return active;
+    if (this.accounts.any) return undefined;
+
+    const host = this.config.get('MAIL_HOST') ?? '';
+    const username = this.config.get('MAIL_USERNAME') ?? '';
+    const password = this.config.get('MAIL_PASSWORD') ?? '';
+    const fromAddress = this.config.get('MAIL_FROM_ADDRESS') ?? username;
+    if (!host || !username || !password || !fromAddress) return undefined;
+
+    const port = this.config.getNumber('MAIL_PORT') ?? 587;
+    return {
+      id: 'env',
+      label: 'Server environment',
+      host,
+      port,
+      encryption: this.config.get('MAIL_ENCRYPTION')?.toLowerCase() ?? (port === 465 ? 'ssl' : 'tls'),
+      username,
+      password,
+      fromAddress,
+      fromName: this.config.get('MAIL_FROM_NAME'),
+    };
   }
-  private get user() {
-    return this.config.get('MAIL_USERNAME') ?? '';
-  }
-  private get pass() {
-    return this.config.get('MAIL_PASSWORD') ?? '';
-  }
-  private get fromAddress() {
-    return this.config.get('MAIL_FROM_ADDRESS') ?? this.user;
-  }
-  private get from() {
-    return `${brandName()} <${this.fromAddress}>`;
+
+  private fromHeader(account: SmtpAccount): string {
+    return `${account.fromName || brandName()} <${account.fromAddress}>`;
   }
 
   /** Where the SPA lives, so an emailed link points at something real. */
@@ -207,33 +290,26 @@ export class EmailService {
    * addresses are registered.
    */
   get configured(): boolean {
-    return Boolean(this.host && this.user && this.pass && this.fromAddress);
+    return Boolean(this.resolve());
   }
 
-  private get port(): number {
-    return this.config.getNumber('MAIL_PORT') ?? 587;
+  private buildTransport(account: SmtpAccount): Transporter {
+    return nodemailer.createTransport({
+      host: account.host,
+      port: account.port,
+      secure: isSecure(account),
+      auth: { user: account.username, pass: account.password },
+    });
   }
 
-  /** 465 is implicit TLS (secure); 587/25 start plaintext and upgrade via STARTTLS. */
-  private get secure(): boolean {
-    const enc = this.config.get('MAIL_ENCRYPTION')?.toLowerCase();
-    if (enc === 'ssl') return true;
-    if (enc === 'tls' || enc === 'none') return false;
-    return this.port === 465;
-  }
-
-  private get transport(): Transporter {
-    // Rebuild when the admin changes any credential, so a saved SMTP setting
-    // takes effect on the next send without a restart. The version counter on
-    // ConfigService bumps on every write.
-    if (!this.transporter || this.transporterVersion !== this.config.version) {
-      this.transporter = nodemailer.createTransport({
-        host: this.host,
-        port: this.port,
-        secure: this.secure,
-        auth: { user: this.user, pass: this.pass },
-      });
-      this.transporterVersion = this.config.version;
+  private transportFor(account: SmtpAccount): Transporter {
+    // Rebuild when the admin switches account or edits a credential, so a saved
+    // change takes effect on the next send without a restart. Both version
+    // counters bump on every write to their store.
+    const key = `${account.id}:${this.accounts.version}:${this.config.version}`;
+    if (!this.transporter || this.transporterKey !== key) {
+      this.transporter = this.buildTransport(account);
+      this.transporterKey = key;
     }
     return this.transporter;
   }
@@ -248,16 +324,18 @@ export class EmailService {
    * these messages name hosts and accounts.
    */
   async verify(): Promise<void> {
-    if (!this.configured) throw new EmailNotConfiguredError();
-    await this.transport.verify();
+    const account = this.resolve();
+    if (!account) throw new EmailNotConfiguredError();
+    await this.buildTransport(account).verify();
   }
 
   async send(mail: Mail): Promise<void> {
-    if (!this.configured) throw new EmailNotConfiguredError();
+    const account = this.resolve();
+    if (!account) throw new EmailNotConfiguredError();
 
     try {
-      await this.transport.sendMail({
-        from: this.from,
+      await this.transportFor(account).sendMail({
+        from: this.fromHeader(account),
         to: mail.to,
         subject: mail.subject,
         text: mail.text,
@@ -272,31 +350,54 @@ export class EmailService {
   }
 
   /**
-   * Send a real message to the signed-in admin to prove the SMTP settings work.
-   * Unlike {@link send}, this first runs `transporter.verify()` and lets its
-   * error through — the whole point of a test is to surface *why* it failed
-   * (bad login, wrong port, unreachable host), not a generic "could not send".
+   * Send a real message to the signed-in admin to prove a mailbox works.
+   *
+   * `accountId` targets one specific mailbox, so an admin can prove the Gmail
+   * box works before making it the one every sign-up code depends on. Omit it to
+   * test whatever is currently sending.
+   *
+   * Unlike {@link send}, this runs `transporter.verify()` first and lets its
+   * error through — the whole point of a test is to surface *why* it failed (bad
+   * login, wrong port, unreachable host), not a generic "could not send". The
+   * result goes to an admin who is already allowed to see these credentials.
    */
-  async sendTest(to: string, name: string): Promise<void> {
-    await this.verify();
+  async sendTest(to: string, name: string, accountId?: string): Promise<{ label: string }> {
+    const account = accountId ? this.accounts.byId(accountId) : this.resolve();
+    if (!account) throw new EmailNotConfiguredError();
 
-    const first = esc((name || '').split(' ')[0] || 'there');
-    const brand = esc(brandName());
-    const bodyHtml =
-      `<h1 style="margin:0 0 14px;font-size:22px;color:#0e0e11;">Email is working ✅</h1>` +
-      `<p style="margin:0 0 6px;">Hi ${first}, this is a test message from ${brand}. ` +
-      `If you're reading it, your outgoing email settings are correct — sign-up codes, ` +
-      `password resets and invitations will now be delivered.</p>`;
-    await this.send({
-      to,
-      subject: `${brandName()} — test email`,
-      html: layout({ title: 'Test email', preheader: 'Your email settings are working', bodyHtml }),
-      text: textLayout([
-        `This is a test email from ${brandName()}.`,
-        '',
-        `If you're reading it, your outgoing email settings are correct.`,
-      ]),
+    const transport = this.buildTransport(account);
+    await transport.verify();
+
+    const mail = withBrand(account.fromName, () => {
+      const first = esc((name || '').split(' ')[0] || 'there');
+      const brand = esc(brandName());
+      const bodyHtml =
+        `<h1 style="margin:0 0 14px;font-size:22px;color:#0e0e11;">Email is working ✅</h1>` +
+        `<p style="margin:0 0 6px;">Hi ${first}, this is a test message from ${brand}, ` +
+        `sent through <b>${esc(account.label)}</b> (${esc(account.fromAddress)}). ` +
+        `If you're reading it, that mailbox is working — sign-up codes, password resets ` +
+        `and invitations sent from it will be delivered.</p>`;
+      return {
+        to,
+        subject: `${brandName()} — test email`,
+        html: layout({ title: 'Test email', preheader: 'Your email settings are working', bodyHtml }),
+        text: textLayout([
+          `This is a test email from ${brandName()}, sent through ${account.label} (${account.fromAddress}).`,
+          '',
+          `If you're reading it, that mailbox is working.`,
+        ]),
+      };
     });
+
+    try {
+      await transport.sendMail({ from: this.fromHeader(account), ...mail });
+    } catch (err) {
+      this.log.error(`SMTP test send failed: ${err instanceof Error ? err.message : String(err)}`);
+      throw new ServiceUnavailableException(
+        err instanceof Error ? err.message : 'The test email could not be sent',
+      );
+    }
+    return { label: account.label };
   }
 
   // -------------------------------------------------------------------------

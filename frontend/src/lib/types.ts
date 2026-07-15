@@ -407,7 +407,8 @@ export interface ConfigGroup {
   id: 'email' | 'storage';
   title: string;
   blurb: string;
-  configured: boolean;
+  /** null when the group requires nothing — draw no status pill. */
+  configured: boolean | null;
   fields: ConfigField[];
 }
 
@@ -429,4 +430,48 @@ export interface ConfigTestResult {
   ok: boolean;
   error?: string;
   sentTo?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Mail accounts — the SMTP mailboxes the app can send from. Exactly one is
+// active; switching is one click. The password is never sent here, in either
+// direction, except when the admin is setting a new one.
+// See backend/src/config/mail-account.service.ts.
+// ---------------------------------------------------------------------------
+export interface MailAccount {
+  id: string;
+  label: string;
+  host: string;
+  port: number;
+  encryption: string;
+  username: string;
+  fromAddress: string;
+  fromName?: string;
+  isActive: boolean;
+  /** Stored password can no longer be decrypted — it must be re-entered. */
+  decryptError?: boolean;
+  updatedAt: string;
+}
+
+export interface MailStatus {
+  /** account = a row is sending; legacy = the old MAIL_* settings are; none = nothing can. */
+  source: 'account' | 'legacy' | 'none';
+  legacyReady: boolean;
+}
+
+export interface MailAccountsState {
+  accounts: MailAccount[];
+  status: MailStatus;
+}
+
+/** The editable shape. `password` blank on an edit means "keep the stored one". */
+export interface MailAccountInput {
+  label: string;
+  host: string;
+  port: number;
+  encryption: string;
+  username: string;
+  password: string;
+  fromAddress: string;
+  fromName: string;
 }

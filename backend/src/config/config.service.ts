@@ -131,7 +131,10 @@ export class ConfigService implements OnModuleInit {
       id: g.id,
       title: g.title,
       blurb: g.blurb,
-      configured: this.hasAll(g.requiredKeys),
+      // null, not true: a group with nothing required cannot be "not
+      // configured", and a permanently green pill is just noise. The UI draws no
+      // pill at all for these.
+      configured: g.requiredKeys.length ? this.hasAll(g.requiredKeys) : null,
       fields: g.fields.map((f) => ({ ...f, state: fieldState(f) })),
     }));
 

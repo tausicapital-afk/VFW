@@ -123,12 +123,25 @@ Or just open it in a browser — same URL, and you get the status page
   deploy, the prober is not writing.
 - **"Not configured"** on a component means that server has no credentials for
   it — not an outage. As of 2026-07-15 production shows this for **Document
-  storage (`R2_*`) and Outbound email (`MAIL_*`)**: neither is set on the backend
-  service, so uploads and OTP/invite/reset emails cannot work there. Set them via
-  the admin System Config screen, or:
+  storage (`R2_*`) and Outbound email**: neither is set on the backend service,
+  so uploads and OTP/invite/reset emails cannot work there.
+
+  For **email**, the fix needs no variables and no redeploy: *Administration →
+  Configuration → Mail accounts → Add account*, then **Send test** on the row
+  before making it active. Mailboxes live in the database now, not in `MAIL_*`
+  (see `docs/email-and-otp.md`). To bootstrap one without clicking — note it must
+  run through `railway run` so it encrypts with production's key:
 
   ```bash
-  railway variable set --service backend MAIL_HOST=… MAIL_USERNAME=…
+  railway run --service backend npm run mail:add -- \
+    --label "VFW (cPanel)" --host mail.veeb.co.ke --port 465 --encryption ssl \
+    --user vfw@veeb.co.ke --from vfw@veeb.co.ke --activate
+  # password comes from MAIL_ACCOUNT_PASSWORD, to keep it out of shell history
+  ```
+
+  For **storage**, `R2_*` is still set on the service:
+
+  ```bash
   railway variables --service backend        # list what is set (values included)
   ```
 

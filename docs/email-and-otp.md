@@ -125,55 +125,74 @@ Each returns a full `Mail` with **both** an HTML and a plain-text body.
 
 ## Configuration
 
-SMTP can be set **two ways**, and the app resolves them in this order:
+Sending is owned by **mail accounts** — one row per mailbox in the `MailAccount`
+table, exactly one marked active. *Administration → Configuration → Mail
+accounts* is where an administrator adds them: name, host, port, encryption,
+username, password (**encrypted at rest**), from-address and an optional sender
+name. Changes take effect immediately, no redeploy, and each row has its own
+**Send test** button so a mailbox can be proven *before* it is made active.
 
-1. **In-app** — *Administration → Configuration → Email (SMTP)*. An administrator
-   sets host/port/username/password/from-address from the console; values are
-   saved to the database (the `ConfigSetting` table, the password **encrypted at
-   rest**) and take effect immediately, no redeploy. A **Send test email** button
-   proves it works. This is how a non-technical operator turns email on. See
-   `backend/src/config/`.
-2. **Environment variables** — the `MAIL_*` vars below. Real credentials live only
-   in gitignored `backend/.env`; `backend/.env.example` carries placeholders.
+Hold as many as you like and switch with one click. That is the point of the
+table: a key/value setting can only describe one mailbox, so a second account had
+nowhere to live and switching meant retyping four fields and losing the old ones.
 
-**Resolution is database value → environment variable → built-in default**, per
-key. So env vars still fully configure a fresh install, and the in-app screen
-overrides them per deployment. `EmailService` reads through `ConfigService`
-rather than `process.env` directly, and rebuilds its SMTP transport whenever a
-value changes.
+**Resolution order:**
+
+1. The **active `MailAccount` row**. The normal path.
+2. The **`MAIL_*` settings** below — but *only while the table is empty*, so a
+   deployment that predates mail accounts keeps sending untouched. Adding the
+   first account takes over from them permanently.
+
+If rows exist but the active one's password will not decrypt (the root key
+changed), `EmailService` returns 503 rather than falling back to `MAIL_*` —
+sending from a different mailbox than the screen names is worse than not sending.
+The row shows a decrypt error telling you to re-enter the password.
+
+`MAIL_*` still resolves **database `ConfigSetting` row → environment variable →
+default**, per key, and `EmailService` reads through `ConfigService` rather than
+`process.env` directly. It rebuilds its transport whenever either store changes.
 
 > **Common gotcha (this is what "email not configured on the server" means in
 > production).** The `MAIL_*` vars live in local `backend/.env`, which is
 > gitignored and **never ships to Railway** — so a fresh Railway backend has no
-> email config and every invite/OTP shows *"Email is not configured on this
-> server."* Fix it by either setting the `MAIL_*` vars on the Railway **backend**
-> service, or (once this build is deployed) filling them in under
-> *Administration → Configuration*.
+> mail account and no `MAIL_*`, and every invite/OTP shows *"Email is not
+> configured on this server."* Fix it by adding a mail account under
+> *Administration → Configuration*. No redeploy, no Railway variables.
 
-The `MAIL_*` variables:
+> **Gmail needs an App Password.** Google switched off plain-password SMTP in
+> 2022: the account password returns `535-5.7.8 Username and Password not
+> accepted` no matter how it is stored. Enable 2FA on the account, generate an
+> App Password for "Mail", and use that 16-character value. Gmail also rewrites
+> `From` to the authenticated address unless the alias is verified, and free
+> accounts cap around 500 recipients/day.
+
+The `MAIL_*` variables (the empty-table fallback, and the shared appearance
+settings — `MAIL_FROM_NAME`, `MAIL_BRAND_COLOUR`, `MAIL_SUPPORT_ADDRESS` and
+`APP_URL` still apply to every account):
 
 | Variable | Example | Purpose |
 |---|---|---|
-| `MAIL_HOST` | `mail.veeb.co.ke` | SMTP server |
+| `MAIL_HOST` | `mail.veeb.co.ke` | SMTP server — a **hostname**, never an email address |
 | `MAIL_PORT` | `465` | `465` = implicit TLS (ssl); `587` = STARTTLS |
-| `MAIL_USERNAME` | `patriotic@veeb.co.ke` | SMTP auth user |
+| `MAIL_USERNAME` | `vfw@veeb.co.ke` | SMTP auth user — the full mailbox address |
 | `MAIL_PASSWORD` | `••••••••` | SMTP auth password |
 | `MAIL_ENCRYPTION` | `ssl` | `ssl` \| `tls` \| `none` (auto-derives from port if unset) |
-| `MAIL_FROM_ADDRESS` | `patriotic@veeb.co.ke` | envelope From address |
-| `MAIL_FROM_NAME` | `Patriotic Payroll` | From name **and the brand name shown in every email** |
+| `MAIL_FROM_ADDRESS` | `vfw@veeb.co.ke` | envelope From address |
+| `MAIL_FROM_NAME` | `VFW Console` | **default** brand name, for accounts with no sender name of their own |
 | `MAIL_BRAND_COLOUR` | `#0C7A4D` | accent for header + buttons (optional) |
-| `MAIL_SUPPORT_ADDRESS` | `patriotic@veeb.co.ke` | shown in the footer (optional; defaults to From) |
+| `MAIL_SUPPORT_ADDRESS` | `vfw@veeb.co.ke` | shown in the footer (optional; defaults to the sending From) |
 | `APP_URL` | `https://app.example.com` | base for emailed links (reset, invite) |
 
-The transport is considered **configured** only when host, username, password and
-from-address are all present. `EmailService.send()` throws `503` otherwise — it
-never silently falls back to logging codes.
+Email is considered **configured** when an active mail account exists, or — with
+no accounts at all — when host, username, password and from-address all resolve.
+`EmailService.send()` throws `503` otherwise; it never silently falls back to
+logging codes.
 
-> **Brand-name note.** The brand shown inside every email is `MAIL_FROM_NAME`. It
-> is currently *"Patriotic Payroll"* (the shared SMTP mailbox), not *"VFW Console"*.
-> If emails should read "VFW Console" while still sending from the patriotic@
-> mailbox, split the display brand from the From name (add a dedicated brand env
-> var) rather than changing `MAIL_FROM_NAME`.
+> **Brand name.** Each account's **sender name** is the brand shown at the top of
+> its emails, so switching account switches the brand with it. `MAIL_FROM_NAME` is
+> only the default for accounts that leave it blank. This is what the old note
+> here asked for — a display brand separable from the mailbox — and it no longer
+> needs a dedicated env var.
 
 ### Production (Railway)
 

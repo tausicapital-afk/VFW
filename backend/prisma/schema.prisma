@@ -562,6 +562,53 @@ model ConfigSetting {
 }
 
 // ---------------------------------------------------------------------------
+// Mail accounts — the SMTP mailboxes the app can send from.
+//
+// The credentials for sending live HERE rather than in ConfigSetting, because
+// one key/value row per setting can only ever describe one mailbox: a second
+// account has nowhere to go, and switching means retyping four fields and
+// losing the old ones. One row per mailbox, exactly one marked `isActive`, and
+// switching sender is a single click.
+//
+// `password` is AES-256-GCM ciphertext (see config.crypto.ts) — never
+// plaintext, and never returned to the browser.
+//
+// The MAIL_* environment variables still work: when this table is EMPTY,
+// EmailService falls back to resolving MAIL_HOST/MAIL_USERNAME/… through
+// ConfigService, so an env-only deployment keeps sending untouched. The first
+// account created takes over.
+//
+// "Exactly one active" is enforced in MailAccountService.activate() inside a
+// transaction, not by a partial unique index: Prisma cannot express
+// `UNIQUE (isActive) WHERE isActive` in schema, so an index added by raw SQL
+// would read as drift on the next migrate.
+// ---------------------------------------------------------------------------
+model MailAccount {
+  id          String   @id @default(cuid())
+  // What an admin calls it in the picker — "VFW (cPanel)", "Tausi (Gmail)".
+  label       String
+  host        String
+  port        Int      @default(465)
+  // ssl | tls | none. A string, not an enum: adding a mode should not need a
+  // migration, and the value is validated on write.
+  encryption  String   @default("ssl")
+  username    String
+  password    String
+  fromAddress String
+  // Overrides MAIL_FROM_NAME as the brand shown at the top of every email, so
+  // switching account can also switch the brand. Blank = fall back to config.
+  fromName    String?
+  isActive    Boolean  @default(false)
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // The same mailbox on the same server twice is always a mistake.
+  @@unique([host, username])
+  @@index([isActive])
+}
+
+// ---------------------------------------------------------------------------
 // Messaging — team chat (DMs + groups). Real-time over WebSockets.
 //
 // This is NOT financial evidence: messages are deliberately kept out of

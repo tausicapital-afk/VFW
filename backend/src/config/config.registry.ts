@@ -11,8 +11,15 @@
  * one name. Add a field here and it is editable in the UI and honoured by the
  * resolver; nothing else has to change.
  *
- * WHAT BELONGS HERE: operational service credentials a business owner should be
- * able to set without a developer — SMTP and object storage.
+ * WHAT BELONGS HERE: operational settings a business owner should be able to set
+ * without a developer, where ONE value per deployment is the right shape —
+ * object storage credentials, email appearance, the app's public URL.
+ *
+ * WHAT MOVED OUT: the SMTP credentials. A mailbox is not one value per
+ * deployment — you may hold several and switch sender — so they live in the
+ * MailAccount table (see mail-account.service.ts). The MAIL_* keys are still
+ * honoured as a fallback while that table is empty, which is why ConfigService
+ * still resolves them even though they are no longer listed here.
  *
  * WHAT DELIBERATELY DOES NOT: the bootstrap/infra variables (DATABASE_URL,
  * JWT_SECRET, NODE_ENV, PORT, TRUST_PROXY_HOPS, CORS_ORIGIN, …). They are read
@@ -49,63 +56,22 @@ export interface ConfigGroup {
 export const CONFIG_GROUPS: ConfigGroup[] = [
   {
     id: 'email',
-    title: 'Email (SMTP)',
+    title: 'Email appearance & links',
     blurb:
-      'Outbound email — sign-up verification codes, password resets and invitations. ' +
-      'Until this is set, those flows fail rather than silently dropping the message.',
-    requiredKeys: ['MAIL_HOST', 'MAIL_USERNAME', 'MAIL_PASSWORD', 'MAIL_FROM_ADDRESS'],
+      'How every email looks and where its links point. These apply to all mail accounts — ' +
+      'the mailboxes themselves are managed above.',
+    // Nothing here is required: each field has a working default, and whether
+    // email can be sent at all is a property of the mail accounts, not of this
+    // group. An empty list also tells the UI not to draw a configured/not
+    // configured pill it would have no honest value for.
+    requiredKeys: [],
     fields: [
       {
-        key: 'MAIL_HOST',
-        label: 'SMTP server',
-        type: 'text',
-        placeholder: 'mail.yourdomain.com',
-        required: true,
-        help: 'The outgoing mail server from your email provider (cPanel, Google Workspace, SES, …).',
-      },
-      {
-        key: 'MAIL_PORT',
-        label: 'Port',
-        type: 'number',
-        placeholder: '465',
-        help: '465 for SSL, 587 for TLS/STARTTLS. Match your provider.',
-      },
-      {
-        key: 'MAIL_ENCRYPTION',
-        label: 'Encryption',
-        type: 'select',
-        options: ['ssl', 'tls', 'none'],
-        help: 'ssl for port 465, tls for 587. Leave on ssl if unsure.',
-      },
-      {
-        key: 'MAIL_USERNAME',
-        label: 'Username',
-        type: 'text',
-        placeholder: 'no-reply@yourdomain.com',
-        required: true,
-        help: 'The mailbox the app signs in to. Usually the full email address.',
-      },
-      {
-        key: 'MAIL_PASSWORD',
-        label: 'Password',
-        type: 'secret',
-        required: true,
-        help: 'The mailbox password. Stored encrypted; leave blank to keep the current one.',
-      },
-      {
-        key: 'MAIL_FROM_ADDRESS',
-        label: 'From address',
-        type: 'email',
-        placeholder: 'no-reply@yourdomain.com',
-        required: true,
-        help: 'The address recipients see. Usually the same as the username.',
-      },
-      {
         key: 'MAIL_FROM_NAME',
-        label: 'From name / brand',
+        label: 'Default brand name',
         type: 'text',
         placeholder: 'VFW Console',
-        help: 'The sender name, and the brand name shown at the top of every email.',
+        help: 'The brand shown at the top of every email, for accounts that do not set their own sender name.',
       },
       {
         key: 'MAIL_BRAND_COLOUR',
@@ -118,7 +84,7 @@ export const CONFIG_GROUPS: ConfigGroup[] = [
         key: 'MAIL_SUPPORT_ADDRESS',
         label: 'Support address',
         type: 'email',
-        help: 'Shown in the email footer. Defaults to the From address if left blank.',
+        help: "Shown in the email footer. Defaults to the sending account's from address if left blank.",
       },
       {
         key: 'APP_URL',

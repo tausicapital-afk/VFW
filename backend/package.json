@@ -11,6 +11,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
     "seed": "ts-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed.ts",
+    "mail:add": "ts-node scripts/add-mail-account.ts",
     "test": "jest",
     "release": "prisma migrate deploy && node dist/main.js"
   },
