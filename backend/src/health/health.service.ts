@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnApplicationShutdown, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnApplicationBootstrap,
+  OnApplicationShutdown,
+} from '@nestjs/common';
 import { EmailService } from '../common/email';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
@@ -117,7 +122,7 @@ async function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
 }
 
 @Injectable()
-export class HealthService implements OnModuleInit, OnApplicationShutdown {
+export class HealthService implements OnApplicationBootstrap, OnApplicationShutdown {
   private readonly log = new Logger(HealthService.name);
   private readonly latest = new Map<ComponentId, ProbeResult>();
   private cycleTimer?: NodeJS.Timeout;
@@ -131,7 +136,20 @@ export class HealthService implements OnModuleInit, OnApplicationShutdown {
     private readonly email: EmailService,
   ) {}
 
-  onModuleInit() {
+  /**
+   * onApplicationBootstrap, NOT onModuleInit, and that distinction is the whole
+   * point: Nest runs every module's onModuleInit before any bootstrap hook, so
+   * this is the first moment ConfigService and MailAccountService are guaranteed
+   * to have loaded their caches.
+   *
+   * From onModuleInit the boot probe raced them. It won often enough that a
+   * freshly deployed production — with a working, active mail account — reported
+   * "Outbound email: UNCONFIGURED" on the public status page for up to 15
+   * minutes (email's minIntervalMs), until the next cycle told the truth. The
+   * probe was reading an empty account cache and faithfully reporting what it
+   * saw. Observed in production 2026-07-15.
+   */
+  onApplicationBootstrap() {
     // Tests boot the whole AppModule. Left to itself the prober would open a
     // real SMTP connection to the configured mail host and write probe rows
     // into the test database on every boot — a test suite has no business
