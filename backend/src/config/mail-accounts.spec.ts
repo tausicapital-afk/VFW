@@ -141,6 +141,55 @@ describe('mail accounts', () => {
     expect(JSON.stringify(res)).toMatch(/hostname/i);
   });
 
+  // Resend needs an API key and a from-address; demanding an SMTP host for it
+  // would be asking for a value that has no meaning.
+  it('takes an HTTP provider with no host or username', async () => {
+    const res = await http(app)
+      .post('/api/admin/mail-accounts')
+      .set('Cookie', admin)
+      .send({
+        label: 'Resend',
+        provider: 'resend',
+        password: 're_test_key',
+        fromAddress: 'noreply@example.invalid',
+      })
+      .expect(201);
+
+    const created = (res.body.accounts as { provider: string; host: string; username: string }[])[0];
+    expect(created.provider).toBe('resend');
+    expect(created.host).toBe('');
+    expect(created.username).toBe('');
+  });
+
+  it('will not carry an SMTP password over as an API key', async () => {
+    const { accounts } = await add();
+    const res = await http(app)
+      .patch(`/api/admin/mail-accounts/${accounts[0].id}`)
+      .set('Cookie', admin)
+      .send({ provider: 'resend' }) // no new secret
+      .expect(400);
+
+    expect(JSON.stringify(res.body)).toMatch(/API key/i);
+  });
+
+  it('clears the SMTP fields when an account moves to an HTTP provider', async () => {
+    const { accounts } = await add();
+    const res = await http(app)
+      .patch(`/api/admin/mail-accounts/${accounts[0].id}`)
+      .set('Cookie', admin)
+      .send({ provider: 'resend', password: 're_new_key' })
+      .expect(200);
+
+    const row = (res.body.accounts as { provider: string; host: string; username: string }[])[0];
+    expect(row.provider).toBe('resend');
+    expect(row.host).toBe('');
+    expect(row.username).toBe('');
+  });
+
+  it('rejects a provider it does not know', async () => {
+    await add({ provider: 'carrier-pigeon' }, 400);
+  });
+
   it('will not delete the mailbox that is currently sending', async () => {
     await add();
     const { accounts } = await add({ label: 'Gmail', username: 'x@gmail.invalid', host: 'smtp.gmail.invalid' });

@@ -28,23 +28,31 @@ import { ConfigService } from './config.service';
  * rebuild a memoised transporter whose credentials changed under it.
  */
 
-/** A mailbox with its password decrypted — never leaves the server. */
-export interface SmtpAccount {
+/**
+ * A sending account with its secret decrypted — never leaves the server.
+ *
+ * `secret` is the SMTP password or the provider API key depending on
+ * `provider`; `host`/`port`/`encryption`/`username` are SMTP-only and blank for
+ * HTTP providers.
+ */
+export interface SendingAccount {
   id: string;
   label: string;
+  provider: string;
   host: string;
   port: number;
   encryption: string;
   username: string;
-  password: string;
+  secret: string;
   fromAddress: string;
   fromName?: string;
 }
 
-/** The browser-safe shape: everything except the password. */
+/** The browser-safe shape: everything except the secret. */
 export interface MailAccountView {
   id: string;
   label: string;
+  provider: string;
   host: string;
   port: number;
   encryption: string;
@@ -52,13 +60,14 @@ export interface MailAccountView {
   fromAddress: string;
   fromName?: string;
   isActive: boolean;
-  /** A stored password that can no longer be decrypted (root key rotated). */
+  /** A stored secret that can no longer be decrypted (root key rotated). */
   decryptError?: boolean;
   updatedAt: string;
 }
 
 export interface MailAccountInput {
   label?: string;
+  provider?: string;
   host?: string;
   port?: number;
   encryption?: string;
@@ -68,6 +77,9 @@ export interface MailAccountInput {
   fromName?: string;
 }
 
+export const PROVIDERS = ['smtp', 'resend'];
+/** Providers that talk HTTP over 443 and need no host/port/username. */
+export const HTTP_PROVIDERS = ['resend'];
 const ENCRYPTIONS = ['ssl', 'tls', 'none'];
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
@@ -113,38 +125,29 @@ export class MailAccountService implements OnModuleInit {
    * empty (EmailService then falls back to the MAIL_* env vars) or when the
    * active row's password will not decrypt.
    */
-  active(): SmtpAccount | undefined {
+  active(): SendingAccount | undefined {
     const row = this.cache.find((r) => r.isActive);
-    if (!row) return undefined;
-    const password = this.decrypt(row);
-    if (!password) return undefined;
-    return {
-      id: row.id,
-      label: row.label,
-      host: row.host,
-      port: row.port,
-      encryption: row.encryption,
-      username: row.username,
-      password,
-      fromAddress: row.fromAddress,
-      fromName: row.fromName ?? undefined,
-    };
+    return row ? this.resolved(row) : undefined;
   }
 
   /** A specific mailbox, for the per-row "Send test" button. */
-  byId(id: string): SmtpAccount | undefined {
+  byId(id: string): SendingAccount | undefined {
     const row = this.cache.find((r) => r.id === id);
-    if (!row) return undefined;
-    const password = this.decrypt(row);
-    if (!password) return undefined;
+    return row ? this.resolved(row) : undefined;
+  }
+
+  private resolved(row: Prisma.MailAccountGetPayload<object>): SendingAccount | undefined {
+    const secret = this.decrypt(row);
+    if (!secret) return undefined;
     return {
       id: row.id,
       label: row.label,
+      provider: row.provider,
       host: row.host,
       port: row.port,
       encryption: row.encryption,
       username: row.username,
-      password,
+      secret,
       fromAddress: row.fromAddress,
       fromName: row.fromName ?? undefined,
     };
@@ -159,6 +162,7 @@ export class MailAccountService implements OnModuleInit {
     return this.cache.map((r) => ({
       id: r.id,
       label: r.label,
+      provider: r.provider,
       host: r.host,
       port: r.port,
       encryption: r.encryption,
@@ -197,27 +201,45 @@ export class MailAccountService implements OnModuleInit {
     return { source: 'none', legacyReady };
   }
 
-  private validate(input: MailAccountInput, requireAll: boolean) {
+  /**
+   * `requireAll` is create-vs-edit: create needs the full set for its provider,
+   * an edit only needs to be self-consistent. `provider` decides WHICH fields
+   * are the full set — demanding an SMTP host for a Resend account would be
+   * asking for a value that has no meaning.
+   */
+  private validate(input: MailAccountInput, requireAll: boolean, provider: string) {
     const need = (v: string | undefined, name: string) => {
       if (requireAll && !v?.trim()) throw new BadRequestException(`${name} is required`);
     };
+    if (!PROVIDERS.includes(provider)) {
+      throw new BadRequestException(`Provider must be one of: ${PROVIDERS.join(', ')}`);
+    }
     need(input.label, 'Name');
-    need(input.host, 'SMTP server');
-    need(input.username, 'Username');
-    need(input.password, 'Password');
     need(input.fromAddress, 'From address');
 
-    if (input.host?.includes('@')) {
-      throw new BadRequestException(
-        'SMTP server must be a hostname like mail.yourdomain.com, not an email address',
-      );
+    if (HTTP_PROVIDERS.includes(provider)) {
+      need(input.password, 'API key');
+    } else {
+      need(input.host, 'SMTP server');
+      need(input.username, 'Username');
+      need(input.password, 'Password');
+
+      if (input.host?.includes('@')) {
+        throw new BadRequestException(
+          'SMTP server must be a hostname like mail.yourdomain.com, not an email address',
+        );
+      }
+      if (
+        input.port !== undefined &&
+        (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535)
+      ) {
+        throw new BadRequestException('Port must be a whole number between 1 and 65535');
+      }
+      if (input.encryption !== undefined && !ENCRYPTIONS.includes(input.encryption)) {
+        throw new BadRequestException(`Encryption must be one of: ${ENCRYPTIONS.join(', ')}`);
+      }
     }
-    if (input.port !== undefined && (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535)) {
-      throw new BadRequestException('Port must be a whole number between 1 and 65535');
-    }
-    if (input.encryption !== undefined && !ENCRYPTIONS.includes(input.encryption)) {
-      throw new BadRequestException(`Encryption must be one of: ${ENCRYPTIONS.join(', ')}`);
-    }
+
     if (input.fromAddress?.trim() && !EMAIL_RE.test(input.fromAddress.trim())) {
       throw new BadRequestException('From address must be a valid email address');
     }
@@ -229,17 +251,22 @@ export class MailAccountService implements OnModuleInit {
    * "make active" step to make mail work.
    */
   async create(input: MailAccountInput, actor: AuthUser): Promise<MailAccountView[]> {
-    this.validate(input, true);
+    const provider = input.provider?.trim() || 'smtp';
+    this.validate(input, true, provider);
+    const http = HTTP_PROVIDERS.includes(provider);
 
-    const row = await this.prisma.$transaction(async (tx) => {
+    await this.prisma.$transaction(async (tx) => {
       const first = (await tx.mailAccount.count()) === 0;
       const created = await tx.mailAccount.create({
         data: {
           label: input.label!.trim(),
-          host: input.host!.trim(),
-          port: input.port ?? 465,
-          encryption: input.encryption ?? 'ssl',
-          username: input.username!.trim(),
+          provider,
+          // An HTTP provider has no host/port/username. Store them blank rather
+          // than letting a stale SMTP value sit in the row implying otherwise.
+          host: http ? '' : input.host!.trim(),
+          port: http ? 465 : (input.port ?? 465),
+          encryption: http ? 'ssl' : (input.encryption ?? 'ssl'),
+          username: http ? '' : input.username!.trim(),
           password: encryptSecret(input.password!),
           fromAddress: input.fromAddress!.trim(),
           fromName: input.fromName?.trim() || null,
@@ -251,12 +278,13 @@ export class MailAccountService implements OnModuleInit {
         {
           actorId: actor.id,
           action: 'MAIL_ACCOUNT_CREATED',
-          detail: `Mail account added: ${created.label} (${created.username})`,
-          payload: { id: created.id, host: created.host, activated: first },
+          // fromAddress, not username: an HTTP provider has no username, and the
+          // from-address is what identifies the sender for every provider.
+          detail: `Mail account added: ${created.label} (${created.fromAddress}, via ${created.provider})`,
+          payload: { id: created.id, provider: created.provider, host: created.host, activated: first },
         },
         tx,
       );
-      return created;
     });
 
     await this.bump();
@@ -267,17 +295,37 @@ export class MailAccountService implements OnModuleInit {
   async update(id: string, input: MailAccountInput, actor: AuthUser): Promise<MailAccountView[]> {
     const existing = this.cache.find((r) => r.id === id);
     if (!existing) throw new NotFoundException('That mail account no longer exists');
-    this.validate(input, false);
+    // An edit that does not mention the provider keeps the stored one.
+    const provider = input.provider?.trim() || existing.provider;
+    // Blank secret normally means "keep the stored one", but the stored one is a
+    // different KIND of credential once the provider changes — an SMTP password
+    // is not an API key. Silently carrying it over would produce an account that
+    // looks configured and fails on the first real send.
+    if (provider !== existing.provider && !input.password?.trim()) {
+      throw new BadRequestException(
+        `Changing this account to ${provider} needs its ` +
+          `${HTTP_PROVIDERS.includes(provider) ? 'API key' : 'password'} — the stored one belongs to ${existing.provider}.`,
+      );
+    }
+    this.validate(input, false, provider);
+    const http = HTTP_PROVIDERS.includes(provider);
 
-    const data: Prisma.MailAccountUpdateInput = { updatedById: actor.id };
+    const data: Prisma.MailAccountUpdateInput = { updatedById: actor.id, provider };
     if (input.label?.trim()) data.label = input.label.trim();
-    if (input.host?.trim()) data.host = input.host.trim();
-    if (input.port !== undefined) data.port = input.port;
-    if (input.encryption) data.encryption = input.encryption;
-    if (input.username?.trim()) data.username = input.username.trim();
     if (input.password?.trim()) data.password = encryptSecret(input.password);
     if (input.fromAddress?.trim()) data.fromAddress = input.fromAddress.trim();
     if (input.fromName !== undefined) data.fromName = input.fromName.trim() || null;
+    if (http) {
+      // Switching an account to an HTTP provider clears the SMTP-only fields, so
+      // the row cannot keep claiming a host it no longer dials.
+      data.host = '';
+      data.username = '';
+    } else {
+      if (input.host?.trim()) data.host = input.host.trim();
+      if (input.port !== undefined) data.port = input.port;
+      if (input.encryption) data.encryption = input.encryption;
+      if (input.username?.trim()) data.username = input.username.trim();
+    }
 
     await this.prisma.$transaction(async (tx) => {
       await tx.mailAccount.update({ where: { id }, data });

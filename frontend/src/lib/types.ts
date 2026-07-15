@@ -440,6 +440,8 @@ export interface ConfigTestResult {
 // ---------------------------------------------------------------------------
 export interface MailAccount {
   id: string;
+  /** smtp = a mailbox dialled directly; resend = an HTTP API over 443. */
+  provider: string;
   label: string;
   host: string;
   port: number;
@@ -448,7 +450,7 @@ export interface MailAccount {
   fromAddress: string;
   fromName?: string;
   isActive: boolean;
-  /** Stored password can no longer be decrypted — it must be re-entered. */
+  /** Stored secret can no longer be decrypted — it must be re-entered. */
   decryptError?: boolean;
   updatedAt: string;
 }
@@ -464,9 +466,14 @@ export interface MailAccountsState {
   status: MailStatus;
 }
 
-/** The editable shape. `password` blank on an edit means "keep the stored one". */
+/**
+ * The editable shape. `password` blank on an edit means "keep the stored one" —
+ * except when the provider changes, where the server demands the new credential
+ * rather than carrying an SMTP password over as an API key.
+ */
 export interface MailAccountInput {
   label: string;
+  provider: string;
   host: string;
   port: number;
   encryption: string;

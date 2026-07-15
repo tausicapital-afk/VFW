@@ -19,6 +19,7 @@ export class UpdateConfigDto {
  */
 export class MailAccountDto {
   @IsOptional() @IsString() label?: string;
+  @IsOptional() @IsString() provider?: string;
   @IsOptional() @IsString() host?: string;
   @IsOptional() @IsInt() @Min(1) @Max(65535) port?: number;
   @IsOptional() @IsString() encryption?: string;

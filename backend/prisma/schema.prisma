@@ -587,12 +587,26 @@ model MailAccount {
   id          String   @id @default(cuid())
   // What an admin calls it in the picker — "VFW (cPanel)", "Tausi (Gmail)".
   label       String
-  host        String
+  // smtp | resend. How the message leaves the building.
+  //
+  // This exists because the host decides what is possible: Railway silently
+  // drops every outbound SMTP port (measured — see docs/email-and-otp.md), so on
+  // that platform `smtp` can never deliver no matter how correct the mailbox is,
+  // while `resend` goes over 443 like any other API call. Keeping both means the
+  // cPanel mailbox stays configured and usable the moment the app runs somewhere
+  // that permits SMTP.
+  provider    String   @default("smtp")
+  // SMTP-only. Ignored (and left blank) for HTTP providers.
+  host        String   @default("")
   port        Int      @default(465)
   // ssl | tls | none. A string, not an enum: adding a mode should not need a
   // migration, and the value is validated on write.
   encryption  String   @default("ssl")
-  username    String
+  // SMTP: the login. HTTP providers: unused.
+  username    String   @default("")
+  // The one secret, AES-256-GCM ciphertext either way: the SMTP password, or the
+  // provider API key. One encrypted column rather than two, because it is the
+  // same thing — the credential that proves we may send.
   password    String
   fromAddress String
   // Overrides MAIL_FROM_NAME as the brand shown at the top of every email, so
@@ -603,8 +617,10 @@ model MailAccount {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  // The same mailbox on the same server twice is always a mistake.
-  @@unique([host, username])
+  // The same mailbox on the same server twice is always a mistake. Scoped by
+  // provider so an SMTP and an HTTP account may share a from-address (they will:
+  // the same mailbox, reached two different ways).
+  @@unique([provider, host, username, fromAddress])
   @@index([isActive])
 }
 

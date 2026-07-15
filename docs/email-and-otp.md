@@ -125,12 +125,49 @@ Each returns a full `Mail` with **both** an HTML and a plain-text body.
 
 ## Configuration
 
-Sending is owned by **mail accounts** — one row per mailbox in the `MailAccount`
+> ## ⚠️ Railway blocks SMTP. Read this before debugging any mail failure.
+>
+> Measured 2026-07-15 from inside the running Railway container:
+>
+> ```
+> mail.veeb.co.ke:465  -> TIMEOUT (silently dropped)
+> mail.veeb.co.ke:587  -> TIMEOUT (silently dropped)
+> smtp.gmail.com:465   -> ETIMEDOUT
+> api.github.com:443   -> CONNECTED in 73ms
+> ```
+>
+> Railway black-holes every outbound SMTP port on this plan. General egress is
+> fine. **No SMTP credential can ever work in production as hosted** — this is not
+> a wrong password, port or encryption mode, and the same credentials authenticate
+> in 1.7s from a normal machine.
+>
+> **Read the symptom:** a ~60s hang then 504/503 is the *network*. An "invalid
+> login" is the *credential*. Do not regenerate cPanel passwords over a hang.
+>
+> Production must therefore use an **HTTP provider** (`resend`), which goes over
+> 443 like any other API call. The SMTP accounts stay valid and useful for any
+> host that permits SMTP.
+
+Sending is owned by **mail accounts** — one row per sender in the `MailAccount`
 table, exactly one marked active. *Administration → Configuration → Mail
-accounts* is where an administrator adds them: name, host, port, encryption,
-username, password (**encrypted at rest**), from-address and an optional sender
-name. Changes take effect immediately, no redeploy, and each row has its own
-**Send test** button so a mailbox can be proven *before* it is made active.
+accounts* is where an administrator adds them. Each row picks a **provider**:
+
+- **`smtp`** — dial a mailbox directly (cPanel, Gmail, SES-SMTP). Needs host,
+  port, encryption, username, password.
+- **`resend`** — POST over HTTPS to the Resend API. Needs only an API key and a
+  from-address; host/port/username are meaningless and stored blank.
+
+Either way the secret is **encrypted at rest** and never returned to the browser.
+Changes take effect immediately, no redeploy, and each row has its own **Send
+test** button so a sender can be proven *before* it is made active.
+
+Adding a provider is one branch in `EmailService.deliver()` — everything above
+it (the template, the builders, every caller) is provider-blind.
+
+> **Resend needs a verified domain.** Until the sending domain has its DNS
+> records in Resend, it will only accept mail to the account owner's own address,
+> and a send from an unverified domain fails **403** — distinct from **401** for a
+> bad key, so the error text tells you which screen to go to.
 
 Hold as many as you like and switch with one click. That is the point of the
 table: a key/value setting can only describe one mailbox, so a second account had
@@ -141,7 +178,8 @@ nowhere to live and switching meant retyping four fields and losing the old ones
 1. The **active `MailAccount` row**. The normal path.
 2. The **`MAIL_*` settings** below — but *only while the table is empty*, so a
    deployment that predates mail accounts keeps sending untouched. Adding the
-   first account takes over from them permanently.
+   first account takes over from them permanently. This fallback is always SMTP,
+   so on Railway it can never deliver.
 
 If rows exist but the active one's password will not decrypt (the root key
 changed), `EmailService` returns 503 rather than falling back to `MAIL_*` —

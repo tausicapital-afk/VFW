@@ -2,7 +2,7 @@ import { Global, Injectable, Logger, Module, ServiceUnavailableException } from 
 import * as nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
 import { ConfigService } from '../config/config.service';
-import { MailAccountService, SmtpAccount } from '../config/mail-account.service';
+import { MailAccountService, SendingAccount } from '../config/mail-account.service';
 
 /**
  * Outbound email — one transport, one global template, and one fallback:
@@ -215,11 +215,80 @@ function textLayout(lines: string[]): string {
 }
 
 /** 465 is implicit TLS (secure); 587/25 start plaintext and upgrade via STARTTLS. */
-function isSecure(account: SmtpAccount): boolean {
+function isSecure(account: SendingAccount): boolean {
   const enc = account.encryption?.toLowerCase();
   if (enc === 'ssl') return true;
   if (enc === 'tls' || enc === 'none') return false;
   return account.port === 465;
+}
+
+/**
+ * Resend over HTTPS.
+ *
+ * Why an HTTP provider exists at all: the host decides what is possible. Railway
+ * silently drops every outbound SMTP port — measured from inside the container,
+ * `mail.veeb.co.ke:465` and `:587` and `smtp.gmail.com:465` all time out while
+ * `api.github.com:443` connects in 73ms. No SMTP credential can work there, so
+ * "fix the mailbox settings" is the wrong instinct: a 60-second hang is the
+ * network, an "invalid login" is the credential.
+ *
+ * Called through global fetch (Node 20 in the container), so this adds no
+ * dependency: it is one POST to a JSON API.
+ */
+const RESEND_ENDPOINT = 'https://api.resend.com/emails';
+
+/** Lift the useful sentence out of Resend's error body; fall back to the status. */
+async function resendError(res: Response): Promise<string> {
+  let detail = '';
+  try {
+    const body = (await res.json()) as { message?: string; name?: string };
+    detail = body.message || body.name || '';
+  } catch {
+    // Non-JSON body (a proxy error page, say) — the status is all we have.
+  }
+  // 401 and 403 are different problems and must not be flattened: a bad key
+  // needs a new key, an unverified domain needs DNS records. Telling an admin
+  // "rejected the API key" when the key is fine sends them to the wrong screen.
+  if (res.status === 401) {
+    return `Resend rejected the API key${detail ? `: ${detail}` : ''}`;
+  }
+  if (res.status === 403 || res.status === 422) {
+    return `Resend refused the message${detail ? `: ${detail}` : ''} (usually the sending domain is not verified)`;
+  }
+  return `Resend returned ${res.status}${detail ? `: ${detail}` : ''}`;
+}
+
+async function resendSend(account: SendingAccount, mail: Mail, from: string): Promise<void> {
+  const res = await fetch(RESEND_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${account.secret}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from,
+      to: [mail.to],
+      subject: mail.subject,
+      html: mail.html,
+      text: mail.text,
+    }),
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!res.ok) throw new Error(await resendError(res));
+}
+
+/**
+ * Prove the key works without sending. Resend has no dedicated ping, so this
+ * lists domains — the cheapest authenticated GET. A 200 means the key is live;
+ * it does NOT prove the from-address's domain is verified, which is why the test
+ * button sends a real message rather than stopping here.
+ */
+async function resendVerify(account: SendingAccount): Promise<void> {
+  const res = await fetch('https://api.resend.com/domains', {
+    headers: { Authorization: `Bearer ${account.secret}` },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) throw new Error(await resendError(res));
 }
 
 @Injectable()
@@ -249,7 +318,7 @@ export class EmailService {
    * active is worse than not sending — the admin gets a 503 and a decrypt error
    * on the row, which points at the real problem.
    */
-  private resolve(): SmtpAccount | undefined {
+  private resolve(): SendingAccount | undefined {
     const active = this.accounts.active();
     if (active) return active;
     if (this.accounts.any) return undefined;
@@ -264,17 +333,18 @@ export class EmailService {
     return {
       id: 'env',
       label: 'Server environment',
+      provider: 'smtp',
       host,
       port,
       encryption: this.config.get('MAIL_ENCRYPTION')?.toLowerCase() ?? (port === 465 ? 'ssl' : 'tls'),
       username,
-      password,
+      secret: password,
       fromAddress,
       fromName: this.config.get('MAIL_FROM_NAME'),
     };
   }
 
-  private fromHeader(account: SmtpAccount): string {
+  private fromHeader(account: SendingAccount): string {
     return `${account.fromName || brandName()} <${account.fromAddress}>`;
   }
 
@@ -293,16 +363,16 @@ export class EmailService {
     return Boolean(this.resolve());
   }
 
-  private buildTransport(account: SmtpAccount): Transporter {
+  private buildTransport(account: SendingAccount): Transporter {
     return nodemailer.createTransport({
       host: account.host,
       port: account.port,
       secure: isSecure(account),
-      auth: { user: account.username, pass: account.password },
+      auth: { user: account.username, pass: account.secret },
     });
   }
 
-  private transportFor(account: SmtpAccount): Transporter {
+  private transportFor(account: SendingAccount): Transporter {
     // Rebuild when the admin switches account or edits a credential, so a saved
     // change takes effect on the next send without a restart. Both version
     // counters bump on every write to their store.
@@ -312,6 +382,26 @@ export class EmailService {
       this.transporterKey = key;
     }
     return this.transporter;
+  }
+
+  /**
+   * The one place a provider is chosen. Everything above this — the template,
+   * the builders, the callers — is provider-blind, which is the point: adding
+   * Mailgun later is another branch here and nothing else.
+   */
+  private async deliver(account: SendingAccount, mail: Mail): Promise<void> {
+    const from = this.fromHeader(account);
+    if (account.provider === 'resend') {
+      await resendSend(account, mail, from);
+      return;
+    }
+    await this.transportFor(account).sendMail({
+      from,
+      to: mail.to,
+      subject: mail.subject,
+      text: mail.text,
+      html: mail.html,
+    });
   }
 
   /**
@@ -326,6 +416,10 @@ export class EmailService {
   async verify(): Promise<void> {
     const account = this.resolve();
     if (!account) throw new EmailNotConfiguredError();
+    if (account.provider === 'resend') {
+      await resendVerify(account);
+      return;
+    }
     await this.buildTransport(account).verify();
   }
 
@@ -334,13 +428,7 @@ export class EmailService {
     if (!account) throw new EmailNotConfiguredError();
 
     try {
-      await this.transportFor(account).sendMail({
-        from: this.fromHeader(account),
-        to: mail.to,
-        subject: mail.subject,
-        text: mail.text,
-        html: mail.html,
-      });
+      await this.deliver(account, mail);
     } catch (err) {
       // The address is not logged: it is a credential-adjacent identifier and
       // this line may end up in a shared log sink.
@@ -365,8 +453,14 @@ export class EmailService {
     const account = accountId ? this.accounts.byId(accountId) : this.resolve();
     if (!account) throw new EmailNotConfiguredError();
 
-    const transport = this.buildTransport(account);
-    await transport.verify();
+    // Prove the credential before composing anything. For SMTP this is the
+    // handshake; for Resend it is an authenticated GET. Either way its error is
+    // allowed through — that is the whole value of a test.
+    if (account.provider === 'resend') {
+      await resendVerify(account);
+    } else {
+      await this.buildTransport(account).verify();
+    }
 
     const mail = withBrand(account.fromName, () => {
       const first = esc((name || '').split(' ')[0] || 'there');
@@ -390,9 +484,9 @@ export class EmailService {
     });
 
     try {
-      await transport.sendMail({ from: this.fromHeader(account), ...mail });
+      await this.deliver(account, mail);
     } catch (err) {
-      this.log.error(`SMTP test send failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.log.error(`Test send failed: ${err instanceof Error ? err.message : String(err)}`);
       throw new ServiceUnavailableException(
         err instanceof Error ? err.message : 'The test email could not be sent',
       );

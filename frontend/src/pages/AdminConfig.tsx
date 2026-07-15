@@ -55,9 +55,13 @@ export function ConfigTab() {
 // ---------------------------------------------------------------------------
 
 const BLANK: MailAccountInput = {
-  label: '', host: '', port: 465, encryption: 'ssl',
+  label: '', provider: 'smtp', host: '', port: 465, encryption: 'ssl',
   username: '', password: '', fromAddress: '', fromName: '',
 };
+
+/** Providers that talk HTTP over 443 — no host, port, encryption or username. */
+const HTTP_PROVIDERS = ['resend'];
+const isHttp = (provider: string) => HTTP_PROVIDERS.includes(provider);
 
 function MailAccountsCard() {
   const qc = useQueryClient();
@@ -200,7 +204,10 @@ function MailAccountRow({
           {account.isActive && <span className="pill APPROVED" style={{ marginLeft: 8 }}>Active</span>}
         </div>
         <div className="sm mut mono" style={{ wordBreak: 'break-all' }}>
-          {account.fromAddress} · {account.host}:{account.port} {account.encryption}
+          {account.fromAddress} ·{' '}
+          {isHttp(account.provider)
+            ? `${account.provider} (HTTPS)`
+            : `${account.host}:${account.port} ${account.encryption}`}
         </div>
         {account.decryptError && (
           <div className="note bad" style={{ marginTop: 8 }}>
@@ -233,7 +240,7 @@ function MailAccountForm({
   const [f, setF] = useState<MailAccountInput>(
     account
       ? {
-          label: account.label, host: account.host, port: account.port,
+          label: account.label, provider: account.provider, host: account.host, port: account.port,
           encryption: account.encryption, username: account.username,
           password: '', fromAddress: account.fromAddress, fromName: account.fromName ?? '',
         }
@@ -243,7 +250,16 @@ function MailAccountForm({
     setF((p) => ({ ...p, [k]: k === 'port' ? Number(e.target.value) : e.target.value }));
 
   const isNew = !account;
-  const complete = f.label && f.host && f.username && f.fromAddress && (isNew ? f.password : true);
+  const http = isHttp(f.provider);
+  // Changing an existing account's provider swaps which credential it needs, so
+  // the server insists on a new one — mirror that here rather than letting the
+  // admin submit into a 400.
+  const providerChanged = !isNew && account!.provider !== f.provider;
+  const needsSecret = isNew || providerChanged;
+  const complete =
+    f.label && f.fromAddress &&
+    (http || (f.host && f.username)) &&
+    (needsSecret ? f.password : true);
 
   return (
     <div style={{ padding: '12px 0 4px 30px' }}>
@@ -254,40 +270,59 @@ function MailAccountForm({
           <div className="help">What you call this mailbox here. Recipients never see it.</div>
         </div>
         <div className="f">
-          <label>SMTP server</label>
-          <input value={f.host} onChange={set('host')} placeholder="mail.yourdomain.com" />
-          <div className="help">A hostname — not an email address. cPanel: mail.yourdomain.com. Gmail: smtp.gmail.com.</div>
-        </div>
-        <div className="f">
-          <label>Port</label>
-          <input type="number" value={f.port} onChange={set('port')} placeholder="465" />
-          <div className="help">465 for SSL, 587 for TLS/STARTTLS.</div>
-        </div>
-        <div className="f">
-          <label>Encryption</label>
-          <select value={f.encryption} onChange={set('encryption')}>
-            <option value="ssl">ssl</option>
-            <option value="tls">tls</option>
-            <option value="none">none</option>
+          <label>Send using</label>
+          <select value={f.provider} onChange={set('provider')}>
+            <option value="smtp">SMTP mailbox (cPanel, Gmail, …)</option>
+            <option value="resend">Resend (HTTP API)</option>
           </select>
-          <div className="help">ssl for port 465, tls for 587.</div>
+          <div className="help">
+            {http
+              ? 'Sends over HTTPS — works on hosts that block SMTP, like Railway.'
+              : 'Dials the mail server directly. Blocked on some hosts (Railway drops all SMTP ports).'}
+          </div>
         </div>
+        {!http && (
+          <>
+            <div className="f">
+              <label>SMTP server</label>
+              <input value={f.host} onChange={set('host')} placeholder="mail.yourdomain.com" />
+              <div className="help">A hostname — not an email address. cPanel: mail.yourdomain.com. Gmail: smtp.gmail.com.</div>
+            </div>
+            <div className="f">
+              <label>Port</label>
+              <input type="number" value={f.port} onChange={set('port')} placeholder="465" />
+              <div className="help">465 for SSL, 587 for TLS/STARTTLS.</div>
+            </div>
+            <div className="f">
+              <label>Encryption</label>
+              <select value={f.encryption} onChange={set('encryption')}>
+                <option value="ssl">ssl</option>
+                <option value="tls">tls</option>
+                <option value="none">none</option>
+              </select>
+              <div className="help">ssl for port 465, tls for 587.</div>
+            </div>
+            <div className="f">
+              <label>Username</label>
+              <input value={f.username} onChange={set('username')} placeholder="no-reply@yourdomain.com" />
+              <div className="help">The mailbox the app signs in to — usually the full email address.</div>
+            </div>
+          </>
+        )}
         <div className="f">
-          <label>Username</label>
-          <input value={f.username} onChange={set('username')} placeholder="no-reply@yourdomain.com" />
-          <div className="help">The mailbox the app signs in to — usually the full email address.</div>
-        </div>
-        <div className="f">
-          <label>Password</label>
+          <label>{http ? 'API key' : 'Password'}</label>
           <input
             type="password"
             autoComplete="new-password"
             value={f.password}
             onChange={set('password')}
-            placeholder={isNew ? '' : '•••••••• (set — leave blank to keep)'}
+            placeholder={needsSecret ? (http ? 're_…' : '') : '•••••••• (set — leave blank to keep)'}
           />
           <div className="help">
-            Stored encrypted. Gmail needs a 16-character App Password, not the account password.
+            {http
+              ? 'Your Resend API key (starts re_). Stored encrypted.'
+              : 'Stored encrypted. Gmail needs a 16-character App Password, not the account password.'}
+            {providerChanged && ' Required — the stored one belongs to the old provider.'}
           </div>
         </div>
         <div className="f">

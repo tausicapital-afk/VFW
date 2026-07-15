@@ -19,6 +19,11 @@
  *     --label "VFW (cPanel)" --host mail.veeb.co.ke --port 465 --encryption ssl \
  *     --user vfw@veeb.co.ke --from vfw@veeb.co.ke --from-name "VFW Console" --activate
  *
+ * An HTTP provider needs no host, port or username — just a key and a sender:
+ *
+ *   railway run --service backend npm run mail:add -- \
+ *     --provider resend --label "Resend" --from noreply@veeb.co.ke --activate
+ *
  * The password is read from MAIL_ACCOUNT_PASSWORD if set, so it need not go into
  * your shell history; --password is accepted as a fallback. Re-running with the
  * same --host and --user updates that account rather than failing on the unique
@@ -38,27 +43,36 @@ function arg(name: string): string | undefined {
 }
 const flag = (name: string) => process.argv.includes(`--${name}`);
 
+const HTTP_PROVIDERS = ['resend'];
+
 async function main() {
+  const provider = arg('provider') ?? 'smtp';
+  const http = HTTP_PROVIDERS.includes(provider);
   const label = arg('label');
-  const host = arg('host');
-  const username = arg('user');
-  const fromAddress = arg('from') ?? username;
+  const host = http ? '' : arg('host');
+  const username = http ? '' : arg('user');
+  const fromAddress = arg('from') ?? (http ? undefined : username);
   const password = process.env.MAIL_ACCOUNT_PASSWORD?.trim() || arg('password');
-  const port = Number(arg('port') ?? 465);
-  const encryption = arg('encryption') ?? 'ssl';
+  const port = http ? 465 : Number(arg('port') ?? 465);
+  const encryption = http ? 'ssl' : (arg('encryption') ?? 'ssl');
   const fromName = arg('from-name');
 
-  const missing = Object.entries({ label, host, user: username, password })
+  // An HTTP provider has no host or username to require — asking for them would
+  // be asking for values with no meaning.
+  const required: Record<string, string | undefined> = http
+    ? { label, from: fromAddress, password }
+    : { label, host, user: username, password };
+  const missing = Object.entries(required)
     .filter(([, v]) => !v)
     .map(([k]) => `--${k}`);
   if (missing.length) {
     console.error(
       `Missing: ${missing.join(', ')}\n` +
-        `(the password may come from MAIL_ACCOUNT_PASSWORD instead of --password)`,
+        `(the password/API key may come from MAIL_ACCOUNT_PASSWORD instead of --password)`,
     );
     process.exit(1);
   }
-  if (host!.includes('@')) {
+  if (host?.includes('@')) {
     console.error(`--host must be a hostname like mail.veeb.co.ke, not an email address`);
     process.exit(1);
   }
@@ -72,17 +86,25 @@ async function main() {
 
   const data = {
     label: label!,
-    host: host!,
+    provider,
+    host: host ?? '',
     port,
     encryption,
-    username: username!,
+    username: username ?? '',
     password: encryptSecret(password!),
     fromAddress: fromAddress!,
     fromName: fromName ?? null,
   };
 
   const account = await prisma.mailAccount.upsert({
-    where: { host_username: { host: host!, username: username! } },
+    where: {
+      provider_host_username_fromAddress: {
+        provider,
+        host: host ?? '',
+        username: username ?? '',
+        fromAddress: fromAddress!,
+      },
+    },
     create: data,
     update: data,
   });
@@ -98,9 +120,12 @@ async function main() {
   }
 
   const all = await prisma.mailAccount.findMany({ orderBy: { createdAt: 'asc' } });
-  console.log(`Saved "${account.label}" (${account.username}). Mail accounts now:`);
+  console.log(`Saved "${account.label}" (${account.fromAddress}). Mail accounts now:`);
   for (const a of all) {
-    console.log(`  ${a.isActive ? '●' : '○'} ${a.label} — ${a.fromAddress} via ${a.host}:${a.port} ${a.encryption}`);
+    const via = HTTP_PROVIDERS.includes(a.provider)
+      ? `${a.provider} (HTTPS)`
+      : `${a.host}:${a.port} ${a.encryption}`;
+    console.log(`  ${a.isActive ? '●' : '○'} ${a.label} — ${a.fromAddress} via ${via}`);
   }
   if (!all.some((a) => a.isActive)) {
     console.log('\nNothing is active yet — no email will send. Re-run with --activate.');
