@@ -56,6 +56,36 @@ const RELAY_TOKEN = 'CHANGE_ME_TO_A_LONG_RANDOM_STRING';
 /** Only these domains may appear in the From address. */
 const ALLOWED_FROM_DOMAINS = ['veeb.co.ke'];
 
+/**
+ * How this box hands the message to the mail server.
+ *
+ * PHP's mail() is disabled on this host (confirmed live: the relay answered
+ * "PHP mail() is disabled" on 2026-07-15), which many cPanel providers do to
+ * force authenticated SMTP. So the relay speaks SMTP itself.
+ *
+ * This connection is LOCAL to this box — the same handshake that authenticates
+ * in ~1.7s from any normal machine. It has nothing to do with the Railway block
+ * that started all this: Railway cannot reach an SMTP port, but this server can,
+ * which is the entire point of the relay sitting here.
+ *
+ * Leave SMTP_HOST empty to use mail() instead, on a host where it works.
+ */
+const SMTP_HOST = 'mail.veeb.co.ke';
+const SMTP_PORT = 465;          // 465 = implicit TLS. 587 = STARTTLS (not implemented here).
+const SMTP_USER = 'patriotic@veeb.co.ke';
+/**
+ * The mailbox password. Set it on the SERVER copy of this file only.
+ *
+ * It stays a placeholder in the repository because that repository is PUBLIC —
+ * a real password committed here is world-readable forever, in history, even
+ * after a later commit removes it. This file lives on your own box and is not in
+ * git, so it is the right place for the value and the wrong place to template it
+ * from. Leave an empty SMTP_USER to send without authentication.
+ */
+const SMTP_PASS = 'CHANGE_ME_SMTP_PASSWORD';
+/** Seconds to wait on the mail server before giving up. */
+const SMTP_TIMEOUT = 20;
+
 /** Most messages this relay will send in any rolling hour. */
 const HOURLY_LIMIT = 200;
 
@@ -77,6 +107,42 @@ function fail(int $status, string $message): void {
     echo json_encode(['ok' => false, 'error' => $message]);
     exit;
 }
+
+/**
+ * Whether the caller has proved they hold the token. Gates how much detail the
+ * crash handler below is willing to say out loud.
+ */
+$authed = false;
+
+/**
+ * Never answer with an opaque 500.
+ *
+ * A PHP fatal (a disabled function, a missing extension) otherwise produces an
+ * empty body with `display_errors` off, and the caller is left guessing — which
+ * is exactly how the first live send failed: HTTP 500, zero bytes, no way to
+ * tell mail() being disabled from a typo. The app already reports whatever this
+ * returns, so turning a fatal into JSON turns a guessing game into a sentence.
+ *
+ * The message is only included for a caller who passed the token check. An
+ * unauthenticated stranger gets nothing but "crashed": PHP fatals name file
+ * paths and function names, and that is free reconnaissance.
+ */
+register_shutdown_function(static function () use (&$authed): void {
+    $e = error_get_last();
+    if (!$e || !in_array($e['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) {
+        return;
+    }
+    if (!headers_sent()) {
+        http_response_code(500);
+        header('Content-Type: application/json');
+    }
+    echo json_encode([
+        'ok' => false,
+        'error' => $authed
+            ? 'Relay crashed: ' . $e['message'] . ' (' . basename($e['file']) . ':' . $e['line'] . ')'
+            : 'Relay crashed.',
+    ]);
+});
 
 if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
     fail(405, 'POST a JSON message here.');
@@ -110,6 +176,24 @@ if (str_contains(RELAY_TOKEN, 'CHANGE_ME') || strlen(RELAY_TOKEN) < 24) {
 // patient enough to measure the difference.
 if ($provided === '' || !hash_equals(RELAY_TOKEN, $provided)) {
     fail(401, 'Bad or missing relay token.');
+}
+// From here on the caller is trusted enough to be told why something broke.
+$authed = true;
+
+// One of the two paths must exist, or nothing can be sent. Say which, in a
+// sentence: "Call to undefined function mail()" tells an operator nothing about
+// what to do next, and this host disables mail() precisely to push callers to
+// SMTP — so if neither is available, that is the message worth returning.
+if (SMTP_HOST === '' && !function_exists('mail')) {
+    fail(501, 'PHP mail() is disabled on this host and no SMTP_HOST is set in the relay, so there is no way to send.');
+}
+// Same fail-closed rule as the token: a placeholder password would otherwise
+// reach the mail server as a login attempt and come back "535 Incorrect
+// authentication data", which reads like a wrong password rather than an
+// unfinished install. Substring test, so a replace-all of the placeholder cannot
+// disable the check (see the RELAY_TOKEN note above).
+if (SMTP_HOST !== '' && SMTP_USER !== '' && str_contains(SMTP_PASS, 'CHANGE_ME')) {
+    fail(500, 'Relay is not configured: set SMTP_PASS to the mailbox password.');
 }
 
 $raw = file_get_contents('php://input', false, null, 0, MAX_BODY_BYTES + 1);
@@ -225,12 +309,121 @@ $body = implode('', $parts) . "--$boundary--";
 // Subject may be non-ASCII too.
 $encodedSubject = '=?UTF-8?B?' . base64_encode($subject) . '?=';
 
-// -f sets the envelope sender, which is what SPF is checked against. Without it
-// the envelope is the cPanel user and SPF alignment suffers.
-$ok = mail($to, $encodedSubject, $body, implode("\r\n", $headers), '-f' . $fromAddress);
+if (SMTP_HOST !== '') {
+    // The SMTP path needs the full RFC 5322 message, so Subject and To become
+    // headers rather than separate arguments the way mail() takes them.
+    $smtpHeaders = array_merge([
+        'Date: ' . date('r'),
+        'To: ' . $to,
+        'Subject: ' . $encodedSubject,
+        // A Message-ID from our own domain. Without one, some receivers dock
+        // reputation and duplicate-detection gets unpredictable.
+        'Message-ID: <' . bin2hex(random_bytes(12)) . '@' . ($fromDomain ?: 'localhost') . '>',
+    ], $headers);
 
-if (!$ok) {
-    fail(502, 'The local mail server refused the message.');
+    $error = null;
+    $ok = smtp_send($fromAddress, $to, implode("\r\n", $smtpHeaders) . "\r\n\r\n" . $body, $error);
+    if (!$ok) {
+        fail(502, 'The mail server refused the message: ' . $error);
+    }
+} else {
+    // -f sets the envelope sender, which is what SPF is checked against. Without
+    // it the envelope is the cPanel user and SPF alignment suffers.
+    $ok = mail($to, $encodedSubject, $body, implode("\r\n", $headers), '-f' . $fromAddress);
+    if (!$ok) {
+        fail(502, 'The local mail server refused the message.');
+    }
 }
 
 echo json_encode(['ok' => true]);
+
+// ---------------------------------------------------------------------------
+// A minimal SMTP client.
+//
+// Deliberately not a library: this speaks exactly the eight verbs needed to hand
+// one message to one server, and every step checks the reply code rather than
+// assuming. SMTP fails in ways that look like success if you do not read the
+// replies — a 550 on RCPT with the socket still open is the classic.
+// ---------------------------------------------------------------------------
+
+/** Read one complete reply, following multi-line continuations ("250-..."). */
+function smtp_read($fp, ?string &$error): ?string {
+    $out = '';
+    while (($line = fgets($fp, 1024)) !== false) {
+        $out .= $line;
+        // A space in the 4th column marks the final line; a hyphen means more.
+        if (strlen($line) >= 4 && $line[3] === ' ') {
+            return $out;
+        }
+    }
+    $error = 'the mail server closed the connection';
+    return null;
+}
+
+/** Send one command and require an expected reply code. */
+function smtp_cmd($fp, ?string $cmd, string $expect, ?string &$error): bool {
+    if ($cmd !== null) {
+        fwrite($fp, $cmd . "\r\n");
+    }
+    $reply = smtp_read($fp, $error);
+    if ($reply === null) {
+        return false;
+    }
+    if (strncmp($reply, $expect, strlen($expect)) !== 0) {
+        // Trim: replies are multi-line and end in CRLF, and the whole thing ends
+        // up in an admin-facing error string.
+        $error = trim(preg_replace('/\s+/', ' ', $reply));
+        return false;
+    }
+    return true;
+}
+
+function smtp_send(string $from, string $to, string $data, ?string &$error): bool {
+    $transport = SMTP_PORT === 465 ? 'ssl://' : '';
+    $fp = @stream_socket_client(
+        $transport . SMTP_HOST . ':' . SMTP_PORT,
+        $errno,
+        $errstr,
+        SMTP_TIMEOUT,
+        STREAM_CLIENT_CONNECT
+    );
+    if (!$fp) {
+        $error = 'cannot reach ' . SMTP_HOST . ':' . SMTP_PORT . ' — ' . ($errstr ?: "error $errno");
+        return false;
+    }
+    stream_set_timeout($fp, SMTP_TIMEOUT);
+
+    $helo = ALLOWED_FROM_DOMAINS[0] ?? 'localhost';
+    $ok = smtp_cmd($fp, null, '220', $error)                       // greeting
+        && smtp_cmd($fp, 'EHLO ' . $helo, '250', $error);
+
+    if ($ok && SMTP_USER !== '') {
+        $ok = smtp_cmd($fp, 'AUTH LOGIN', '334', $error)
+            && smtp_cmd($fp, base64_encode(SMTP_USER), '334', $error)
+            && smtp_cmd($fp, base64_encode(SMTP_PASS), '235', $error);
+        if (!$ok && $error !== null) {
+            // The password must never surface in an error the app will display.
+            $error = 'login rejected (' . $error . ')';
+        }
+    }
+
+    if ($ok) {
+        $ok = smtp_cmd($fp, 'MAIL FROM:<' . $from . '>', '250', $error)
+            && smtp_cmd($fp, 'RCPT TO:<' . $to . '>', '250', $error)
+            && smtp_cmd($fp, 'DATA', '354', $error);
+    }
+
+    if ($ok) {
+        // Dot-stuffing: a line that is exactly "." ends the message, so any line
+        // starting with one must be doubled or the mail truncates silently. Our
+        // bodies are base64 today, but a future plain-text part would hit this.
+        $safe = preg_replace('/^\./m', '..', $data);
+        fwrite($fp, $safe . "\r\n.\r\n");
+        $ok = smtp_cmd($fp, null, '250', $error);
+    }
+
+    // Politeness, and it flushes the server's queue decision before we hang up.
+    @fwrite($fp, "QUIT\r\n");
+    @fclose($fp);
+    return $ok;
+}

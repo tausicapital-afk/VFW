@@ -44,6 +44,19 @@ does not send (the app reports it, loudly, rather than pretending).
    script refuses to send while the placeholder is there, so a half-finished
    install fails closed rather than becoming an open relay.
 
+2b. **Set the mailbox password.** Replace `CHANGE_ME_SMTP_PASSWORD` with the
+   password for `SMTP_USER`. Both placeholders stay placeholders in git because
+   **this repository is public** — a password committed here is world-readable
+   forever, in history, even after a later commit removes it. The server copy is
+   not in git, which is exactly why it is the right place for the value.
+
+   > **Why SMTP and not `mail()`:** this host disables PHP's `mail()` (confirmed
+   > live — the relay reported it). Many cPanel providers do, to force
+   > authenticated SMTP. So the relay speaks SMTP itself, to `mail.veeb.co.ke`.
+   > That connection is local to this box and works fine; it is only *Railway*
+   > that cannot open SMTP, which is the whole reason this relay exists here.
+   > On a host where `mail()` works, set `SMTP_HOST` to `''` and it uses that.
+
 3. **Check it answers.** Visiting `https://veeb.co.ke/vfw-relay/` in a browser
    should show:
 
