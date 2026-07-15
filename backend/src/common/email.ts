@@ -238,6 +238,20 @@ export class EmailService {
     return this.transporter;
   }
 
+  /**
+   * Connect and authenticate, without sending anything.
+   *
+   * Used by the health prober behind the status page. Deliberately lets the
+   * SMTP error through rather than flattening it to a 503: the caller is
+   * diagnosing, and "invalid login" and "connection refused" are different
+   * problems. Callers must not put the result in front of an anonymous user —
+   * these messages name hosts and accounts.
+   */
+  async verify(): Promise<void> {
+    if (!this.configured) throw new EmailNotConfiguredError();
+    await this.transport.verify();
+  }
+
   async send(mail: Mail): Promise<void> {
     if (!this.configured) throw new EmailNotConfiguredError();
 
@@ -264,8 +278,7 @@ export class EmailService {
    * (bad login, wrong port, unreachable host), not a generic "could not send".
    */
   async sendTest(to: string, name: string): Promise<void> {
-    if (!this.configured) throw new EmailNotConfiguredError();
-    await this.transport.verify();
+    await this.verify();
 
     const first = esc((name || '').split(' ')[0] || 'there');
     const brand = esc(brandName());

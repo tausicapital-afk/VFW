@@ -5,6 +5,7 @@ import {
   CreateAddonDto,
   CreateInvitationDto,
   CreatePackageDto,
+  CreateTaxDto,
   RejectUserDto,
   UpdateAddonDto,
   UpdateInvitationDto,
@@ -149,6 +150,12 @@ export class AdminController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.admin.updateAddon(id, dto, user);
+  }
+
+  @Post('admin/tax')
+  @Can('admin.manage')
+  createTax(@Body() dto: CreateTaxDto, @CurrentUser() user: AuthUser) {
+    return this.admin.createTax(dto, user);
   }
 
   @Patch('admin/tax/:code')

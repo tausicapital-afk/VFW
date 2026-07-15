@@ -704,3 +704,43 @@ model UserSession {
   @@index([userId, startedAt])
   @@index([startedAt])
 }
+
+// ---------------------------------------------------------------------------
+// Health — the record behind the public status page (GET /api/health in a
+// browser). One row per component per probe, written by the background prober
+// in backend/src/health/.
+//
+// This exists because uptime cannot be computed from the present tense. A live
+// check can only ever say "up right now"; the 90-day bars on the status page
+// need a history, and this is it. Nothing reads back over a row — a probe is a
+// dated observation, so it is written once and later aged out.
+//
+// Not financial evidence and deliberately not in AuditEntry, same reasoning as
+// ActivityLog above. Rows expire after 90 days (see RETENTION_DAYS), which is
+// exactly the window the page draws.
+// ---------------------------------------------------------------------------
+
+model HealthProbe {
+  id String @id @default(cuid())
+
+  // "api" | "database" | "storage" | "email" — see COMPONENTS in health.service.ts.
+  component String
+  // OPERATIONAL | DEGRADED | DOWN | UNCONFIGURED.
+  //
+  // UNCONFIGURED is not an outage: it means the credentials were never set, so
+  // there is nothing to be down. Uptime maths excludes those rows entirely
+  // rather than counting them against the service.
+  status String
+  // Round-trip of the probe itself. Null when there was nothing to time.
+  latencyMs Int?
+  // Why it failed, for an operator reading the table directly. Never rendered
+  // on the public page and never returned by the API — a connection error
+  // names hosts and ports.
+  error     String?
+  checkedAt DateTime @default(now())
+
+  // The page's query: one component, last 90 days, bucketed by day.
+  @@index([component, checkedAt])
+  // Retention sweeps by age across every component.
+  @@index([checkedAt])
+}

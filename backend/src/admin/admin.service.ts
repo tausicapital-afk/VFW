@@ -10,6 +10,7 @@ import {
   CreateAddonDto,
   CreateInvitationDto,
   CreatePackageDto,
+  CreateTaxDto,
   RejectUserDto,
   UpdateAddonDto,
   UpdateInvitationDto,
@@ -728,6 +729,56 @@ export class AdminService {
         tx,
       );
       return updated;
+    });
+  }
+
+  /**
+   * Additive, like the rest of the catalogue: a new profile is available to
+   * price against from now on and reaches nothing already taxed. A submission
+   * stores the rate it was taxed at.
+   */
+  async createTax(dto: CreateTaxDto, actor: AuthUser) {
+    const code = dto.code.trim().toUpperCase();
+    if (await this.prisma.taxProfile.findUnique({ where: { code } })) {
+      throw new BadRequestException(`A tax profile with the code ${code} already exists`);
+    }
+
+    // gst/pst/hst are omittable — the column defaults to 0, which is what a
+    // quoted rate with no statutory breakdown looks like. Only what was sent is
+    // set, so an omitted component takes the default rather than a guess.
+    const figures: Record<string, string> = {};
+    for (const key of ['rate', 'gst', 'pst', 'hst'] as const) {
+      const raw = dto[key];
+      if (raw === undefined) continue;
+      const next = decimal(raw, key.toUpperCase());
+      if (next.greaterThan(100)) {
+        throw new BadRequestException(`${key.toUpperCase()} cannot exceed 100%`);
+      }
+      figures[key] = next.toFixed(3);
+    }
+
+    const label = dto.label.trim();
+
+    return this.prisma.$transaction(async (tx) => {
+      const created = await tx.taxProfile.create({
+        data: {
+          ...figures,
+          code,
+          label,
+          note: dto.note?.trim() || null,
+          rate: figures.rate,
+        },
+      });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'CATALOG_TAX_CREATED',
+          detail: `Tax profile added: ${label} (${code})`,
+          payload: { taxCode: code, label, ...figures },
+        },
+        tx,
+      );
+      return created;
     });
   }
 

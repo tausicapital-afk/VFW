@@ -105,11 +105,17 @@ All figures convert through the FX rates set in **Administration → Settings** 
 | Invitations & approvals | Issues invitation codes with a fixed role, revokes them, and reviews sign-ups pending approval. |
 | Users & roles | Lists staff accounts and changes each one's role. |
 | Packages & pricing | Adds to and maintains the package catalogue and its add-ons and prices. New packages and add-ons are created from the button on each card; the id is derived from the brand and the name. |
-| Tax rates | Maintains the tax rates applied at pricing time. |
+| Tax rates | Adds to and maintains the tax rates applied at pricing time. New profiles are created from the button on the card; the code is typed, not derived, because it is the key packages and cities point at. |
 | Settings | Discount approval threshold, invoice prefix and next invoice number (read-only, allocated transactionally), and the FX rates every report converts through. |
 | Configuration | Edits runtime config straight to the database — no redeploy — for values that aren't needed before the database is reachable. Passwords and secrets stay in env. |
 
 Tabs are defined in `frontend/src/pages/Admin.tsx` (`TABS`); the Configuration tab lives in `frontend/src/pages/AdminConfig.tsx`.
+
+Every catalogue write is additive and never reaches a sale that has already been priced — a submission copies its prices and its tax rate onto the record at submission time. `backend/src/admin/catalogue-create.spec.ts` and `catalog.spec.ts` hold that line.
+
+#### Known gap — `listValue` and `cap` are not editable
+
+`Package.listValue` (the revenue forgone on a sponsored package, which reporting shows) and `Package.cap` (a per-event limit — VKFW VIP has only 2) exist in the schema and are set by the seed, but no admin screen touches either. Neither the new-package modal nor the edit modal can set them, so a sponsored or capped package cannot currently be created from the console — it has to be seeded or written directly. Wiring them up means adding them to both modals together; adding them to only one would leave the tab able to create a package it cannot then edit.
 
 ### Logs — `/logs`
 **ADMIN only.** Telemetry on how the console itself is being used, as opposed to the business events in Audit trail.

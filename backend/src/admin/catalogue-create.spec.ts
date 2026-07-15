@@ -23,7 +23,10 @@ const ADMIN = 'it@vanfashionweek.com';
 const SALES = 'marielle@vanfashionweek.com';
 const BRAND = 'ZZTEST';
 
-describe('catalogue — creating packages and add-ons', () => {
+/** Codes this file invents, swept the same way BRAND is. */
+const TAX_CODE = 'ZZTEST-9';
+
+describe('catalogue — creating packages, add-ons and tax profiles', () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let admin: string;
@@ -56,11 +59,18 @@ describe('catalogue — creating packages and add-ons', () => {
         ...body,
       });
 
+  const newTax = (body: object = {}) =>
+    http(app)
+      .post('/api/admin/tax')
+      .set('Cookie', admin)
+      .send({ code: TAX_CODE, label: 'Test rate 9%', rate: '9', ...body });
+
   /** Anything this file made, by construction — it is the only user of BRAND. */
   const sweep = async () => {
     await prisma.packagePrice.deleteMany({ where: { package: { brand: BRAND } } });
     await prisma.package.deleteMany({ where: { brand: BRAND } });
     await prisma.addon.deleteMany({ where: { brand: BRAND } });
+    await prisma.taxProfile.deleteMany({ where: { code: TAX_CODE } });
   };
 
   beforeAll(async () => {
@@ -201,6 +211,70 @@ describe('catalogue — creating packages and add-ons', () => {
     });
   });
 
+  describe('tax profiles', () => {
+    it('creates one and offers it to price against', async () => {
+      const res = await newTax({ note: 'Statutory' }).expect(201);
+      expect(res.body).toMatchObject({ code: TAX_CODE, label: 'Test rate 9%', rate: '9' });
+
+      const cat = await http(app).get('/api/admin/catalogue').set('Cookie', admin).expect(200);
+      expect(cat.body.taxes.map((t: { code: string }) => t.code)).toContain(TAX_CODE);
+    });
+
+    it('uppercases the code — GST-5 and gst-5 are not two profiles', async () => {
+      const res = await newTax({ code: TAX_CODE.toLowerCase() }).expect(201);
+      expect(res.body.code).toBe(TAX_CODE);
+    });
+
+    it('defaults the breakdown to zero when it is a quoted rate, like GFC-8', async () => {
+      const res = await newTax().expect(201);
+      expect(res.body).toMatchObject({ gst: '0', pst: '0', hst: '0' });
+    });
+
+    it('keeps a breakdown that does not sum to the rate — GFC-8 is quoted, not statutory', async () => {
+      // The rule the seed actually holds is that there is no rule. A quoted rate
+      // with an unrelated breakdown is legal; the modal warns, the server allows.
+      const res = await newTax({ rate: '9', gst: '5', pst: '7' }).expect(201);
+      expect(res.body).toMatchObject({ rate: '9', gst: '5', pst: '7' });
+    });
+
+    it('refuses a code that already exists', async () => {
+      await newTax().expect(201);
+      const res = await newTax({ label: 'Different label' }).expect(400);
+      expect(res.body.message).toMatch(new RegExp(TAX_CODE));
+    });
+
+    it('refuses a code with spaces or punctuation — it is a key, not prose', async () => {
+      await newTax({ code: 'ZZ TEST' }).expect(400);
+      await newTax({ code: 'ZZ/TEST' }).expect(400);
+    });
+
+    it('refuses a rate over 100% or below zero', async () => {
+      await newTax({ rate: '120' }).expect(400);
+      await newTax({ rate: '-1' }).expect(400);
+      await newTax({ rate: '9', pst: '101' }).expect(400);
+      expect(await prisma.taxProfile.findUnique({ where: { code: TAX_CODE } })).toBeNull();
+    });
+
+    it('leaves an audit entry naming the profile', async () => {
+      await newTax().expect(201);
+
+      const entry = await prisma.auditEntry.findFirst({
+        where: { action: 'CATALOG_TAX_CREATED' },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(entry?.detail).toContain(TAX_CODE);
+      expect(entry?.payload).toMatchObject({ taxCode: TAX_CODE, rate: '9.000' });
+    });
+
+    it('does not move an existing profile', async () => {
+      const before = await prisma.taxProfile.findUniqueOrThrow({ where: { code: 'GST-5' } });
+      await newTax().expect(201);
+      const after = await prisma.taxProfile.findUniqueOrThrow({ where: { code: 'GST-5' } });
+
+      expect(after.rate.toFixed(3)).toBe(before.rate.toFixed(3));
+    });
+  });
+
   describe('authorization', () => {
     it('is admin-only — a rep cannot add to the catalogue', async () => {
       const rep = await loginCookie(app, SALES);
@@ -214,6 +288,11 @@ describe('catalogue — creating packages and add-ons', () => {
         .post('/api/admin/addons')
         .set('Cookie', rep)
         .send({ brand: BRAND, name: 'Sneaky', price: '1', currency: 'USD', forBrands: [BRAND], glCode: '4200' })
+        .expect(403);
+      await http(app)
+        .post('/api/admin/tax')
+        .set('Cookie', rep)
+        .send({ code: TAX_CODE, label: 'Sneaky', rate: '0' })
         .expect(403);
     });
   });

@@ -9,6 +9,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Matches,
   Max,
   MaxLength,
   Min,
@@ -235,6 +236,51 @@ export class UpdateAddonDto {
   @IsOptional()
   @IsString()
   glCode?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  note?: string;
+}
+
+/**
+ * The code is typed, not derived: it is the primary key, it is what a package
+ * and a city point at, and it is read off invoices — GST-5, VAT-20. Nothing
+ * sensible could be derived from "GST 5% (Canada)".
+ *
+ * `rate` is what actually prices a sale. gst/pst/hst are the breakdown
+ * Accounting reconciles against and default to zero: GFC-8 is a quoted 8% with
+ * no statutory breakdown at all, so they are not required to add up to `rate`
+ * and this does not ask them to.
+ */
+export class CreateTaxDto {
+  @IsString()
+  @MinLength(2)
+  @MaxLength(20)
+  @Matches(/^[A-Za-z0-9-]+$/, {
+    message: 'A tax code may only contain letters, digits and dashes',
+  })
+  code: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(120)
+  label: string;
+
+  @IsString()
+  rate: string;
+
+  @IsOptional()
+  @IsString()
+  gst?: string;
+
+  @IsOptional()
+  @IsString()
+  pst?: string;
+
+  @IsOptional()
+  @IsString()
+  hst?: string;
 
   @IsOptional()
   @IsString()

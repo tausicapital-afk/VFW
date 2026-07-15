@@ -1346,6 +1346,9 @@ function PackageModal({
 function TaxTab() {
   const qc = useQueryClient();
   const { data } = useCatalogue();
+  const [adding, setAdding] = useState(false);
+
+  const refresh = () => void qc.invalidateQueries({ queryKey: ['admin', 'catalogue'] });
 
   return (
     <>
@@ -1354,6 +1357,7 @@ function TaxTab() {
           <h3>Tax profiles</h3>
           <div className="sp" />
           <ExportMenu dataset="taxes" disabled={!data?.taxes.length} />
+          <button className="btn sm blue" onClick={() => setAdding(true)}>+ New tax profile</button>
         </div>
         <div className="tbl-wrap">
           <table>
@@ -1366,11 +1370,7 @@ function TaxTab() {
             </thead>
             <tbody>
               {data?.taxes.map((t) => (
-                <TaxRowEdit
-                  key={t.code}
-                  tax={t}
-                  onSaved={() => void qc.invalidateQueries({ queryKey: ['admin', 'catalogue'] })}
-                />
+                <TaxRowEdit key={t.code} tax={t} onSaved={refresh} />
               ))}
             </tbody>
           </table>
@@ -1381,7 +1381,139 @@ function TaxTab() {
         was taxed at; only a deliberate tax-profile change on the submission itself re-prices it,
         and that is written to the audit trail before and after.
       </div>
+
+      {adding && (
+        <NewTaxModal
+          onClose={() => setAdding(false)}
+          onSaved={() => { setAdding(false); refresh(); }}
+        />
+      )}
     </>
+  );
+}
+
+/**
+ * The code is typed rather than derived — it is the key a package and a city
+ * point at, and it is read off invoices. Everything else on the form is the
+ * rate, which prices the sale, and the breakdown, which does not.
+ */
+function NewTaxModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const [code, setCode] = useState('');
+  const [label, setLabel] = useState('');
+  const [rate, setRate] = useState('');
+  const [gst, setGst] = useState('0');
+  const [pst, setPst] = useState('0');
+  const [hst, setHst] = useState('0');
+  const [note, setNote] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const create = useMutation({
+    // Rates leave as the strings they were typed as, the same as money.
+    mutationFn: () =>
+      api.post('/api/admin/tax', {
+        code: code.trim(),
+        label: label.trim(),
+        rate: rate.trim(),
+        gst: gst.trim() || '0',
+        pst: pst.trim() || '0',
+        hst: hst.trim() || '0',
+        note: note.trim() || undefined,
+      }),
+    onSuccess: onSaved,
+    onError: (e: Error) => setError(e.message),
+  });
+
+  // A breakdown that neither is empty nor adds up to the rate is usually a typo,
+  // but not always — GFC-8 is a quoted 8% with no statutory breakdown behind it.
+  // So this says so and lets the admin decide, rather than refusing to save.
+  const parts = [gst, pst, hst].map(Number);
+  const breakdown = parts.reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0);
+  const mismatch = breakdown > 0 && Number(rate) !== breakdown;
+
+  const ready = /^[A-Za-z0-9-]{2,20}$/.test(code.trim()) && label.trim() !== '' && rate.trim() !== '';
+
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="box" onClick={(e) => e.stopPropagation()}>
+        <div className="hd">
+          <h3>New tax profile</h3>
+          <div className="sp" style={{ flex: 1 }} />
+          <button className="btn sm" onClick={onClose}>Close</button>
+        </div>
+
+        <div className="bd">
+          <div className="fields">
+            <div className="f">
+              <label>Code</label>
+              <input
+                className="mono"
+                value={code}
+                onChange={(e) => setCode(e.target.value.toUpperCase())}
+                placeholder="VAT-20"
+              />
+              <div className="help">Letters, digits and dashes. This is what packages and cities point at.</div>
+            </div>
+            <div className="f">
+              <label>Rate %</label>
+              <input type="number" step="0.001" value={rate} onChange={(e) => setRate(e.target.value)} />
+              <div className="help">What a sale is actually taxed at.</div>
+            </div>
+            <div className="f wide">
+              <label>Label</label>
+              <input
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                placeholder="VAT 20% (France)"
+              />
+            </div>
+            <div className="f">
+              <label>GST %</label>
+              <input type="number" step="0.001" value={gst} onChange={(e) => setGst(e.target.value)} />
+            </div>
+            <div className="f">
+              <label>PST %</label>
+              <input type="number" step="0.001" value={pst} onChange={(e) => setPst(e.target.value)} />
+            </div>
+            <div className="f">
+              <label>HST %</label>
+              <input type="number" step="0.001" value={hst} onChange={(e) => setHst(e.target.value)} />
+            </div>
+            <div className="f wide">
+              <label>Note (optional)</label>
+              <input
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="Paris — confirm per invoice"
+              />
+            </div>
+          </div>
+
+          <div className="note" style={{ marginTop: 12 }}>
+            <b>Rate</b> is what prices the sale. GST, PST and HST are the breakdown Accounting
+            reconciles against — leave them at zero for a quoted rate with no statutory split
+            behind it, the way GFC-8 works.
+          </div>
+          {mismatch && (
+            <div className="note warn" style={{ marginTop: 12 }}>
+              The breakdown adds up to {breakdown}%, but the rate is {rate || 0}%. That is allowed —
+              check it is what you meant.
+            </div>
+          )}
+          {error && <div className="note bad" style={{ marginTop: 12 }}>{error}</div>}
+        </div>
+
+        <div className="ft">
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button
+            className="btn primary"
+            disabled={!ready || create.isPending}
+            onClick={() => { setError(null); create.mutate(); }}
+          >
+            {create.isPending ? 'Adding…' : 'Add tax profile'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

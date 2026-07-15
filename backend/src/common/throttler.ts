@@ -30,10 +30,18 @@ function isAuthWrite(ctx: ExecutionContext): boolean {
   return req.method === 'POST' && req.path.startsWith('/api/auth/');
 }
 
-/** Railway probes this every few seconds; throttling it would fail the deploy. */
+/**
+ * Railway probes this every few seconds; throttling it would fail the deploy.
+ *
+ * Only the machine probe is exempt. The same URL serves an HTML status page to
+ * browsers, and that costs a rollup query over the probe history — leaving it
+ * unlimited would hand out a cheap way to make the database do real work. The
+ * page stays inside the global bucket, which no human clicking refresh can hit.
+ */
 function isHealthCheck(ctx: ExecutionContext): boolean {
   const req = ctx.switchToHttp().getRequest<Request>();
-  return req.path === '/api/health';
+  if (req.path !== '/api/health') return false;
+  return req.accepts(['json', 'html']) !== 'html';
 }
 
 export const throttlerOptions: ThrottlerModuleOptions = {
