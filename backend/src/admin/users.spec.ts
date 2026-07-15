@@ -161,11 +161,28 @@ describe('users & roles — edit and soft delete', () => {
     it('does not move a sale that has already been made', async () => {
       // The rep sells at 8%.
       const rep = await prisma.user.findUniqueOrThrow({ where: { email: SALES } });
-      const sale = await prisma.submission.findFirst({
-        where: { repId: rep.id },
-        orderBy: { createdAt: 'desc' },
+
+      // Make the sale here rather than hunting for one: the seed creates no
+      // submissions, so reading an existing one only ever found litter left by
+      // whichever suite happened to run first. That passed on a long-lived dev
+      // database and failed on a clean one — the test has to own its fixture.
+      // Booked through the API on purpose: copying commissionPct onto the row
+      // at creation is the very thing being relied on here.
+      const sales = await loginCookie(app, SALES);
+      const booked = await http(app)
+        .post('/api/submissions')
+        .set('Cookie', sales)
+        .send({
+          designer: 'Commission History',
+          brand: `Commission ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          eventId: 'VFW-FW26',
+          packageId: 'VFW-BRONZE',
+        })
+        .expect(201);
+
+      const sale = await prisma.submission.findUniqueOrThrow({
+        where: { id: booked.body.id as string },
       });
-      if (!sale) throw new Error('seed has no submission for the sales rep to test against');
 
       const before = sale.commissionPct.toFixed(2);
       const amountBefore = sale.commissionAmount.toFixed(2);
