@@ -181,8 +181,14 @@ export class ActivityService {
       }),
     ]);
 
-    const eventCount = new Map(events.map((r) => [r.userId, r._count]));
-    const messageCount = new Map(messages.map((r) => [r.userId, r._count]));
+    // groupBy({ _count: true }) always yields a number, but Prisma types it as
+    // `number | true | {…}` because the same field can be a per-column object.
+    // Narrow it here rather than at each use: this shape is the API response,
+    // and every reader of it would otherwise inherit the ambiguity.
+    const count = (n: unknown): number => (typeof n === 'number' ? n : 0);
+
+    const eventCount = new Map(events.map((r) => [r.userId, count(r._count)]));
+    const messageCount = new Map(messages.map((r) => [r.userId, count(r._count)]));
     const lastActivity = new Map(lastEvents.map((r) => [r.userId, r._max?.createdAt ?? null]));
     const sessionAgg = new Map(sessions.map((r) => [r.userId, r]));
 
@@ -195,17 +201,17 @@ export class ActivityService {
         eventCount: eventCount.get(u.id) ?? 0,
         messageCount: messageCount.get(u.id) ?? 0,
         lastActivityAt: lastActivity.get(u.id) ?? null,
-        sessionCount: s?._count ?? 0,
+        sessionCount: count(s?._count),
         totalActiveSec: s?._sum?.durationSec ?? 0,
       };
     });
   }
 
-  /** The chronological activity feed, newest first, filtered and paged. */
-  async feed(filter: ActivityQueryDto) {
-    const limit = Math.min(filter.limit ?? 50, 200);
-    const offset = filter.offset ?? 0;
-
+  /**
+   * The feed's filter, built once, so the export reads the feed through the same
+   * predicate the screen does rather than through a second copy of it.
+   */
+  private feedWhere(filter: ActivityQueryDto): Prisma.ActivityLogWhereInput {
     const where: Prisma.ActivityLogWhereInput = {};
     if (filter.action) where.action = filter.action;
     if (filter.userId) where.userId = filter.userId;
@@ -216,6 +222,24 @@ export class ActivityService {
         { user: { name: { contains: q, mode: 'insensitive' } } },
       ];
     }
+    return where;
+  }
+
+  /** The same feed as feed(), unpaged, for an export. See searchAll in AuditService. */
+  async feedAll(filter: ActivityQueryDto, limit: number) {
+    return this.prisma.activityLog.findMany({
+      where: this.feedWhere(filter),
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      include: { user: { select: { id: true, name: true, role: true, colour: true } } },
+    });
+  }
+
+  /** The chronological activity feed, newest first, filtered and paged. */
+  async feed(filter: ActivityQueryDto) {
+    const limit = Math.min(filter.limit ?? 50, 200);
+    const offset = filter.offset ?? 0;
+    const where = this.feedWhere(filter);
 
     const [total, entries] = await this.prisma.$transaction([
       this.prisma.activityLog.count({ where }),
@@ -240,15 +264,29 @@ export class ActivityService {
     return rows.map((r) => r.action);
   }
 
-  /** Online sessions with their durations, newest first. */
-  async sessions(filter: SessionsQueryDto) {
-    const limit = Math.min(filter.limit ?? 50, 200);
-    const offset = filter.offset ?? 0;
-
+  private sessionsWhere(filter: SessionsQueryDto): Prisma.UserSessionWhereInput {
     const where: Prisma.UserSessionWhereInput = {};
     if (filter.userId) where.userId = filter.userId;
     if (filter.state === 'open') where.endedAt = null;
     if (filter.state === 'closed') where.endedAt = { not: null };
+    return where;
+  }
+
+  /** The same sessions as sessions(), unpaged, for an export. */
+  async sessionsAll(filter: SessionsQueryDto, limit: number) {
+    return this.prisma.userSession.findMany({
+      where: this.sessionsWhere(filter),
+      orderBy: { startedAt: 'desc' },
+      take: limit,
+      include: { user: { select: { id: true, name: true, role: true, colour: true } } },
+    });
+  }
+
+  /** Online sessions with their durations, newest first. */
+  async sessions(filter: SessionsQueryDto) {
+    const limit = Math.min(filter.limit ?? 50, 200);
+    const offset = filter.offset ?? 0;
+    const where = this.sessionsWhere(filter);
 
     const [total, rows] = await this.prisma.$transaction([
       this.prisma.userSession.count({ where }),

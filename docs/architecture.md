@@ -290,7 +290,9 @@ npm install
 npm run dev                          # :5173, proxies /api → :3001
 ```
 
-Demo accounts, password `Vfw@2026!`:
+Demo accounts. Against localhost the seed applies its default password,
+`Vfw@2026!` — it is published, so it is for localhost only, and `seed.ts` will
+not apply it to a remote database (set `SEED_PASSWORD` for those):
 
 | Email | Role |
 |---|---|

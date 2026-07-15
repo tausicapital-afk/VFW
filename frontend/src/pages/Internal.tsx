@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { fmtDateTime } from '../lib/format';
 import type { InternalComment } from '../lib/types';
+import { ExportMenu } from '../shell/ExportMenu';
 import { Page } from '../shell/Shell';
 
 export const COMMENT_DEPARTMENTS = ['Accounting', 'Production', 'Marketing', 'Event Management'];
@@ -58,6 +59,10 @@ export function Internal() {
         <div className="hd">
           <h3>All internal comments</h3>
           <div className="sp" />
+          {/* The server re-applies the same rule the screen relies on: a file
+              pulled by a manager who carries their own deals still excludes the
+              comments written about those deals. */}
+          <ExportMenu dataset="internal-comments" disabled={!comments.length} />
           <span className="pill RETURNED">Confidential</span>
         </div>
         {!comments.length ? (

@@ -184,8 +184,11 @@ export class AdminController {
 @Module({
   controllers: [AdminController, FeedbackController, InternalController],
   providers: [AdminService, FeedbackService, InternalService],
-  // ExportModule reads the same listings this controller serves, so its datasets
-  // stay in step with the tabs by construction rather than by a second query.
-  exports: [AdminService],
+  // ExportModule reads the same listings these controllers serve, so its
+  // datasets stay in step with the tabs by construction rather than by a second
+  // query. InternalService matters most: its `list` is what applies the rule
+  // that nobody reads the comments written about their own sale, and an export
+  // that reached past it would quietly break that promise.
+  exports: [AdminService, FeedbackService, InternalService],
 })
 export class AdminModule {}

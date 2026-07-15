@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { fmtDateTime } from '../lib/format';
 import type { AuditPage } from '../lib/types';
+import { ExportMenu } from '../shell/ExportMenu';
 import { Page } from '../shell/Shell';
 
 /**
@@ -70,6 +71,11 @@ export function Audit() {
           Clear
         </button>
         <div style={{ flex: 1 }} />
+        {/* The file is the filter, not the page: paging is how this screen is
+            read, and an export of only the 50 rows on screen would be a
+            fragment. The server re-applies q and action and returns every
+            matching event. */}
+        <ExportMenu dataset="audit" params={{ q: q.trim(), action }} disabled={!total} />
         <span className="sm mut">{total} events · append-only</span>
       </div>
 

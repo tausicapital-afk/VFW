@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import ExcelJS from 'exceljs';
 import PDFDocument from 'pdfkit';
 import { AuthUser } from '../common/auth.guard';
@@ -6,7 +6,9 @@ import {
   CellValue,
   ExportColumn,
   ExportDataset,
+  ExportFilters,
   ExportFormat,
+  MAX_EXPORT_ROWS,
   RenderedFile,
 } from './export.types';
 
@@ -25,6 +27,13 @@ const MONEY_FORMAT = '#,##0.00';
 /** ISO order, so a date column sorts correctly as text as well as reading plainly. */
 const DATE_FORMAT = 'yyyy-mm-dd';
 
+/**
+ * A dataset with its columns settled for this request, which is all a renderer
+ * has any business knowing — whether the shape was declared up front or arrived
+ * with the rows is `render`'s problem and nobody else's.
+ */
+type Resolved<T> = Omit<ExportDataset<T>, 'columns' | 'load'> & { columns: ExportColumn<T>[] };
+
 @Injectable()
 export class ExportService {
   /**
@@ -37,17 +46,34 @@ export class ExportService {
     user: AuthUser,
     format: ExportFormat,
     tz = 'UTC',
+    filters: ExportFilters = {},
   ): Promise<RenderedFile> {
-    const rows = await dataset.load(user);
+    // A static dataset returns its rows and declared its columns up front; a
+    // dynamic one returns both together because only the answer knows its shape.
+    // Everything past this line sees one resolved thing either way.
+    const loaded = await dataset.load(user, filters);
+    const rows = Array.isArray(loaded) ? loaded : loaded.rows;
+    const columns = Array.isArray(loaded) ? (dataset.columns ?? []) : loaded.columns;
+    const resolved: Resolved<T> = { ...dataset, columns };
+
+    // Loudly, not quietly: a file that is silently a fragment still looks
+    // complete to whoever reconciles against it. See MAX_EXPORT_ROWS.
+    if (rows.length > MAX_EXPORT_ROWS) {
+      throw new BadRequestException(
+        `That is ${rows.length.toLocaleString('en-CA')} rows, and an export holds ` +
+          `${MAX_EXPORT_ROWS.toLocaleString('en-CA')}. Narrow the filter and try again.`,
+      );
+    }
+
     const day = this.dayFormatter(tz);
     const filename = `${dataset.filename}-${day.format(new Date())}.${format}`;
 
     const buffer =
       format === 'csv'
-        ? this.csv(dataset, rows, day)
+        ? this.csv(resolved, rows, day)
         : format === 'xlsx'
-          ? await this.xlsx(dataset, rows, day)
-          : await this.pdf(dataset, rows, user, day);
+          ? await this.xlsx(resolved, rows, day)
+          : await this.pdf(resolved, rows, user, day);
 
     return { buffer, filename, contentType: CONTENT_TYPE[format] };
   }
@@ -78,7 +104,7 @@ export class ExportService {
    * cells that begin like a formula — a brand literally named "=CMD" must land in
    * the sheet as text, not as something Excel tries to execute.
    */
-  private csv<T>(dataset: ExportDataset<T>, rows: T[], day: Intl.DateTimeFormat): Buffer {
+  private csv<T>(dataset: Resolved<T>, rows: T[], day: Intl.DateTimeFormat): Buffer {
     const cell = (v: CellValue): string => {
       if (v === null || v === undefined) return '';
       const s = v instanceof Date ? day.format(v) : String(v);
@@ -102,7 +128,7 @@ export class ExportService {
    * The header row is frozen and filterable.
    */
   private async xlsx<T>(
-    dataset: ExportDataset<T>,
+    dataset: Resolved<T>,
     rows: T[],
     day: Intl.DateTimeFormat,
   ): Promise<Buffer> {
@@ -186,7 +212,7 @@ export class ExportService {
    * table that fits 20 columns onto it is not readable by anyone.
    */
   private async pdf<T>(
-    dataset: ExportDataset<T>,
+    dataset: Resolved<T>,
     rows: T[],
     user: AuthUser,
     day: Intl.DateTimeFormat,

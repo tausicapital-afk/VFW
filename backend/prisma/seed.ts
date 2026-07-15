@@ -124,9 +124,40 @@ const ADDONS = [
 ];
 
 // Demo staff, matching DB.users in the mockup. The shared password exists so the
-// team can click through the app; it is dev-only and every account is seeded
-// ACTIVE. Real accounts arrive via invitation + admin approval.
-const DEMO_PASSWORD = 'Vfw@2026!';
+// team can click through the app; every account is seeded ACTIVE. Real accounts
+// arrive via invitation + admin approval.
+const LOCAL_DEFAULT_PASSWORD = 'Vfw@2026!';
+
+/**
+ * The default is published — it is in this file, and it was on the login page —
+ * so it is a password only in the sense that a doormat key is a lock. That is
+ * fine against localhost and nowhere else: these accounts include a System
+ * Administrator, and seeding them onto anything reachable hands that role to
+ * whoever read the repo.
+ *
+ * So the default is available to localhost only. Any other database has to say
+ * what the password is, out of band, via SEED_PASSWORD.
+ */
+function seedPassword(): string {
+  const explicit = process.env.SEED_PASSWORD?.trim();
+  if (explicit) return explicit;
+
+  const url = process.env.DATABASE_URL ?? '';
+  const isLocal = /@(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(url);
+  if (!isLocal) {
+    throw new Error(
+      'Refusing to seed a non-local database with the default demo password.\n' +
+        'DATABASE_URL does not point at localhost, and the default is published in\n' +
+        'this file — seeding it would create a System Administrator account whose\n' +
+        'password is public. Set one explicitly:\n\n' +
+        '  SEED_PASSWORD=<something private> npx ts-node prisma/seed.ts\n\n' +
+        'All seeded accounts share it. See docs/DEPLOYMENT.md → Seed data.',
+    );
+  }
+  return LOCAL_DEFAULT_PASSWORD;
+}
+
+const DEMO_PASSWORD = seedPassword();
 const USERS = [
   { employeeId: 'VFW-1001', name: 'Marielle Fontaine', email: 'marielle@vanfashionweek.com', phone: '+1 604 555 0142', role: Role.SALES, department: 'Sales', commissionPct: 8, target: 160000, colour: '#2F6BFF' },
   { employeeId: 'VFW-1002', name: 'Diego Salazar', email: 'diego@vanfashionweek.com', phone: '+1 604 555 0177', role: Role.SALES, department: 'Sales', commissionPct: 8, target: 38000, colour: '#0C7A4D' },
@@ -212,7 +243,13 @@ async function main() {
     users: await prisma.user.count(),
   };
   console.log('Seed complete:', counts);
-  console.log(`Demo password for all seeded accounts: ${DEMO_PASSWORD}`);
+  // Never echo a password that was passed in — it would land in the shell
+  // history and the deploy log of whoever ran this.
+  console.log(
+    process.env.SEED_PASSWORD?.trim()
+      ? 'Seeded accounts share the password given in SEED_PASSWORD.'
+      : `Demo password for all seeded accounts: ${DEMO_PASSWORD}`,
+  );
 }
 
 main()

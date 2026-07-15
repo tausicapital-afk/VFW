@@ -67,7 +67,9 @@ export const COMPONENTS: readonly ComponentSpec[] = [
     id: 'api',
     label: 'API',
     blurb: 'Signing in, and every request the console makes',
-    degradedAboveMs: 250,
+    // Unused: the api probe reaches nothing and is never timed, so it can never
+    // be degraded — only present because every spec carries a threshold.
+    degradedAboveMs: 0,
     minIntervalMs: 0,
   },
   {

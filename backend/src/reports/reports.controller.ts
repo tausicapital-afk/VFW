@@ -38,5 +38,9 @@ export class ReportsController {
 @Module({
   controllers: [ReportsController],
   providers: [ReportsService],
+  // ExportModule builds each report's file from the same `summary` this
+  // controller serves, so an exported report is the table on screen rather than
+  // a second implementation of it.
+  exports: [ReportsService],
 })
 export class ReportsModule {}

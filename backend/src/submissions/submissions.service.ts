@@ -88,6 +88,22 @@ export class SubmissionsService {
   }
 
   /**
+   * What has already crossed into QuickBooks — the Export ledger card, and the
+   * file accounting reconciles against.
+   *
+   * Newest first, by the moment it was posted rather than the moment it was
+   * created: the ledger is read as a record of postings, and the two orders
+   * disagree the first time an old approval is exported late.
+   */
+  async ledger(user: AuthUser) {
+    return this.prisma.submission.findMany({
+      where: { ...this.scopeFor(user), status: SubmissionStatus.EXPORTED },
+      include: DETAIL,
+      orderBy: { exportedAt: 'desc' },
+    });
+  }
+
+  /**
    * Find (or create) the contact this sale is against.
    *
    * A brand is one customer, so selling to a brand somebody else already entered

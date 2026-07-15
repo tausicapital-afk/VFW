@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api } from '../lib/api';
 import type { Catalog, ReportCell, ReportCol, ReportTable, ReportType } from '../lib/types';
+import { ExportMenu } from '../shell/ExportMenu';
 import { Page } from '../shell/Shell';
 
 /**
@@ -11,12 +12,17 @@ import { Page } from '../shell/Shell';
  * Settings before they were summed.
  */
 
-export interface Period {
+/**
+ * A type alias rather than an interface on purpose: this is handed to
+ * <ExportMenu params>, and only an alias satisfies the index signature
+ * ExportParams asks for. An interface here is a compile error at the call site.
+ */
+export type Period = {
   from?: string;
   to?: string;
   eventId?: string;
   cityId?: string;
-}
+};
 
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 
@@ -108,43 +114,6 @@ function cell(v: ReportCell, col?: ReportCol) {
   return <td className="num">{text}</td>;
 }
 
-function download(name: string, body: string, type: string) {
-  const url = URL.createObjectURL(new Blob([body], { type }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-function csv(rows: ReportCell[][]): string {
-  return rows
-    .map((r) =>
-      r
-        .map((v) => {
-          const s = String(v ?? '');
-          return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-        })
-        .join(','),
-    )
-    .join('\n');
-}
-
-function exportTable(table: ReportTable, fmt: 'csv' | 'json') {
-  const day = iso(new Date());
-  const labels = table.cols.map((c) => c.label);
-  if (fmt === 'json') {
-    const objs = table.rows.map((r) => Object.fromEntries(labels.map((c, i) => [c, r[i]])));
-    download(
-      `vfw-${table.key}-${day}.json`,
-      JSON.stringify({ report: table.name, generated: new Date().toISOString(), rows: objs }, null, 2),
-      'application/json',
-    );
-  } else {
-    download(`vfw-${table.key}-${day}.csv`, csv([labels, ...table.rows]), 'text/csv');
-  }
-}
-
 export function Reports() {
   const [key, setKey] = useState('revenue');
   const [period, setPeriod] = useState<Period>({});
@@ -186,13 +155,15 @@ export function Reports() {
           <span className="sm mut">
             {table ? `${table.rows.length} row${table.rows.length === 1 ? '' : 's'}` : '—'}
           </span>
-          <button className="btn sm" disabled={!table} onClick={() => table && exportTable(table, 'csv')}>
-            CSV
-          </button>
-          <button className="btn sm" disabled={!table} onClick={() => table && exportTable(table, 'json')}>
-            JSON
-          </button>
-          <button className="btn sm" onClick={() => window.print()}>PDF / print</button>
+          {/* The system-wide export, not a builder of its own: the server
+              re-runs this report over the same period and renders it through
+              the same PDF/Excel/CSV path as every other screen — and writes the
+              DATA_EXPORT line that a client-side download never could. */}
+          <ExportMenu
+            dataset={`report-${key}`}
+            params={period}
+            disabled={!table || !table.rows.length}
+          />
         </div>
 
         <div className="tbl-wrap">

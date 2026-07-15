@@ -101,14 +101,6 @@ export function Login() {
           >
             {busy ? 'Signing in…' : 'Sign in'}
           </button>
-
-          <p className="hint" style={{ marginTop: 14 }}>
-            Demo accounts — password <code>Vfw@2026!</code>
-            <br />
-            <code>marielle@vanfashionweek.com</code> (Sales)
-            <br />
-            <code>accounting@vanfashionweek.com</code> (Accounting)
-          </p>
         </form>
       </div>
     </section>

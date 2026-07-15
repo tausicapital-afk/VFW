@@ -44,10 +44,12 @@ export class AuditService {
    * row, and there never will be, not even for an admin. The count is returned
    * alongside the page so the UI can say how many events exist in total.
    */
-  async search(filter: AuditFilter) {
-    const limit = Math.min(filter.limit ?? 50, 200);
-    const offset = filter.offset ?? 0;
-
+  /**
+   * The filter, built once. The export reads the same trail through the same
+   * predicate as the screen — a second copy of this would be a file that quietly
+   * disagreed with the table it was pulled from the first time either changed.
+   */
+  private whereFor(filter: AuditFilter): Prisma.AuditEntryWhereInput {
     const where: Prisma.AuditEntryWhereInput = {};
     if (filter.action) where.action = filter.action;
     if (filter.submissionId) where.submissionId = filter.submissionId;
@@ -68,6 +70,34 @@ export class AuditService {
         { submission: { contact: { brand: { contains: q, mode: 'insensitive' } } } },
       ];
     }
+    return where;
+  }
+
+  /**
+   * The same trail as search(), unpaged, for an export.
+   *
+   * `limit` is the caller's ceiling plus one: the export refuses a file it would
+   * have to truncate, and it can only tell it is over the line if the query is
+   * allowed to return one row past it. Nothing here loads the whole table.
+   */
+  async searchAll(filter: AuditFilter, limit: number) {
+    return this.prisma.auditEntry.findMany({
+      where: this.whereFor(filter),
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      include: {
+        actor: { select: { id: true, name: true, role: true } },
+        submission: {
+          select: { id: true, ref: true, contact: { select: { brand: true } } },
+        },
+      },
+    });
+  }
+
+  async search(filter: AuditFilter) {
+    const limit = Math.min(filter.limit ?? 50, 200);
+    const offset = filter.offset ?? 0;
+    const where = this.whereFor(filter);
 
     const [total, entries] = await this.prisma.$transaction([
       this.prisma.auditEntry.count({ where }),

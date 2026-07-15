@@ -4,6 +4,7 @@ import {
   EXPORT_FORMATS,
   FORMAT_LABEL,
   type ExportFormat,
+  type ExportParams,
 } from '../lib/export';
 
 /**
@@ -15,8 +16,21 @@ import {
  * server decides which columns and which rows the file contains, so this button
  * can never export more than the caller may already see, and every screen's
  * export looks and behaves the same.
+ *
+ * A screen that filters server-side passes those filters too, so the file agrees
+ * with the table it was pulled from:
+ *
+ *     <ExportMenu dataset="audit" params={{ q, action }} />
  */
-export function ExportMenu({ dataset, disabled }: { dataset: string; disabled?: boolean }) {
+export function ExportMenu({
+  dataset,
+  params,
+  disabled,
+}: {
+  dataset: string;
+  params?: ExportParams;
+  disabled?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<ExportFormat | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -43,7 +57,7 @@ export function ExportMenu({ dataset, disabled }: { dataset: string; disabled?: 
     setBusy(format);
     setError(null);
     try {
-      await downloadExport(dataset, format);
+      await downloadExport(dataset, format, params);
       setOpen(false);
     } catch (e) {
       // Keep the menu open on failure — closing it would hide the reason.
