@@ -1,0 +1,13 @@
+# Only index.php is reachable. Without this, Apache would happily serve a
+# directory listing of this folder, or hand out any file dropped beside the
+# script — including a backup copy like index.php.bak, which most editors create
+# on save and which Apache serves as PLAIN TEXT, token and all.
+Options -Indexes
+
+<FilesMatch "^index\.php$">
+    Require all granted
+</FilesMatch>
+
+<FilesMatch "^(?!index\.php$).*$">
+    Require all denied
+</FilesMatch>

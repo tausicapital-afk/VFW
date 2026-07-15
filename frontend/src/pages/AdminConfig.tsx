@@ -59,9 +59,18 @@ const BLANK: MailAccountInput = {
   username: '', password: '', fromAddress: '', fromName: '',
 };
 
-/** Providers that talk HTTP over 443 — no host, port, encryption or username. */
-const HTTP_PROVIDERS = ['resend'];
-const isHttp = (provider: string) => HTTP_PROVIDERS.includes(provider);
+// Mirrors the backend's provider capabilities. The providers do not split in
+// two: `relay` goes over HTTPS like `resend` but needs a host (its URL) like
+// `smtp`, so "isHttp" alone cannot drive the form.
+const usesSmtp = (p: string) => p === 'smtp';
+const needsHost = (p: string) => p === 'smtp' || p === 'relay';
+const isHttp = (p: string) => p === 'resend' || p === 'relay';
+
+const SECRET_LABEL: Record<string, string> = {
+  smtp: 'Password',
+  resend: 'API key',
+  relay: 'Relay token',
+};
 
 function MailAccountsCard() {
   const qc = useQueryClient();
@@ -205,9 +214,11 @@ function MailAccountRow({
         </div>
         <div className="sm mut mono" style={{ wordBreak: 'break-all' }}>
           {account.fromAddress} ·{' '}
-          {isHttp(account.provider)
-            ? `${account.provider} (HTTPS)`
-            : `${account.host}:${account.port} ${account.encryption}`}
+          {account.provider === 'relay'
+            ? `relay ${account.host}`
+            : isHttp(account.provider)
+              ? `${account.provider} (HTTPS)`
+              : `${account.host}:${account.port} ${account.encryption}`}
         </div>
         {account.decryptError && (
           <div className="note bad" style={{ marginTop: 8 }}>
@@ -250,15 +261,17 @@ function MailAccountForm({
     setF((p) => ({ ...p, [k]: k === 'port' ? Number(e.target.value) : e.target.value }));
 
   const isNew = !account;
-  const http = isHttp(f.provider);
-  // Changing an existing account's provider swaps which credential it needs, so
-  // the server insists on a new one — mirror that here rather than letting the
-  // admin submit into a 400.
+  const smtp = usesSmtp(f.provider);
+  const relay = f.provider === 'relay';
+  // Changing an existing account's provider swaps what its credential and host
+  // MEAN, so the server insists on both again — mirror that rather than letting
+  // the admin submit into a 400.
   const providerChanged = !isNew && account!.provider !== f.provider;
   const needsSecret = isNew || providerChanged;
   const complete =
     f.label && f.fromAddress &&
-    (http || (f.host && f.username)) &&
+    (!needsHost(f.provider) || f.host) &&
+    (!smtp || f.username) &&
     (needsSecret ? f.password : true);
 
   return (
@@ -273,15 +286,27 @@ function MailAccountForm({
           <label>Send using</label>
           <select value={f.provider} onChange={set('provider')}>
             <option value="smtp">SMTP mailbox (cPanel, Gmail, …)</option>
+            <option value="relay">Our mail relay (cPanel over HTTPS)</option>
             <option value="resend">Resend (HTTP API)</option>
           </select>
           <div className="help">
-            {http
-              ? 'Sends over HTTPS — works on hosts that block SMTP, like Railway.'
-              : 'Dials the mail server directly. Blocked on some hosts (Railway drops all SMTP ports).'}
+            {smtp
+              ? 'Dials the mail server directly. Blocked on some hosts — Railway drops all SMTP ports.'
+              : relay
+                ? 'Posts to our own relay on the cPanel box, which sends it. Works where SMTP is blocked; no third party, no cap.'
+                : 'Sends over HTTPS via Resend. Works where SMTP is blocked; needs a verified domain.'}
           </div>
         </div>
-        {!http && (
+        {relay && (
+          <div className="f wide">
+            <label>Relay URL</label>
+            <input value={f.host} onChange={set('host')} placeholder="https://veeb.co.ke/vfw-relay/" />
+            <div className="help">
+              Where the relay is installed. Must be https:// — the token is sent with every message.
+            </div>
+          </div>
+        )}
+        {smtp && (
           <>
             <div className="f">
               <label>SMTP server</label>
@@ -310,18 +335,24 @@ function MailAccountForm({
           </>
         )}
         <div className="f">
-          <label>{http ? 'API key' : 'Password'}</label>
+          <label>{SECRET_LABEL[f.provider] ?? 'Secret'}</label>
           <input
             type="password"
             autoComplete="new-password"
             value={f.password}
             onChange={set('password')}
-            placeholder={needsSecret ? (http ? 're_…' : '') : '•••••••• (set — leave blank to keep)'}
+            placeholder={
+              needsSecret
+                ? (f.provider === 'resend' ? 're_…' : '')
+                : '•••••••• (set — leave blank to keep)'
+            }
           />
           <div className="help">
-            {http
-              ? 'Your Resend API key (starts re_). Stored encrypted.'
-              : 'Stored encrypted. Gmail needs a 16-character App Password, not the account password.'}
+            {smtp
+              ? 'Stored encrypted. Gmail needs a 16-character App Password, not the account password.'
+              : relay
+                ? 'The RELAY_TOKEN from the relay’s index.php. Stored encrypted.'
+                : 'Your Resend API key (starts re_). Stored encrypted.'}
             {providerChanged && ' Required — the stored one belongs to the old provider.'}
           </div>
         </div>

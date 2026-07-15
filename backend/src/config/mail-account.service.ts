@@ -77,9 +77,25 @@ export interface MailAccountInput {
   fromName?: string;
 }
 
-export const PROVIDERS = ['smtp', 'resend'];
-/** Providers that talk HTTP over 443 and need no host/port/username. */
-export const HTTP_PROVIDERS = ['resend'];
+export const PROVIDERS = ['smtp', 'resend', 'relay'];
+
+/**
+ * What each provider actually needs. Three near-identical booleans beat one
+ * "isHttp" flag, because the providers do not divide cleanly in two: `relay`
+ * talks HTTPS like `resend`, but it needs a `host` (its URL) like `smtp`.
+ * Collapsing that would either demand an SMTP hostname from Resend or drop the
+ * relay's URL on save.
+ */
+/** Dials a mail server directly — needs port, encryption and a login. */
+export const SMTP_PROVIDERS = ['smtp'];
+/** Talks HTTPS over 443, so it works where SMTP is blocked. */
+export const HTTP_PROVIDERS = ['resend', 'relay'];
+/** Stores something in `host`: a hostname for smtp, a full URL for relay. */
+export const HOST_PROVIDERS = ['smtp', 'relay'];
+
+export const usesSmtp = (p: string) => SMTP_PROVIDERS.includes(p);
+export const needsHost = (p: string) => HOST_PROVIDERS.includes(p);
+
 const ENCRYPTIONS = ['ssl', 'tls', 'none'];
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
@@ -216,13 +232,28 @@ export class MailAccountService implements OnModuleInit {
     }
     need(input.label, 'Name');
     need(input.fromAddress, 'From address');
+    need(input.password, provider === 'smtp' ? 'Password' : provider === 'relay' ? 'Relay token' : 'API key');
 
-    if (HTTP_PROVIDERS.includes(provider)) {
-      need(input.password, 'API key');
-    } else {
+    if (provider === 'relay') {
+      need(input.host, 'Relay URL');
+      const url = input.host?.trim();
+      if (url) {
+        let parsed: URL;
+        try {
+          parsed = new URL(url);
+        } catch {
+          throw new BadRequestException('Relay URL must be a full URL, like https://veeb.co.ke/vfw-relay/');
+        }
+        // The token travels in a header on every send. Over http:// it travels
+        // in clear text to anyone on the path, and the token is the relay's
+        // entire perimeter.
+        if (parsed.protocol !== 'https:') {
+          throw new BadRequestException('Relay URL must use https:// — the token is sent with every message');
+        }
+      }
+    } else if (usesSmtp(provider)) {
       need(input.host, 'SMTP server');
       need(input.username, 'Username');
-      need(input.password, 'Password');
 
       if (input.host?.includes('@')) {
         throw new BadRequestException(
@@ -253,7 +284,7 @@ export class MailAccountService implements OnModuleInit {
   async create(input: MailAccountInput, actor: AuthUser): Promise<MailAccountView[]> {
     const provider = input.provider?.trim() || 'smtp';
     this.validate(input, true, provider);
-    const http = HTTP_PROVIDERS.includes(provider);
+    const smtp = usesSmtp(provider);
 
     await this.prisma.$transaction(async (tx) => {
       const first = (await tx.mailAccount.count()) === 0;
@@ -261,12 +292,13 @@ export class MailAccountService implements OnModuleInit {
         data: {
           label: input.label!.trim(),
           provider,
-          // An HTTP provider has no host/port/username. Store them blank rather
-          // than letting a stale SMTP value sit in the row implying otherwise.
-          host: http ? '' : input.host!.trim(),
-          port: http ? 465 : (input.port ?? 465),
-          encryption: http ? 'ssl' : (input.encryption ?? 'ssl'),
-          username: http ? '' : input.username!.trim(),
+          // Only what this provider actually uses is stored. Anything else is
+          // blanked rather than left holding a stale value that implies the row
+          // dials a host it never touches.
+          host: needsHost(provider) ? input.host!.trim() : '',
+          port: smtp ? (input.port ?? 465) : 465,
+          encryption: smtp ? (input.encryption ?? 'ssl') : 'ssl',
+          username: smtp ? input.username!.trim() : '',
           password: encryptSecret(input.password!),
           fromAddress: input.fromAddress!.trim(),
           fromName: input.fromName?.trim() || null,
@@ -301,30 +333,48 @@ export class MailAccountService implements OnModuleInit {
     // different KIND of credential once the provider changes — an SMTP password
     // is not an API key. Silently carrying it over would produce an account that
     // looks configured and fails on the first real send.
-    if (provider !== existing.provider && !input.password?.trim()) {
-      throw new BadRequestException(
-        `Changing this account to ${provider} needs its ` +
-          `${HTTP_PROVIDERS.includes(provider) ? 'API key' : 'password'} — the stored one belongs to ${existing.provider}.`,
-      );
+    if (provider !== existing.provider) {
+      if (!input.password?.trim()) {
+        const kind =
+          provider === 'smtp' ? 'password' : provider === 'relay' ? 'relay token' : 'API key';
+        throw new BadRequestException(
+          `Changing this account to ${provider} needs its ${kind} — ` +
+            `the stored one belongs to ${existing.provider}.`,
+        );
+      }
+      // `host` means a different thing per provider: a hostname for smtp, a full
+      // URL for relay. Keeping the old value across a switch would leave
+      // "mail.veeb.co.ke" sitting in a field that must hold
+      // "https://veeb.co.ke/vfw-relay/" — configured-looking and broken.
+      if (needsHost(provider) && !input.host?.trim()) {
+        throw new BadRequestException(
+          provider === 'relay'
+            ? 'Changing this account to relay needs its relay URL.'
+            : 'Changing this account to smtp needs its SMTP server.',
+        );
+      }
     }
     this.validate(input, false, provider);
-    const http = HTTP_PROVIDERS.includes(provider);
+    const smtp = usesSmtp(provider);
 
     const data: Prisma.MailAccountUpdateInput = { updatedById: actor.id, provider };
     if (input.label?.trim()) data.label = input.label.trim();
     if (input.password?.trim()) data.password = encryptSecret(input.password);
     if (input.fromAddress?.trim()) data.fromAddress = input.fromAddress.trim();
     if (input.fromName !== undefined) data.fromName = input.fromName.trim() || null;
-    if (http) {
-      // Switching an account to an HTTP provider clears the SMTP-only fields, so
-      // the row cannot keep claiming a host it no longer dials.
-      data.host = '';
-      data.username = '';
-    } else {
+
+    if (needsHost(provider)) {
       if (input.host?.trim()) data.host = input.host.trim();
+    } else {
+      // Nothing to dial: do not let the row keep claiming a host.
+      data.host = '';
+    }
+    if (smtp) {
       if (input.port !== undefined) data.port = input.port;
       if (input.encryption) data.encryption = input.encryption;
       if (input.username?.trim()) data.username = input.username.trim();
+    } else {
+      data.username = '';
     }
 
     await this.prisma.$transaction(async (tx) => {

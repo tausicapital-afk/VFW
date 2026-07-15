@@ -291,6 +291,107 @@ async function resendVerify(account: SendingAccount): Promise<void> {
   if (!res.ok) throw new Error(await resendError(res));
 }
 
+/**
+ * The relay: our own PHP endpoint on a box that IS allowed to send.
+ *
+ * Same trick as Resend — leave over 443 — but the far end is `ops/mail-relay`,
+ * which hands the message to the local mail server on the cPanel host. So mail
+ * still departs from veeb.co.ke under its own SPF/DKIM, with no third party and
+ * no monthly cap. `account.host` is the relay URL; `account.secret` is the
+ * shared token.
+ */
+async function relayPost(
+  account: SendingAccount,
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  let res: Response;
+  try {
+    res = await fetch(account.host, {
+      method: 'POST',
+      headers: {
+        'X-Relay-Token': account.secret,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(20_000),
+    });
+  } catch (err) {
+    // Reaching the relay at all is a distinct failure from the relay refusing
+    // the message: one means the URL or the box, the other means the payload.
+    const why = err instanceof Error ? err.message : String(err);
+    throw new Error(`Could not reach the relay at ${account.host}: ${why}`);
+  }
+
+  let payload: Record<string, unknown> = {};
+  try {
+    payload = (await res.json()) as Record<string, unknown>;
+  } catch {
+    // A 404 page or a PHP fatal — not JSON. Say so plainly; "unexpected token <"
+    // sends nobody anywhere useful.
+    throw new Error(
+      `The relay at ${account.host} did not return JSON (HTTP ${res.status}). ` +
+        `Check the URL points at the relay folder and that PHP is running there.`,
+    );
+  }
+
+  if (!res.ok || payload.ok !== true) {
+    const detail = typeof payload.error === 'string' ? payload.error : `HTTP ${res.status}`;
+    throw new Error(`The relay refused the message: ${detail}`);
+  }
+  return payload;
+}
+
+async function relaySend(account: SendingAccount, mail: Mail): Promise<void> {
+  await relayPost(account, {
+    to: mail.to,
+    subject: mail.subject,
+    html: mail.html,
+    text: mail.text,
+    fromAddress: account.fromAddress,
+    fromName: account.fromName ?? '',
+  });
+}
+
+/**
+ * Prove the relay is reachable and the token is right, without sending.
+ *
+ * There is no ping endpoint by design — the relay's only job is to send. So this
+ * posts a deliberately invalid message: the token is checked BEFORE the payload,
+ * so a bad token still answers 401 while a good one gets as far as "a valid
+ * 'to' address is required". Reaching that error is the proof.
+ */
+async function relayVerify(account: SendingAccount): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(account.host, {
+      method: 'POST',
+      headers: { 'X-Relay-Token': account.secret, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ probe: true }),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    throw new Error(`Could not reach the relay at ${account.host}: ${why}`);
+  }
+
+  if (res.status === 401) throw new Error('The relay rejected the token.');
+  if (res.status === 404) {
+    throw new Error(`No relay at ${account.host} (404) — check the URL.`);
+  }
+  // 400 is the expected answer to a probe with no recipient: token accepted,
+  // payload rejected. Anything else that is not 2xx is a real problem.
+  if (res.status !== 400 && !res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body.error) detail = body.error;
+    } catch {
+      /* not JSON — the status is all we have */
+    }
+    throw new Error(`The relay is not usable: ${detail}`);
+  }
+}
+
 @Injectable()
 export class EmailService {
   private readonly log = new Logger(EmailService.name);
@@ -391,17 +492,32 @@ export class EmailService {
    */
   private async deliver(account: SendingAccount, mail: Mail): Promise<void> {
     const from = this.fromHeader(account);
-    if (account.provider === 'resend') {
-      await resendSend(account, mail, from);
-      return;
+    switch (account.provider) {
+      case 'resend':
+        return resendSend(account, mail, from);
+      case 'relay':
+        return relaySend(account, mail);
+      default:
+        await this.transportFor(account).sendMail({
+          from,
+          to: mail.to,
+          subject: mail.subject,
+          text: mail.text,
+          html: mail.html,
+        });
     }
-    await this.transportFor(account).sendMail({
-      from,
-      to: mail.to,
-      subject: mail.subject,
-      text: mail.text,
-      html: mail.html,
-    });
+  }
+
+  /** Prove the credential without sending. One branch per provider, as above. */
+  private async proveCredential(account: SendingAccount): Promise<void> {
+    switch (account.provider) {
+      case 'resend':
+        return resendVerify(account);
+      case 'relay':
+        return relayVerify(account);
+      default:
+        await this.buildTransport(account).verify();
+    }
   }
 
   /**
@@ -416,11 +532,7 @@ export class EmailService {
   async verify(): Promise<void> {
     const account = this.resolve();
     if (!account) throw new EmailNotConfiguredError();
-    if (account.provider === 'resend') {
-      await resendVerify(account);
-      return;
-    }
-    await this.buildTransport(account).verify();
+    await this.proveCredential(account);
   }
 
   async send(mail: Mail): Promise<void> {
@@ -453,14 +565,10 @@ export class EmailService {
     const account = accountId ? this.accounts.byId(accountId) : this.resolve();
     if (!account) throw new EmailNotConfiguredError();
 
-    // Prove the credential before composing anything. For SMTP this is the
-    // handshake; for Resend it is an authenticated GET. Either way its error is
-    // allowed through — that is the whole value of a test.
-    if (account.provider === 'resend') {
-      await resendVerify(account);
-    } else {
-      await this.buildTransport(account).verify();
-    }
+    // Prove the credential before composing anything. SMTP does a handshake,
+    // Resend an authenticated GET, the relay a probe POST. Either way the error
+    // is allowed through — that is the whole value of a test.
+    await this.proveCredential(account);
 
     const mail = withBrand(account.fromName, () => {
       const first = esc((name || '').split(' ')[0] || 'there');

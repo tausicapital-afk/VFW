@@ -190,6 +190,71 @@ describe('mail accounts', () => {
     await add({ provider: 'carrier-pigeon' }, 400);
   });
 
+  // The relay keeps a host (its URL) but needs no port/encryption/username.
+  it('takes a relay with a URL and a token', async () => {
+    const res = await http(app)
+      .post('/api/admin/mail-accounts')
+      .set('Cookie', admin)
+      .send({
+        label: 'cPanel relay',
+        provider: 'relay',
+        host: 'https://veeb.example.invalid/vfw-relay/',
+        password: 'relay-token',
+        fromAddress: 'vfw@veeb.example.invalid',
+      })
+      .expect(201);
+
+    const row = (res.body.accounts as { provider: string; host: string; username: string }[])[0];
+    expect(row.provider).toBe('relay');
+    expect(row.host).toBe('https://veeb.example.invalid/vfw-relay/');
+    expect(row.username).toBe('');
+  });
+
+  // The token rides in a header on every send, and it is the relay's whole
+  // perimeter — over http:// it is readable by anyone on the path.
+  it('refuses a relay URL that is not https', async () => {
+    const res = await http(app)
+      .post('/api/admin/mail-accounts')
+      .set('Cookie', admin)
+      .send({
+        label: 'insecure relay',
+        provider: 'relay',
+        host: 'http://veeb.example.invalid/vfw-relay/',
+        password: 'relay-token',
+        fromAddress: 'vfw@veeb.example.invalid',
+      })
+      .expect(400);
+
+    expect(JSON.stringify(res.body)).toMatch(/https/i);
+  });
+
+  it('refuses a relay URL that is not a URL at all', async () => {
+    await http(app)
+      .post('/api/admin/mail-accounts')
+      .set('Cookie', admin)
+      .send({
+        label: 'bad relay',
+        provider: 'relay',
+        host: 'mail.veeb.co.ke',
+        password: 'relay-token',
+        fromAddress: 'vfw@veeb.example.invalid',
+      })
+      .expect(400);
+  });
+
+  // `host` means a hostname for smtp and a URL for relay: carrying the old value
+  // across the switch would leave a configured-looking, broken account.
+  it('will not reuse an SMTP hostname as a relay URL', async () => {
+    const { accounts } = await add();
+    const res = await http(app)
+      .patch(`/api/admin/mail-accounts/${accounts[0].id}`)
+      .set('Cookie', admin)
+      .send({ provider: 'relay', password: 'relay-token' }) // no new host
+      .expect(400);
+
+    expect(JSON.stringify(res.body)).toMatch(/relay URL/i);
+  });
+
   it('will not delete the mailbox that is currently sending', async () => {
     await add();
     const { accounts } = await add({ label: 'Gmail', username: 'x@gmail.invalid', host: 'smtp.gmail.invalid' });
