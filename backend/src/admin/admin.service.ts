@@ -7,10 +7,14 @@ import { AuthUser } from '../common/auth.guard';
 import { EmailService } from '../common/email';
 import { PrismaService } from '../prisma/prisma.service';
 import {
+  CreateAddonDto,
   CreateInvitationDto,
+  CreatePackageDto,
   RejectUserDto,
   UpdateAddonDto,
+  UpdateInvitationDto,
   UpdatePackageDto,
+  UpdatePendingUserDto,
   UpdateSettingsDto,
   UpdateTaxDto,
 } from './dto';
@@ -43,6 +47,26 @@ function decimal(raw: string, field: string): Decimal {
     throw new BadRequestException(`${field} must be a positive number`);
   }
   return d;
+}
+
+/**
+ * Catalogue ids are read by people — they appear in QuickBooks exports and in
+ * every audit payload that names a package — so a new row gets a derived id
+ * rather than a cuid, spelled the way the seed spells them: VFW + "Bronze
+ * Package" -> VFW-BRONZE. The word "Package" is dropped because every package
+ * has it and an id that repeats its own noun says nothing.
+ *
+ * Admin.tsx previews this id in the new-package modal and applies the same
+ * rules; keep the two in step.
+ */
+export function catalogueId(brand: string, name: string): string {
+  const slug = name
+    .toUpperCase()
+    .replace(/\bPACKAGE\b/g, ' ')
+    .replace(/[^A-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  if (!slug) throw new BadRequestException('That name has no letters or digits to build an id from');
+  return `${brand.toUpperCase()}-${slug}`;
 }
 
 @Injectable()
@@ -124,10 +148,98 @@ export class AdminService {
 
   async listInvitations() {
     const rows = await this.prisma.invitation.findMany({
+      where: { deletedAt: null },
       orderBy: { createdAt: 'desc' },
       include: { createdBy: { select: { name: true } } },
     });
     return { invitations: rows.map((i) => this.shape(i, i.createdBy.name)) };
+  }
+
+  /**
+   * Role, department and email only — see UpdateInvitationDto for why the code
+   * and the expiry are not editable. Changing the email does not re-send the
+   * invitation: the admin is told to pass on the link, the same as at create,
+   * rather than us quietly mailing a stranger.
+   */
+  async updateInvitation(id: string, dto: UpdateInvitationDto, actor: AuthUser) {
+    const invitation = await this.prisma.invitation.findFirst({
+      where: { id, deletedAt: null },
+    });
+    if (!invitation) throw new NotFoundException('Invitation not found');
+
+    // A redeemed invitation is a historical fact — it already produced an
+    // account, and editing the role here would not move that account.
+    if (invitation.usedAt) {
+      throw new BadRequestException('That invitation has been redeemed and can no longer be edited');
+    }
+
+    const email = dto.email === null ? null : dto.email?.trim().toLowerCase();
+    if (email && email !== invitation.email) {
+      const taken = await this.prisma.user.findUnique({ where: { email } });
+      if (taken) throw new BadRequestException('An account already exists for that email');
+    }
+
+    const before: Record<string, Prisma.InputJsonValue | null> = {};
+    const after: Record<string, Prisma.InputJsonValue | null> = {};
+    const data: Prisma.InvitationUpdateInput = {};
+
+    if (dto.role !== undefined && dto.role !== invitation.role) {
+      before.role = invitation.role;
+      after.role = dto.role;
+      data.role = dto.role;
+    }
+    if (dto.department !== undefined && dto.department !== invitation.department) {
+      before.department = invitation.department;
+      after.department = dto.department;
+      data.department = dto.department;
+    }
+    if (email !== undefined && email !== invitation.email) {
+      before.email = invitation.email;
+      after.email = email;
+      data.email = email;
+    }
+
+    if (!Object.keys(data).length) return this.shape(invitation, actor.name);
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.invitation.update({ where: { id }, data });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'INVITE_UPDATED',
+          detail: `Invitation ${invitation.code} edited (${Object.keys(after).join(', ')})`,
+          payload: { invitationId: id, code: invitation.code, before, after },
+        },
+        tx,
+      );
+      return this.shape(updated, actor.name);
+    });
+  }
+
+  /**
+   * Soft delete: the row leaves the admin list but stays on file, because the
+   * audit entries that name this invitation have to keep resolving. It also
+   * stops being redeemable — see the signup path, which checks `deletedAt`.
+   */
+  async deleteInvitation(id: string, actor: AuthUser) {
+    const invitation = await this.prisma.invitation.findFirst({
+      where: { id, deletedAt: null },
+    });
+    if (!invitation) throw new NotFoundException('Invitation not found');
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.invitation.update({ where: { id }, data: { deletedAt: new Date() } });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'INVITE_DELETED',
+          detail: `Invitation ${invitation.code} deleted`,
+          payload: { invitationId: id, code: invitation.code, email: invitation.email },
+        },
+        tx,
+      );
+      return { ok: true };
+    });
   }
 
   async revokeInvitation(id: string, user: AuthUser) {
@@ -186,7 +298,7 @@ export class AdminService {
       // `hidden` accounts (demo / test logins) are deliberately omitted here.
       // They still authenticate — this filter only keeps them off the Users tab.
       users: await this.prisma.user.findMany({
-        where: { hidden: false },
+        where: { hidden: false, deletedAt: null },
         select: this.userFields,
         orderBy: [{ status: 'asc' }, { name: 'asc' }],
       }),
@@ -196,15 +308,105 @@ export class AdminService {
   async pendingUsers() {
     return {
       users: await this.prisma.user.findMany({
-        where: { status: UserStatus.PENDING, hidden: false },
+        where: { status: UserStatus.PENDING, hidden: false, deletedAt: null },
         select: this.userFields,
         orderBy: { createdAt: 'asc' },
       }),
     };
   }
 
+  /**
+   * Corrections made while reviewing a signup — the role and department someone
+   * typed into the form are a request, not a fact, and an admin fixing them
+   * before approving beats approving and then re-editing.
+   *
+   * Email is not editable: it is the login identity, it is what the OTP was
+   * sent to, and it is the one field the account holder has already proved.
+   */
+  async updatePendingUser(id: string, dto: UpdatePendingUserDto, actor: AuthUser) {
+    const user = await this.prisma.user.findFirst({ where: { id, deletedAt: null } });
+    if (!user) throw new NotFoundException('User not found');
+    if (user.status !== UserStatus.PENDING) {
+      throw new BadRequestException(`That account is ${user.status}, not pending`);
+    }
+
+    const before: Record<string, Prisma.InputJsonValue | null> = {};
+    const after: Record<string, Prisma.InputJsonValue | null> = {};
+    const data: Prisma.UserUpdateInput = {};
+
+    const name = dto.name?.trim();
+    if (name !== undefined && name !== user.name) {
+      before.name = user.name;
+      after.name = name;
+      data.name = name;
+    }
+    if (dto.phone !== undefined && dto.phone !== user.phone) {
+      before.phone = user.phone;
+      after.phone = dto.phone;
+      data.phone = dto.phone;
+    }
+    if (dto.role !== undefined && dto.role !== user.role) {
+      before.role = user.role;
+      after.role = dto.role;
+      data.role = dto.role;
+    }
+    if (dto.department !== undefined && dto.department !== user.department) {
+      before.department = user.department;
+      after.department = dto.department;
+      data.department = dto.department;
+    }
+
+    if (!Object.keys(data).length) {
+      return { user: await this.prisma.user.findUniqueOrThrow({ where: { id }, select: this.userFields }) };
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.user.update({ where: { id }, data, select: this.userFields });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'USER_UPDATED',
+          detail: `Edited pending account for ${user.name} (${Object.keys(after).join(', ')})`,
+          payload: { userId: id, email: user.email, before, after },
+        },
+        tx,
+      );
+      return { user: updated };
+    });
+  }
+
+  /**
+   * Soft delete, for a signup that should never have reached the queue at all —
+   * spam, a duplicate, a typo'd address. Distinct from reject, which is a
+   * decision on record about a real request; this is a decision that there was
+   * no real request. The row stays for the audit trail, and tokenVersion is
+   * bumped so anything already holding a session for it dies now.
+   */
+  async deleteUser(id: string, actor: AuthUser) {
+    const user = await this.prisma.user.findFirst({ where: { id, deletedAt: null } });
+    if (!user) throw new NotFoundException('User not found');
+    if (user.id === actor.id) throw new BadRequestException('You cannot delete your own account');
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id },
+        data: { deletedAt: new Date(), tokenVersion: { increment: 1 } },
+      });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'USER_DELETED',
+          detail: `Deleted account for ${user.name} (${user.email})`,
+          payload: { userId: id, email: user.email, role: user.role, status: user.status },
+        },
+        tx,
+      );
+      return { ok: true };
+    });
+  }
+
   async approveUser(id: string, actor: AuthUser) {
-    const user = await this.prisma.user.findUnique({ where: { id } });
+    const user = await this.prisma.user.findFirst({ where: { id, deletedAt: null } });
     if (!user) throw new NotFoundException('User not found');
     if (user.status !== UserStatus.PENDING) {
       throw new BadRequestException(`That account is ${user.status}, not pending`);
@@ -235,7 +437,7 @@ export class AdminService {
    * never removed.
    */
   async rejectUser(id: string, dto: RejectUserDto, actor: AuthUser) {
-    const user = await this.prisma.user.findUnique({ where: { id } });
+    const user = await this.prisma.user.findFirst({ where: { id, deletedAt: null } });
     if (!user) throw new NotFoundException('User not found');
     if (user.status !== UserStatus.PENDING) {
       throw new BadRequestException(`That account is ${user.status}, not pending`);
@@ -272,6 +474,138 @@ export class AdminService {
   // reads a catalogue price is PricingService, at create/resubmit time.
   // catalog.spec.ts holds this line with a test.
   // -------------------------------------------------------------------------
+
+  private async assertTaxAndGl(taxCode: string, glCode: string) {
+    if (!(await this.prisma.taxProfile.findUnique({ where: { code: taxCode } }))) {
+      throw new BadRequestException(`Unknown tax profile ${taxCode}`);
+    }
+    if (!(await this.prisma.glAccount.findUnique({ where: { code: glCode } }))) {
+      throw new BadRequestException(`Unknown GL account ${glCode}`);
+    }
+  }
+
+  /**
+   * A new package is only ever additive: it appears on the new-submission form
+   * from now on and touches nothing that has already been sold. Created with its
+   * city prices in one transaction, because a package with no price is not
+   * sellable and half of one is not worth leaving behind.
+   */
+  async createPackage(dto: CreatePackageDto, actor: AuthUser) {
+    const brand = dto.brand.trim().toUpperCase();
+    const name = dto.name.trim();
+    const id = catalogueId(brand, name);
+
+    if (await this.prisma.package.findUnique({ where: { id } })) {
+      throw new BadRequestException(
+        `${brand} already has a package with the id ${id} — give this one a different name`,
+      );
+    }
+    await this.assertTaxAndGl(dto.taxCode, dto.glCode);
+
+    // Two prices for one city would otherwise reach the @@unique constraint and
+    // come back as a 500 rather than as something the admin can act on.
+    const cityIds = dto.prices.map((p) => p.cityId);
+    if (new Set(cityIds).size !== cityIds.length) {
+      throw new BadRequestException('A package can only carry one price per city');
+    }
+    const cities = await this.prisma.city.findMany({ where: { id: { in: cityIds } } });
+    for (const cityId of cityIds) {
+      if (!cities.some((c) => c.id === cityId)) {
+        throw new BadRequestException(`Unknown city ${cityId}`);
+      }
+    }
+
+    const prices = dto.prices.map((p) => ({
+      cityId: p.cityId,
+      currency: p.currency,
+      price: decimal(p.price, `Price for ${p.cityId}`).toFixed(2),
+    }));
+
+    return this.prisma.$transaction(async (tx) => {
+      const created = await tx.package.create({
+        data: {
+          id,
+          brand,
+          name,
+          looks: dto.looks,
+          blurb: dto.blurb?.trim() || null,
+          taxCode: dto.taxCode,
+          glCode: dto.glCode,
+          prices: { create: prices },
+        },
+        include: { prices: { include: { city: true } } },
+      });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'CATALOG_PACKAGE_CREATED',
+          detail: `Package added to the rate card: ${brand} ${name}`,
+          payload: {
+            packageId: id,
+            brand,
+            name,
+            looks: dto.looks,
+            taxCode: dto.taxCode,
+            glCode: dto.glCode,
+            prices,
+          },
+        },
+        tx,
+      );
+      return created;
+    });
+  }
+
+  async createAddon(dto: CreateAddonDto, actor: AuthUser) {
+    const brand = dto.brand.trim().toUpperCase();
+    const name = dto.name.trim();
+    const id = catalogueId(brand, name);
+
+    if (await this.prisma.addon.findUnique({ where: { id } })) {
+      throw new BadRequestException(
+        `${brand} already has an add-on with the id ${id} — give this one a different name`,
+      );
+    }
+    if (!(await this.prisma.glAccount.findUnique({ where: { code: dto.glCode } }))) {
+      throw new BadRequestException(`Unknown GL account ${dto.glCode}`);
+    }
+
+    const forBrands = dto.forBrands.map((b) => b.trim().toUpperCase());
+    const price = decimal(dto.price, 'Price').toFixed(2);
+
+    return this.prisma.$transaction(async (tx) => {
+      const created = await tx.addon.create({
+        data: {
+          id,
+          brand,
+          name,
+          price,
+          currency: dto.currency,
+          note: dto.note?.trim() || null,
+          forBrands,
+          glCode: dto.glCode,
+        },
+      });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'CATALOG_ADDON_CREATED',
+          detail: `Add-on added to the catalogue: ${brand} ${name}`,
+          payload: {
+            addonId: id,
+            brand,
+            name,
+            price,
+            currency: dto.currency,
+            forBrands,
+            glCode: dto.glCode,
+          },
+        },
+        tx,
+      );
+      return created;
+    });
+  }
 
   async updatePackage(id: string, dto: UpdatePackageDto, actor: AuthUser) {
     const pkg = await this.prisma.package.findUnique({

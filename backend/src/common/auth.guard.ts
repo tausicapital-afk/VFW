@@ -69,12 +69,15 @@ export async function verifySession(
 
   const user = await prisma.user.findUnique({
     where: { id: claims.id },
-    select: { id: true, email: true, name: true, role: true, status: true, tokenVersion: true },
+    select: {
+      id: true, email: true, name: true, role: true,
+      status: true, deletedAt: true, tokenVersion: true,
+    },
   });
 
   // Deleted, disabled, rejected, or still awaiting email verification — none of
   // those may act, whatever the token says.
-  if (!user || user.status !== UserStatus.ACTIVE) {
+  if (!user || user.deletedAt || user.status !== UserStatus.ACTIVE) {
     throw new UnauthorizedException('This account is no longer active');
   }
 

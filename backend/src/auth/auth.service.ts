@@ -69,6 +69,11 @@ export class AuthService {
       throw new UnauthorizedException('Email or password is incorrect');
     }
 
+    // A deleted account keeps its row (and may still read ACTIVE) purely so the
+    // audit trail resolves. It is not a login. Checked before status so a
+    // deleted PENDING account is never told to go and verify its email.
+    if (user.deletedAt) throw new UnauthorizedException('This account is not active');
+
     // A valid password is still not a login if the account has not been let in.
     if (user.status !== UserStatus.ACTIVE) {
       const reason =
@@ -166,7 +171,7 @@ export class AuthService {
       'That invitation code is not recognised, has expired, or has already been used',
     );
     if (!invitation) throw invalid;
-    if (invitation.usedAt || invitation.revokedAt) throw invalid;
+    if (invitation.usedAt || invitation.revokedAt || invitation.deletedAt) throw invalid;
     if (invitation.expiresAt <= new Date()) throw invalid;
 
     // An invitation addressed to someone is not a bearer token for anyone.
@@ -180,7 +185,13 @@ export class AuthService {
 
     const user = await this.prisma.$transaction(async (tx) => {
       const claimed = await tx.invitation.updateMany({
-        where: { id: invitation.id, usedAt: null, revokedAt: null, expiresAt: { gt: new Date() } },
+        where: {
+          id: invitation.id,
+          usedAt: null,
+          revokedAt: null,
+          deletedAt: null,
+          expiresAt: { gt: new Date() },
+        },
         data: { usedAt: new Date() },
       });
       if (claimed.count !== 1) throw invalid;

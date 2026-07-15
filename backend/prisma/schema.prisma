@@ -52,6 +52,12 @@ model User {
   // is still ACTIVE and authenticates normally — it is only filtered out of the
   // admin people listings, never out of auth.
   hidden        Boolean    @default(false)
+  // Soft delete. Distinct from `hidden`, which keeps a working account off the
+  // listings: a deleted account is gone as far as the app is concerned — it is
+  // filtered from every admin listing AND refused at login and by the guard.
+  // The row survives only so the audit trail it is named in stays readable.
+  // Note this does not free the email: the unique constraint still holds it.
+  deletedAt     DateTime?
   // Bumped to invalidate every session this user currently holds. The session
   // JWT carries the value it was minted with; the guard refuses a token whose
   // value has fallen behind. A password reset bumps it, so a stolen session
@@ -99,6 +105,12 @@ model Invitation {
   usedAt     DateTime?
   usedById   String?
   revokedAt  DateTime?
+  // Soft delete, and not the same thing as `revokedAt`: revoking is a decision
+  // about the invitation that admins are meant to keep seeing afterwards,
+  // deleting is a decision about the list. Both stop the code being redeemed —
+  // a "deleted" invitation that still let someone sign up would be a trap.
+  // The row survives for the audit entries that name it.
+  deletedAt  DateTime?
   createdAt  DateTime  @default(now())
 
   createdById String

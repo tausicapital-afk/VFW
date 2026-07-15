@@ -2,11 +2,16 @@ import { Controller, ForbiddenException, Get, Module, Param, Query, Req, Res } f
 import type { Request, Response } from 'express';
 import { ActivityModule } from '../activity/activity.controller';
 import { ActivityService } from '../activity/activity.service';
+import { AdminModule } from '../admin/admin.controller';
+import { AdminService } from '../admin/admin.service';
 import { can } from '../common/acl';
 import { AuthUser, CurrentUser } from '../common/auth.guard';
 import { SubmissionsModule } from '../submissions/submissions.controller';
 import { SubmissionsService } from '../submissions/submissions.service';
+import { addonsDataset, packagesDataset, taxesDataset } from './datasets/catalogue.dataset';
+import { invitationsDataset } from './datasets/invitations.dataset';
 import { submissionsDataset } from './datasets/submissions.dataset';
+import { userApprovalsDataset, usersDataset } from './datasets/users.dataset';
 import { ExportQueryDto } from './dto';
 import { ExportRegistry } from './export.registry';
 import { ExportService } from './export.service';
@@ -67,7 +72,7 @@ export class ExportController {
 }
 
 @Module({
-  imports: [SubmissionsModule, ActivityModule],
+  imports: [SubmissionsModule, ActivityModule, AdminModule],
   controllers: [ExportController],
   providers: [ExportRegistry, ExportService],
 })
@@ -75,8 +80,19 @@ export class ExportModule {
   /**
    * Where every exportable resource is declared. To make a new one exportable,
    * add a dataset file next to submissions.dataset.ts and register it here.
+   *
+   * The admin datasets each carry `permission: 'admin.manage'`. They have to:
+   * unlike submissions, their `load` returns the same rows to everyone, so the
+   * dataset's own permission is the only thing standing between a signed-in rep
+   * and the staff list.
    */
-  constructor(registry: ExportRegistry, submissions: SubmissionsService) {
+  constructor(registry: ExportRegistry, submissions: SubmissionsService, admin: AdminService) {
     registry.register(submissionsDataset(submissions));
+    registry.register(userApprovalsDataset(admin));
+    registry.register(invitationsDataset(admin));
+    registry.register(usersDataset(admin));
+    registry.register(packagesDataset(admin));
+    registry.register(addonsDataset(admin));
+    registry.register(taxesDataset(admin));
   }
 }

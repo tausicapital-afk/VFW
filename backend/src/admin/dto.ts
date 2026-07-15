@@ -1,6 +1,7 @@
-import { Role } from '@prisma/client';
+import { Currency, Role } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
+  ArrayMinSize,
   IsArray,
   IsEmail,
   IsEnum,
@@ -12,6 +13,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 
@@ -36,6 +38,56 @@ export class CreateInvitationDto {
   expiresInDays?: number;
 }
 
+/**
+ * Every field optional: the modal PATCHes what the admin actually touched, and
+ * the service diffs against the row so the audit entry records the change and
+ * not the form. The code and the expiry are deliberately absent — the code is
+ * already in someone's inbox, and the expiry is what `revoke` is for.
+ *
+ * `email: null` is meaningful and distinct from omitting it: it clears the
+ * address, turning an addressed invitation back into an open code.
+ */
+export class UpdateInvitationDto {
+  @IsOptional()
+  @IsEnum(Role)
+  role?: Role;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  department?: string;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsEmail()
+  email?: string | null;
+}
+
+/** Corrections an admin makes while reviewing a signup, before approving it. */
+export class UpdatePendingUserDto {
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(120)
+  name?: string;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  @MaxLength(40)
+  phone?: string | null;
+
+  @IsOptional()
+  @IsEnum(Role)
+  role?: Role;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  @MaxLength(60)
+  department?: string | null;
+}
+
 export class RejectUserDto {
   @IsOptional()
   @IsString()
@@ -56,6 +108,97 @@ export class CityPriceDto {
 
   @IsString()
   price: string;
+}
+
+/**
+ * A price on a package being created carries its own currency, which is not
+ * always the city's: VFW sells Vancouver in USD, and the Emerging Designer
+ * package sells the same city in CAD. The city cannot be asked.
+ */
+export class CreatePackagePriceDto {
+  @IsString()
+  cityId: string;
+
+  @IsEnum(Currency)
+  currency: Currency;
+
+  @IsString()
+  price: string;
+}
+
+/**
+ * The id is absent on purpose — the service derives it from brand and name
+ * (VFW + "Bronze Package" -> VFW-BRONZE), the way the seed spells them, because
+ * these ids are read by people in exports and audit payloads.
+ *
+ * At least one city price is required: a package with no price would show up on
+ * the new-submission form and then fail to price, which is worse than not
+ * existing.
+ */
+export class CreatePackageDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(20)
+  brand: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(120)
+  name: string;
+
+  @IsInt()
+  @Min(1)
+  @Max(200)
+  looks: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  blurb?: string;
+
+  @IsString()
+  taxCode: string;
+
+  @IsString()
+  glCode: string;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ValidateNested({ each: true })
+  @Type(() => CreatePackagePriceDto)
+  prices: CreatePackagePriceDto[];
+}
+
+export class CreateAddonDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(20)
+  brand: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(120)
+  name: string;
+
+  @IsString()
+  price: string;
+
+  @IsEnum(Currency)
+  currency: Currency;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  note?: string;
+
+  /** Which brands may buy it — an add-on is not always sold only by its own. */
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsString({ each: true })
+  forBrands: string[];
+
+  @IsString()
+  glCode: string;
 }
 
 export class UpdatePackageDto {
