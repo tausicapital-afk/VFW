@@ -29,7 +29,7 @@ export const ACL = {
   'internal.view': ['ACCT', 'MGR', 'ADMIN'],
   'messaging.use': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
   'admin.manage': ['ACCT', 'ADMIN'],
-  'activity.view': ['ADMIN'],
+  'activity.view': ['ACCT', 'ADMIN'],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type Permission = keyof typeof ACL;

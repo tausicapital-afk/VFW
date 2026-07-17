@@ -156,15 +156,21 @@ describe('ACL boundary (server-side authorization)', () => {
     });
   });
 
-  // ---- ACCT is the second keyholder for administration, but not for the logs ----
-  describe('Accounting holds administration', () => {
+  // ---- ACCT and ADMIN are equals: both hold every permission ----
+  describe('Accounting and Admin have identical, full permissions', () => {
     it('can manage users and roles', () => {
       expect(can('admin.manage', 'ACCT')).toBe(true);
     });
 
-    it('still cannot read the activity log — the one single-role permission', () => {
-      expect(can('activity.view', 'ACCT')).toBe(false);
-      expect(ACL['activity.view']).toEqual(['ADMIN']);
+    it('reads the activity log, like an admin', () => {
+      expect(can('activity.view', 'ACCT')).toBe(true);
+    });
+
+    it('holds every permission the admin holds, and nothing less', () => {
+      for (const perm of Object.keys(ACL) as Permission[]) {
+        expect(can(perm, 'ACCT')).toBe(can(perm, 'ADMIN'));
+        expect(can(perm, 'ACCT')).toBe(true);
+      }
     });
 
     it('MGR and the rep roles are unaffected', () => {

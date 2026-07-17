@@ -53,9 +53,10 @@ export const ACL = {
   // this grant is effectively a grant of everything below it.
   'admin.manage': ['ACCT', 'ADMIN'],
   // The activity/logs screen is user-monitoring — who signed in, what they
-  // opened, who they messaged. HR/security-sensitive, so it stays admin-only:
-  // the one permission no second role holds.
-  'activity.view': ['ADMIN'],
+  // opened, who they messaged. HR/security-sensitive, and long held by ADMIN
+  // alone; ACCT now holds it too, so Accounting and Admin carry an identical,
+  // full set of permissions.
+  'activity.view': ['ACCT', 'ADMIN'],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type Permission = keyof typeof ACL;

@@ -55,15 +55,16 @@ From the nav in `frontend/src/shell/Shell.tsx`, enforced server-side by
 | Internal notes | — | — | ✓ | ✓ | ✓ |
 | Reports | — | — | ✓ | ✓ | ✓ |
 | Audit trail | — | — | ✓ | ✓ | ✓ |
-| Administration | — | — | — | — | ✓ |
-| Logs | — | — | — | — | ✓ |
+| Administration | — | — | ✓ | — | ✓ |
+| Logs | — | — | ✓ | — | ✓ |
 
 **Common to everyone:** Dashboard, Submissions, Messages, Leaderboard.
 
-**Admin-only:** Administration (`admin.manage`) and Logs (`activity.view`) — the
-only two permissions restricted to a single role. Logs is user-monitoring (who
-signed in, what they opened, who they messaged), so it is treated as
-HR/security-sensitive.
+**Accounting and Admin are equals.** Both hold every permission, including
+Administration (`admin.manage`) and Logs (`activity.view`). Logs is
+user-monitoring (who signed in, what they opened, who they messaged), so it is
+treated as HR/security-sensitive — but it is shared with Accounting, not
+admin-only.
 
 **The Sales Manager is oversight, not operations.** A manager sees everything
 (all submissions, Reports, Audit, Feedback, Internal notes) but cannot *create* a

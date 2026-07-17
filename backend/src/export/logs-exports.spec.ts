@@ -7,13 +7,14 @@ import { PrismaService } from '../prisma/prisma.service';
  * The Logs exports — Activity, Sessions and Users.
  *
  * All three are user-monitoring, so the gate is the point: 'activity.view' is
- * ADMIN-only, and unlike the submissions dataset none of these scope rows to the
- * caller. Accounting can read the audit trail; nobody but an admin gets a file
- * of who was online and what they opened.
+ * held by ADMIN and ACCT — an equal pair — and unlike the submissions dataset
+ * none of these scope rows to the caller. Accounting and Admin both get the file
+ * of who was online and what they opened; a manager or rep gets nothing.
  */
 
 const ADMIN = 'it@vanfashionweek.com';
 const ACCT = 'accounting@vanfashionweek.com';
+const MGR = 'sales.director@vanfashionweek.com';
 
 function binaryParser(
   res: SuperagentResponse,
@@ -30,6 +31,7 @@ describe('logs exports', () => {
   let prisma: PrismaService;
   let admin: string;
   let acct: string;
+  let mgr: string;
   const logs: string[] = [];
   const sessions: string[] = [];
 
@@ -48,6 +50,7 @@ describe('logs exports', () => {
     prisma = app.get(PrismaService);
     admin = await loginCookie(app, ADMIN);
     acct = await loginCookie(app, ACCT);
+    mgr = await loginCookie(app, MGR);
   }, 60_000);
 
   afterAll(async () => {
@@ -73,8 +76,12 @@ describe('logs exports', () => {
       }
     }, 30_000);
 
-    it('is admin-only — not even accounting may pull it', async () => {
-      await http(app).get(`/api/export/${dataset}?format=csv`).set('Cookie', acct).expect(403);
+    it('accounting may pull it too — Accounting and Admin are equals', async () => {
+      await http(app).get(`/api/export/${dataset}?format=csv`).set('Cookie', acct).expect(200);
+    });
+
+    it('a manager may not — the gate holds for roles without activity.view', async () => {
+      await http(app).get(`/api/export/${dataset}?format=csv`).set('Cookie', mgr).expect(403);
     });
   });
 

@@ -30,10 +30,11 @@ telemetry follows the same rule.
 
 ## 2. Access
 
-The whole screen is gated by a new ACL permission, **`activity.view`**, held by
-**`ADMIN` only** — the same audience as `admin.manage`. User-activity monitoring
-is HR/security-sensitive, so it is not shared with Accounting or Managers the way
-Reports and the Audit trail are.
+The whole screen is gated by the ACL permission **`activity.view`**, held by
+**`ADMIN` and `ACCT`** — the same audience as `admin.manage`. User-activity
+monitoring is HR/security-sensitive, so it is shared only with Accounting (the
+second keyholder role), not with Managers or reps the way Reports and the Audit
+trail are.
 
 The permission lives in both copies of the matrix, as every permission does:
 

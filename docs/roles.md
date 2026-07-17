@@ -76,9 +76,11 @@ including the Logs it does not otherwise hold. It is a trust decision, not a
 partial one, and it is not enforceable as anything narrower without splitting
 the permission.
 
-**Logs is the only single-role permission.** `activity.view` is user-monitoring
-(who signed in, what they opened, who they messaged), so it is treated as
-HR/security-sensitive and stays with `ADMIN` alone.
+**Accounting and Admin hold an identical, full set of permissions.** Everything
+`ADMIN` can do, `ACCT` can do — including `activity.view` (the Logs). Logs is
+user-monitoring (who signed in, what they opened, who they messaged), so it is
+treated as HR/security-sensitive, but it is shared between the two keyholder
+roles rather than reserved to `ADMIN`.
 
 **The Sales Manager is oversight, plus intake.** A manager sees everything (all
 submissions, Reports, Audit, Feedback, Internal notes) and may now create a
@@ -140,10 +142,9 @@ review for detail.
   demoting an admin does not take effect until the token expires.
 - **`submission.editAny` is declared but enforced nowhere.** A dead permission
   that reads like a capability Accounting has, and does not.
-- **`ACCT` can promote itself to `ADMIN`** via Administration, which is the one
-  way it reaches `activity.view`. Accepted when Administration was widened to
-  Accounting, not overlooked — but it means "Logs is admin-only" is a statement
-  about the nav, not a guarantee about who can end up reading it.
+- **`ACCT` can promote itself to `ADMIN`** via Administration. Now that
+  Accounting also holds `activity.view` directly, this no longer changes what it
+  can read — the two roles hold the same permissions either way.
 - **Contact details are writable outside the read scope.** Submitting for an
   existing brand upserts the contact, so a rep can overwrite the details of a
   contact they are not allowed to read.

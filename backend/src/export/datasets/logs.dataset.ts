@@ -8,7 +8,7 @@ type OverviewRow = Awaited<ReturnType<ActivityService['usersOverview']>>[number]
 
 /**
  * The Logs screens. All three are user-monitoring, so all three carry
- * 'activity.view' (ADMIN) — the same gate as the screen. This is HR- and
+ * 'activity.view' (ADMIN and ACCT) — the same gate as the screen. This is HR- and
  * security-sensitive material: the export exists because those questions get
  * answered off-console, in a spreadsheet, not because the tables were untidy.
  */
