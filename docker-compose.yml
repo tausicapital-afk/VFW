@@ -1,3 +1,21 @@
+# Local stack for VFW.
+#
+# Two ways to run it, on purpose:
+#
+#   docker compose up                 -> Postgres ONLY (the default).
+#       The fast inner loop: the DB runs in Docker while you run the backend
+#       (`npm run dev`) and frontend (`npm run dev`) on the host with hot reload.
+#       Backend reaches this DB on the host at localhost:5434 (see backend/.env).
+#
+#   docker compose --profile full up --build   -> whole stack in containers.
+#       DB + backend (migrate + seed + serve) + frontend (nginx serving the SPA
+#       and reverse-proxying /api). One command, and it matches CI/prod because
+#       both app services build from the very same Dockerfiles that ship. Open
+#       http://localhost:8080. Log in with the seeded demo accounts (see
+#       docs/DEPLOYMENT.md -> Seed data; password Vfw@2026! against localhost).
+#
+# The `backend` and `frontend` services carry `profiles: [full]`, so a plain
+# `docker compose up` never builds them — the inner loop stays instant.
 services:
   db:
     image: postgres:16-alpine
@@ -8,6 +26,9 @@ services:
       POSTGRES_PASSWORD: vfw
       POSTGRES_DB: vfw
     ports:
+      # Host 5434 -> container 5432. 5434 (not 5432/5433) because other stacks on
+      # the dev machine already hold those. Only used by a host-run backend; the
+      # in-container backend below talks to `db:5432` on the compose network.
       - "5434:5432"
     volumes:
       - vfw-pgdata:/var/lib/postgresql/data
@@ -16,6 +37,83 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  backend:
+    profiles: ["full"]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: vfw-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # In-network address of the DB service — 5432 (container port), not the
+      # 5434 host mapping. `db` resolves on the compose network.
+      DATABASE_URL: "postgresql://vfw:vfw@db:5432/vfw?schema=public"
+      JWT_SECRET: "dev-only-change-me"
+      NODE_ENV: "development"
+      PORT: "3001"
+      # The browser only ever hits the frontend origin (single-origin proxy), so
+      # CORS is a fallback — but keep it pointed at the frontend for parity.
+      CORS_ORIGIN: "http://localhost:8080"
+      APP_URL: "http://localhost:8080"
+      # Exactly one proxy (the nginx frontend) sits in front of the API here, so
+      # the rate limiter must count 1 hop to recover the real client IP. This is
+      # the local, deterministic count — prod is measured separately with
+      # GET /api/health/ip (see backend/.env and DEPLOYMENT.md).
+      TRUST_PROXY_HOPS: "1"
+      # No mail configured locally: signup/reset return the code in the response
+      # instead of trying to send. Ignored when NODE_ENV=production.
+      DEV_ECHO_LINKS: "true"
+      LOG_LEVEL: "debug"
+    # Apply migrations, seed the catalog + demo users (idempotent upserts), then
+    # serve. Against this localhost DB the seed's published default password is
+    # allowed, so no SEED_PASSWORD is needed.
+    command: >
+      sh -c "npx prisma migrate deploy &&
+             npx ts-node --compiler-options '{\"module\":\"CommonJS\"}' prisma/seed.ts &&
+             node dist/main.js"
+    ports:
+      # Exposed for convenience (hit /api/health directly). The SPA does NOT use
+      # this — it goes through nginx on 8080. Prod keeps the API un-exposed.
+      - "3001:3001"
+    healthcheck:
+      # node:20-slim ships no curl/wget, so probe with Node itself. `127.0.0.1`
+      # works because the app binds `::` dual-stack (see backend/src/main.ts).
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:3001/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
+  frontend:
+    profiles: ["full"]
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Empty -> the SPA calls its own origin at /api (single-origin). nginx
+        # here reverse-proxies that to the backend service.
+        VITE_API_BASE: ""
+    container_name: vfw-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      # nginx.conf.template substitutes these at container start.
+      PORT: "80"
+      BACKEND_URL: "http://backend:3001"
+    ports:
+      - "8080:80"
 
 volumes:
   vfw-pgdata:

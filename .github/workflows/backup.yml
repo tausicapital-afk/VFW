@@ -1,0 +1,115 @@
+name: Backup database to R2
+
+# An OFF-PLATFORM logical backup of production Postgres — the thing Railway's
+# volume snapshots can't give you (see docs/runbook-backups.md §4). A pg_dump in
+# custom format is copied to Cloudflare R2, so a backup survives losing the
+# Railway account itself, and can be restored into a *scratch* database to pull a
+# few rows instead of rolling the whole company back a day.
+#
+# This runs entirely on GitHub Actions cron — it does NOT need the Railway paid
+# plan (unlike deploy.yml). Until the secrets below exist it warns and no-ops
+# rather than failing.
+#
+# Required repo secrets (Settings → Secrets and variables → Actions):
+#   DATABASE_PUBLIC_URL  Railway → Postgres → Variables → DATABASE_PUBLIC_URL
+#                        (the *public* proxy URL — the internal one isn't
+#                        reachable from a GitHub runner).
+#   R2_ENDPOINT          https://<account-id>.r2.cloudflarestorage.com
+#   R2_BUCKET            bucket name for backups (the documents bucket is fine).
+#   R2_ACCESS_KEY_ID     R2 API token access key.
+#   R2_SECRET_ACCESS_KEY R2 API token secret.
+#
+# Restore + verify steps live in docs/runbook-backups.md §3, §5, §6.
+
+on:
+  schedule:
+    # 03:12 UTC daily. Odd minute so we're not on the top-of-hour stampede.
+    - cron: '12 3 * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: db-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    name: pg_dump → R2
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_PUBLIC_URL: ${{ secrets.DATABASE_PUBLIC_URL }}
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      # aws-cli reads these two names natively.
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      # R2 ignores the region but aws-cli requires one to be set.
+      AWS_DEFAULT_REGION: auto
+      # How many days of dumps to keep in R2. Accounting data — keep a while.
+      RETENTION_DAYS: '35'
+    steps:
+      - name: Check backup secrets are configured
+        id: guard
+        run: |
+          if [ -z "${DATABASE_PUBLIC_URL}" ] || [ -z "${R2_ENDPOINT}" ] \
+             || [ -z "${R2_BUCKET}" ] || [ -z "${AWS_ACCESS_KEY_ID}" ] \
+             || [ -z "${AWS_SECRET_ACCESS_KEY}" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Backup secrets not set — skipping. Need DATABASE_PUBLIC_URL, R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # pg_dump must match the server's major version. Railway runs Postgres 18,
+      # so pull the client 18 from the official PGDG apt repo.
+      - name: Install postgresql-client-18
+        if: steps.guard.outputs.configured == 'true'
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-18
+
+      - name: Dump and upload
+        if: steps.guard.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+          file="vfw-${stamp}.dump"
+
+          # Custom format (-Fc): compressed, and restorable selectively with
+          # pg_restore. --no-owner/--no-privileges so it restores cleanly into a
+          # scratch DB with a different role. The URL is never echoed.
+          pg_dump "${DATABASE_PUBLIC_URL}" \
+            --no-owner --no-privileges --format=custom --file="${file}"
+
+          size=$(du -h "${file}" | cut -f1)
+          echo "Dumped ${file} (${size})"
+
+          # Refuse to upload a suspiciously tiny dump — an empty/failed dump must
+          # not silently overwrite the retention window with garbage.
+          bytes=$(stat -c%s "${file}")
+          if [ "${bytes}" -lt 1024 ]; then
+            echo "::error::Dump is only ${bytes} bytes — refusing to upload."
+            exit 1
+          fi
+
+          aws s3 cp "${file}" "s3://${R2_BUCKET}/db-backups/${file}" \
+            --endpoint-url "${R2_ENDPOINT}"
+          echo "Uploaded to s3://${R2_BUCKET}/db-backups/${file}"
+
+      - name: Prune backups older than retention
+        if: steps.guard.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          cutoff=$(date -u -d "-${RETENTION_DAYS} days" +%Y%m%d)
+          aws s3 ls "s3://${R2_BUCKET}/db-backups/" --endpoint-url "${R2_ENDPOINT}" \
+            | awk '{print $4}' | grep -E '^vfw-[0-9]{8}T' | while read -r key; do
+              day=$(echo "$key" | sed -E 's/^vfw-([0-9]{8})T.*/\1/')
+              if [ "$day" -lt "$cutoff" ]; then
+                echo "Pruning $key (older than ${RETENTION_DAYS} days)"
+                aws s3 rm "s3://${R2_BUCKET}/db-backups/${key}" --endpoint-url "${R2_ENDPOINT}"
+              fi
+            done
