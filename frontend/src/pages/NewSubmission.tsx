@@ -3,6 +3,7 @@ import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { money } from '../lib/format';
+import { SEASON_TABS, seasonLabel, seasonTab, type SeasonTab } from '../lib/season';
 import type { Catalog, Currency, DocumentType, Submission } from '../lib/types';
 import { fmtSize, TYPE_LABEL, uploadDocument } from '../lib/uploads';
 import { Page } from '../shell/Shell';
@@ -39,6 +40,7 @@ export function NewSubmission() {
   const [company, setCompany] = useState('');
   const [email, setEmail] = useState('');
   const [country, setCountry] = useState('');
+  const [season, setSeason] = useState<SeasonTab>('FW');
   const [eventId, setEventId] = useState('');
   const [packageId, setPackageId] = useState('');
   const [addonIds, setAddonIds] = useState<string[]>([]);
@@ -54,6 +56,23 @@ export function NewSubmission() {
   const [uploading, setUploading] = useState(false);
 
   const event = catalog?.events.find((e) => e.id === eventId);
+
+  // The Show list is narrowed to the chosen season tab.
+  const shows = useMemo(
+    () => catalog?.events.filter((ev) => seasonTab(ev.season) === season) ?? [],
+    [catalog, season],
+  );
+
+  // Switching seasons drops a show that no longer belongs — and with it the
+  // package and add-ons that were keyed off that show.
+  function chooseSeason(next: SeasonTab) {
+    setSeason(next);
+    if (event && seasonTab(event.season) !== next) {
+      setEventId('');
+      setPackageId('');
+      setAddonIds([]);
+    }
+  }
 
   // A package is only offered if it belongs to this event's brand AND carries a
   // price for the city the event runs in — the same two rules the server
@@ -213,6 +232,18 @@ export function NewSubmission() {
 
           <div className="sect">
             <div className="hd"><h3>Event</h3><span className="n">02</span></div>
+            <div className="tabs" style={{ marginBottom: 14 }}>
+              {SEASON_TABS.map((t) => (
+                <button
+                  key={t.key}
+                  type="button"
+                  className={'tab' + (season === t.key ? ' on' : '')}
+                  onClick={() => chooseSeason(t.key)}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
             <div className="fields">
               <div className="f wide">
                 <label>Show <span className="req">*</span></label>
@@ -228,9 +259,9 @@ export function NewSubmission() {
                   required
                 >
                   <option value="">Select a show…</option>
-                  {catalog?.events.map((ev) => (
+                  {shows.map((ev) => (
                     <option key={ev.id} value={ev.id}>
-                      {ev.name} — {ev.city.name} · {ev.season}
+                      {ev.name} — {ev.city.name} · {seasonLabel(ev.season)}
                     </option>
                   ))}
                 </select>
