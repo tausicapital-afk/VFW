@@ -275,6 +275,11 @@ th.num{font-family:"IBM Plex Sans"}
 .f input,.f select,.f textarea{width:100%;border:1px solid var(--line);border-radius:var(--r);padding:8px 10px;background:#fff;color:var(--text)}
 .f input::placeholder,.f textarea::placeholder{color:var(--muted)}
 .f input:focus,.f select:focus,.f textarea:focus{border-color:var(--blue);outline:none;box-shadow:0 0 0 3px var(--blue-soft)}
+/* Inline table-cell inputs (editable price / rate cells) live outside a .f
+   wrapper, so they'd otherwise fall back to the browser's default white box —
+   which stays white in dark theme. Give them the same themed surface. */
+td input{border:1px solid var(--line);border-radius:var(--r);padding:6px 9px;background:#fff;color:var(--text)}
+td input:focus{border-color:var(--blue);outline:none;box-shadow:0 0 0 3px var(--blue-soft)}
 .f input[readonly]{background:#F4F6F8;color:#5A6270}
 .f.err input,.f.err select{border-color:var(--red);background:#FFF9F8}
 .f .msg{font-size:11px;color:var(--red);margin-top:3px;display:none}
@@ -443,6 +448,7 @@ pre.code{background:var(--ink);color:#D7DCE4;padding:14px;border-radius:var(--r)
 :root[data-theme="dark"] .f input,
 :root[data-theme="dark"] .f select,
 :root[data-theme="dark"] .f textarea,
+:root[data-theme="dark"] td input,
 :root[data-theme="dark"] .toolbar input[type=search],
 :root[data-theme="dark"] .toolbar select,
 :root[data-theme="dark"] .upload select,

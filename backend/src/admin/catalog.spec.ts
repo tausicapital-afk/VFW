@@ -43,10 +43,12 @@ describe('a catalogue price change and history', () => {
   const atSale = pricing.compute(storedSubmission);
 
   it('prices the sale from the rate card of the day', () => {
-    // €30,600 + €760 = €31,360, less 5% = €29,792 net, +8% tax = €32,175.36.
+    // €30,600 + €760 = €31,360 subtotal. The 5% discount strikes the package
+    // only (never the add-on): €30,600 × 5% = €1,530 off → €29,830 taxable,
+    // +8% tax = €32,216.40.
     expect(atSale.subtotal.toFixed(2)).toBe('31360.00');
-    expect(atSale.taxable.toFixed(2)).toBe('29792.00');
-    expect(atSale.total.toFixed(2)).toBe('32175.36');
+    expect(atSale.taxable.toFixed(2)).toBe('29830.00');
+    expect(atSale.total.toFixed(2)).toBe('32216.40');
   });
 
   it('does not move when the catalogue is re-priced afterwards', () => {
@@ -80,7 +82,9 @@ describe('a catalogue price change and history', () => {
       ],
     });
 
-    expect(ifItReadTheCatalogue.total.toFixed(2)).toBe('64350.72');
+    // €61,200 + €1,520 = €62,720 subtotal; 5% off the package (€61,200) = €3,060,
+    // → €59,660 taxable, +8% tax = €64,432.80.
+    expect(ifItReadTheCatalogue.total.toFixed(2)).toBe('64432.80');
     expect(ifItReadTheCatalogue.total.toFixed(2)).not.toBe(atSale.total.toFixed(2));
   });
 });
