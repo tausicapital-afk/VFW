@@ -35,12 +35,12 @@ VFW's real stack (so we measure against *this*, not a generic AWS/K8s app):
 | 1 | **Database backups** | 🔴 not done | acct owner + code |
 | 2 | **Staging environment** (finish the empty project) | 🟠 code/config done; provisioning pending | code ✅ + dashboard |
 | 3 | **Automatic deploys** (unblock `RAILWAY_TOKEN`) + rotate live password | 🔴 not done | acct owner |
-| 4 | **Monitoring / alerting / centralized logs** | 🟠 not done | acct owner + code |
+| 4 | **Monitoring / alerting / centralized logs** | 🟠 logging + Sentry code done; alerting pending | code ✅ + acct owner |
 | 5 | **Close the backend's public door** | 🟠 not done | dashboard |
 | 6 | **Branch protection** on `main` | 🟡 not done | acct owner |
 | 7 | Config-as-code for Railway | ✅ done (`railway.json` + `railway-variables.md`) | — |
 | 8 | **Local dev parity** (full-stack `docker compose up`) | 🟢 code done; run once to verify | code |
-| 9 | **Security scanning in CI** (Dependabot, `npm audit`) | 🟡 not done | code |
+| 9 | **Security scanning in CI** (Dependabot, `npm audit`) | 🟢 committed to `main`; secret-scanning enable pending | code ✅ + acct owner |
 
 Legend: 🔴 high risk / do first · 🟠 important · 🟡 nice-to-have · 🟢 largely done.
 
@@ -128,13 +128,23 @@ gate; live admin password confirmed ≠ seed default.
 We have health *endpoints* but nothing *watching* them — prod going down would be
 learned from a user. Right-sized for VFW (do **not** stand up Prometheus+Grafana+Loki):
 
-- **Uptime alert** on `/api/health` (UptimeRobot / BetterStack free tier) → email/SMS.
-- **Error capture**: Sentry (or similar) on the NestJS backend for unhandled errors.
-- **Logs/metrics**: Railway's built-in log + metric views are enough at this scale;
-  add structured (JSON) logging on the backend if not already.
+- **Logs/metrics — ✅ done (code).** Structured JSON logging is wired in:
+  `nestjs-pino` (`main.ts`, `app.module.ts`) with a redaction config in
+  `backend/src/common/logging.ts` so the session cookie, passwords and JWTs never
+  reach a log line. Railway's built-in log + metric views read these fine at this
+  scale.
+- **Error capture — ✅ code done, needs a DSN (owner).** The Sentry integration is
+  written (`backend/src/common/sentry.ts`, initialised first thing in `main.ts`,
+  with an exception filter). It is **inert until `SENTRY_DSN` is set** as a service
+  variable — a one-line dashboard step. Cookies, bodies and auth headers are
+  stripped before anything is sent.
+- **Uptime alert — 🔴 still to do (owner).** Point UptimeRobot / BetterStack (free
+  tier) at `/api/health` → email/SMS. This is the piece that actually *pages* a
+  human; nothing above does that on its own.
 
 **Definition of done:** an outage or error spike pages a human without a user
-reporting it first.
+reporting it first. *(Not yet met — needs `SENTRY_DSN` set and an uptime monitor
+wired; both are owner/dashboard steps.)*
 
 ---
 
@@ -192,13 +202,26 @@ confirm http://localhost:8080 serves the app and login works, then flip this to
 
 ---
 
-## 🟡 9. Security scanning in CI
+## 🟢 9. Security scanning in CI
 
-- **Dependabot** — `.github/dependabot.yml` (added this session) watches
-  `backend/`, `frontend/`, and GitHub Actions for vulnerable/outdated deps.
-- **`npm audit`** — non-blocking audit step added to `ci.yml` for both services
-  (reports without failing the build; tighten to blocking later if desired).
+Code written this session — **verified, in the working tree, not yet committed**:
+
+- **Dependabot** — `.github/dependabot.yml` watches `backend/`, `frontend/`, and
+  GitHub Actions for vulnerable/outdated deps.
+- **`npm audit`** — advisory step in `ci.yml` for both services
+  (`npm audit --omit=dev --audit-level=high || true`): reports without failing the
+  build. Verified baseline: frontend 0 vulns; backend surfaces 33 (30 moderate,
+  3 high — lodash via `@nestjs/config`, multer/qs via `@nestjs/platform-express`,
+  all needing major bumps Dependabot will open PRs for). Drop the `|| true` and
+  raise the gate once that baseline is clean.
+
+**Outstanding:**
 - **GitHub secret scanning** — enable in repo settings (account owner).
+
+> Landed in commit `571ab75`, pushed to `origin/main` **by the background
+> auto-committer, not via a PR** — which is exactly what #6 (branch protection) is
+> meant to stop. Until that auto-commit-to-`main` is fenced off, a review gate for
+> these changes isn't achievable retroactively.
 
 ---
 
