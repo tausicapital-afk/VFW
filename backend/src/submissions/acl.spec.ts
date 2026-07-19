@@ -35,7 +35,11 @@ const ENDPOINTS: Ep[] = [
   { name: 'POST /payments', method: 'post', path: '/api/submissions/no-such-id/payments', permission: 'accounting.fields', body: { date: '2026-01-01', amount: 1, method: 'Cash' } },
   { name: 'PATCH /:id', method: 'patch', path: '/api/submissions/no-such-id', permission: 'accounting.fields', body: { glAccount: '4010' } },
   { name: 'POST /invoice', method: 'post', path: '/api/submissions/no-such-id/invoice', permission: 'invoice.generate' },
+  { name: 'GET  /invoice.pdf', method: 'get', path: '/api/submissions/no-such-id/invoice.pdf', permission: 'invoice.generate' },
   { name: 'POST /export', method: 'post', path: '/api/submissions/no-such-id/export', permission: 'quickbooks.export' },
+  { name: 'GET  /voided', method: 'get', path: '/api/submissions/voided', permission: 'submission.void' },
+  { name: 'POST /void', method: 'post', path: '/api/submissions/no-such-id/void', permission: 'submission.void' },
+  { name: 'POST /unvoid', method: 'post', path: '/api/submissions/no-such-id/unvoid', permission: 'submission.void' },
 ];
 
 describe('ACL boundary (server-side authorization)', () => {

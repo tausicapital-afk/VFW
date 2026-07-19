@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { can } from '../lib/acl';
 import { api } from '../lib/api';
+import { downloadFile } from '../lib/export';
 import { fmtDate, fmtDateTime, money, PAY_LABEL } from '../lib/format';
 import type { AuditEntry, Catalog, DesignerFeedback, Submission } from '../lib/types';
 import { Page } from '../shell/Shell';
@@ -65,6 +66,21 @@ export function SubmissionDetail() {
     onSuccess: refresh,
   });
 
+  const invoicePdf = useMutation({
+    mutationFn: () =>
+      downloadFile(`/api/submissions/${id}/invoice.pdf`, `${sub?.invoiceNo ?? 'invoice'}.pdf`),
+  });
+
+  const voidSale = useMutation({
+    mutationFn: (reason: string) => api.post(`/api/submissions/${id}/void`, { reason }),
+    onSuccess: refresh,
+  });
+
+  const restoreSale = useMutation({
+    mutationFn: () => api.post(`/api/submissions/${id}/unvoid`),
+    onSuccess: refresh,
+  });
+
   if (isLoading) {
     return <Page crumb="Work" title="Submission"><div className="empty"><h3>Loading…</h3></div></Page>;
   }
@@ -83,22 +99,40 @@ export function SubmissionDetail() {
   }
 
   const isAcct = can('accounting.fields', user?.role);
+  const isVoided = sub.status === 'VOIDED';
+  const editable = ['DRAFT', 'RETURNED'].includes(sub.status);
   const canEditSales =
-    sub.rep.id === user?.id &&
-    ['DRAFT', 'RETURNED'].includes(sub.status) &&
-    can('submission.editOwn', user?.role);
+    sub.rep.id === user?.id && editable && can('submission.editOwn', user?.role);
+  // Admin/Accounting may correct anyone's editable submission — the same right
+  // the server grants (submission.editAny), surfaced in the UI.
+  const canEditAny = !canEditSales && editable && can('submission.editAny', user?.role);
+  const canVoid = can('submission.void', user?.role);
+
+  function promptVoid() {
+    const reason = window.prompt(
+      'Void this submission? It will be hidden from lists and reports but kept for audit, and can be restored. Optionally note why:',
+      '',
+    );
+    // Cancel returns null; an empty string is a confirmed void with no reason.
+    if (reason !== null) voidSale.mutate(reason);
+  }
 
   const actions = (
     <>
       <StatusPill status={sub.status} />
-      {canEditSales && (
+      {(canEditSales || canEditAny) && (
         <button className="btn primary" onClick={() => nav(`/submissions/${sub.id}/edit`)}>
-          Edit &amp; resubmit
+          {canEditAny ? 'Edit' : 'Edit & resubmit'}
         </button>
       )}
       {sub.status === 'APPROVED' && can('invoice.generate', user?.role) && !sub.invoiceNo && (
         <button className="btn" disabled={invoice.isPending} onClick={() => invoice.mutate()}>
           {invoice.isPending ? 'Generating…' : 'Generate invoice'}
+        </button>
+      )}
+      {sub.invoiceNo && can('invoice.generate', user?.role) && (
+        <button className="btn" disabled={invoicePdf.isPending} onClick={() => invoicePdf.mutate()}>
+          {invoicePdf.isPending ? 'Preparing…' : 'Download invoice (PDF)'}
         </button>
       )}
       {(sub.status === 'APPROVED' || sub.status === 'EXPORTED') &&
@@ -107,6 +141,16 @@ export function SubmissionDetail() {
             {sub.status === 'EXPORTED' ? 'View export' : 'Export to QuickBooks'}
           </Link>
         )}
+      {canVoid && !isVoided && (
+        <button className="btn dgr" disabled={voidSale.isPending} onClick={promptVoid}>
+          {voidSale.isPending ? 'Voiding…' : 'Void'}
+        </button>
+      )}
+      {canVoid && isVoided && (
+        <button className="btn" disabled={restoreSale.isPending} onClick={() => restoreSale.mutate()}>
+          {restoreSale.isPending ? 'Restoring…' : 'Restore'}
+        </button>
+      )}
     </>
   );
 
@@ -124,8 +168,24 @@ export function SubmissionDetail() {
           <b>Rejected:</b> {sub.rejectReason}
         </div>
       )}
+      {isVoided && (
+        <div className="note warn" style={{ marginBottom: 16 }}>
+          <b>Voided.</b> This sale is hidden from lists and reports but kept for audit.
+          {sub.voidedFrom ? ` It was ${sub.voidedFrom} before being voided.` : ''}
+          {canVoid ? ' Use Restore to bring it back.' : ''}
+        </div>
+      )}
       {invoice.error && (
         <div className="note bad" style={{ marginBottom: 16 }}>{(invoice.error as Error).message}</div>
+      )}
+      {invoicePdf.error && (
+        <div className="note bad" style={{ marginBottom: 16 }}>{(invoicePdf.error as Error).message}</div>
+      )}
+      {voidSale.error && (
+        <div className="note bad" style={{ marginBottom: 16 }}>{(voidSale.error as Error).message}</div>
+      )}
+      {restoreSale.error && (
+        <div className="note bad" style={{ marginBottom: 16 }}>{(restoreSale.error as Error).message}</div>
       )}
 
       <div className="split">

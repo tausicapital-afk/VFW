@@ -12,6 +12,7 @@ const STATUS_LABEL: Record<SubmissionStatus, string> = {
   APPROVED: 'Approved',
   REJECTED: 'Rejected',
   EXPORTED: 'Exported to QuickBooks',
+  VOIDED: 'Voided',
 };
 
 /**

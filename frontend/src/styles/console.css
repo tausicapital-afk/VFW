@@ -4,6 +4,7 @@
    Money and IDs are always set in mono, like a ledger.
    ============================================================ */
 :root{
+  color-scheme:light;
   --ink:#0E0E11;
   --ink-2:#17171D;
   --ink-3:#26262F;
@@ -239,6 +240,7 @@ th.num{font-family:"IBM Plex Sans"}
 .pill.PAID{background:var(--green-soft);color:var(--green)}
 .pill.PARTIAL{background:var(--amber-soft);color:var(--amber)}
 .pill.UNPAID{background:var(--red-soft);color:var(--red)}
+.pill.VOIDED{background:var(--ink-3);color:#fff;text-decoration:line-through}
 .tag{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;padding:2px 7px;border-radius:3px}
 .tag.VFW{background:#0E0E11;color:#fff}
 .tag.VKFW{background:var(--gold);color:#3A3000}
@@ -270,7 +272,8 @@ th.num{font-family:"IBM Plex Sans"}
 .fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
 .f label{display:block;font-size:11px;font-weight:600;color:#4A505C;margin-bottom:4px}
 .f label .req{color:var(--red)}
-.f input,.f select,.f textarea{width:100%;border:1px solid var(--line);border-radius:var(--r);padding:8px 10px;background:#fff}
+.f input,.f select,.f textarea{width:100%;border:1px solid var(--line);border-radius:var(--r);padding:8px 10px;background:#fff;color:var(--text)}
+.f input::placeholder,.f textarea::placeholder{color:var(--muted)}
 .f input:focus,.f select:focus,.f textarea:focus{border-color:var(--blue);outline:none;box-shadow:0 0 0 3px var(--blue-soft)}
 .f input[readonly]{background:#F4F6F8;color:#5A6270}
 .f.err input,.f.err select{border-color:var(--red);background:#FFF9F8}
@@ -308,7 +311,7 @@ th.num{font-family:"IBM Plex Sans"}
 
 /* ---------- MISC ---------- */
 .toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
-.toolbar input[type=search],.toolbar select{border:1px solid var(--line);border-radius:var(--r);padding:8px 10px;background:#fff}
+.toolbar input[type=search],.toolbar select{border:1px solid var(--line);border-radius:var(--r);padding:8px 10px;background:#fff;color:var(--text)}
 .toolbar input[type=search]{min-width:240px}
 .empty{text-align:center;padding:52px 20px;color:var(--muted)}
 .empty h3{font-size:16px;color:var(--text);margin-bottom:6px}
@@ -410,6 +413,7 @@ pre.code{background:var(--ink);color:#D7DCE4;padding:14px;border-radius:var(--r)
    cards the most elevated — the inverse ordering of light mode.
    ============================================================ */
 :root[data-theme="dark"]{
+  color-scheme:dark;
   --ink:#0B0B0E;
   --ink-2:#141419;
   --ink-3:#23232D;
@@ -454,6 +458,9 @@ pre.code{background:var(--ink);color:#D7DCE4;padding:14px;border-radius:var(--r)
 :root[data-theme="dark"] .f input[readonly],
 :root[data-theme="dark"] .avpick{background:var(--paper)}
 :root[data-theme="dark"] .f input[readonly]{color:#AEB4BE}
+/* Form labels hardcode a dark slate for the light sheet; lift them on dark so
+   they stay legible above the muted body text. */
+:root[data-theme="dark"] .f label{color:#C4CAD3}
 
 :root[data-theme="dark"] th,
 :root[data-theme="dark"] tbody tr:hover,

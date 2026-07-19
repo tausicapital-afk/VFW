@@ -29,6 +29,10 @@ export const ACL = {
   'submission.approve': ['ACCT', 'ADMIN'],
   'submission.reject': ['ACCT', 'ADMIN'],
   'submission.return': ['ACCT', 'ADMIN'],
+  // Void is a soft delete: it hides a sale from lists and reports but keeps it
+  // for audit and can be reversed. Held by the same two roles that carry the
+  // rest of the accounting authority, so "delete from the system" is theirs.
+  'submission.void': ['ACCT', 'ADMIN'],
   'accounting.fields': ['ACCT', 'ADMIN'],
   'quickbooks.export': ['ACCT', 'ADMIN'],
   'invoice.generate': ['ACCT', 'ADMIN'],

@@ -1,6 +1,6 @@
 export type Role = 'SALES' | 'INTERN' | 'ACCT' | 'MGR' | 'ADMIN';
 export type SubmissionStatus =
-  | 'DRAFT' | 'PENDING' | 'RETURNED' | 'APPROVED' | 'REJECTED' | 'EXPORTED';
+  | 'DRAFT' | 'PENDING' | 'RETURNED' | 'APPROVED' | 'REJECTED' | 'EXPORTED' | 'VOIDED';
 export type PayStatus = 'UNPAID' | 'PARTIAL' | 'PAID';
 export type Currency = 'USD' | 'CAD' | 'GBP' | 'EUR' | 'JPY';
 
@@ -122,6 +122,8 @@ export interface Submission {
   department: string | null;
   invoiceNo: string | null;
   qbDocNumber: string | null;
+  voidedFrom: SubmissionStatus | null;
+  voidedAt: string | null;
   rejectReason: string | null;
   returnNote: string | null;
   submittedAt: string | null;
@@ -315,6 +317,8 @@ export interface Settings {
   fiscalYear: number;
   invoicePrefix: string;
   nextInvoiceSeq: number;
+  gfcInvoicePrefix: string;
+  nextGfcInvoiceSeq: number;
   discountApprovalPct: Money;
   qbRealmId: string | null;
   fxRates: Record<string, number>;

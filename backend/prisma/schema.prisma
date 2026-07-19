@@ -75,6 +75,7 @@ model User {
 
   submissions       Submission[]     @relation("SubmissionRep")
   approvals         Submission[]     @relation("SubmissionApprover")
+  voided            Submission[]     @relation("SubmissionVoider")
   contactsCreated   Contact[]
   paymentsRecorded  Payment[]
   documentsUploaded Document[]
@@ -322,6 +323,10 @@ enum SubmissionStatus {
   APPROVED
   REJECTED
   EXPORTED
+  // Soft-deleted by Admin/Accounting: hidden from normal lists and reports, but
+  // retained for audit and reversible. A voided sale never reuses its ref or
+  // invoice number. See SubmissionsService.void / unvoid.
+  VOIDED
 }
 
 enum PayStatus {
@@ -401,6 +406,13 @@ model Submission {
   exportedAt  DateTime?
   qbDocNumber String?
   invoiceNo   String?
+
+  // Set when a sale is voided (soft-deleted): the status it held just before, so
+  // an unvoid restores it exactly rather than guessing DRAFT. Null unless VOIDED.
+  voidedFrom   SubmissionStatus?
+  voidedAt     DateTime?
+  voidedById   String?
+  voidedBy     User?     @relation("SubmissionVoider", fields: [voidedById], references: [id])
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -521,8 +533,13 @@ model Settings {
   id                  Int     @id @default(1)
   company             String  @default("VFW Management Inc.")
   fiscalYear          Int     @default(2026)
+  // Invoicing is split by brand. A Vancouver show bills under VFW (this prefix
+  // + sequence); every other city bills under GFC (the gfc* pair below). Two
+  // independent, gapless sequences — see SubmissionsService.allocateInvoice.
   invoicePrefix       String  @default("VFW-")
   nextInvoiceSeq      Int     @default(2041)
+  gfcInvoicePrefix    String  @default("GFC-")
+  nextGfcInvoiceSeq   Int     @default(1001)
   // Allocated the same way as nextInvoiceSeq — by incrementing this row inside
   // the creating transaction, which takes a row lock. Counting submissions
   // instead would hand the same ref to two concurrent creates.

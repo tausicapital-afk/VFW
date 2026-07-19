@@ -25,6 +25,32 @@ function filenameFrom(header: string | null, dataset: string, format: ExportForm
 }
 
 /**
+ * Pull any authenticated binary endpoint (e.g. an invoice PDF) and hand it to
+ * the browser as a download. Same reasoning as downloadExport: the bytes need
+ * the session cookie, so this cannot be a bare <a href>, and the server names
+ * the file via Content-Disposition.
+ */
+export async function downloadFile(path: string, fallbackName: string): Promise<void> {
+  const res = await fetch(`${API_BASE}${path}`, { credentials: 'include' });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const raw = (body as { message?: string | string[] }).message;
+    const message = Array.isArray(raw) ? raw.join('. ') : (raw ?? res.statusText);
+    throw new ApiError(res.status, message);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const match = res.headers.get('Content-Disposition')?.match(/filename="([^"]+)"/);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = match?.[1] ?? fallbackName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/**
  * Pull an export and hand it to the browser as a download.
  *
  * Deliberately not `api.get`: the response is bytes, not JSON, and the session

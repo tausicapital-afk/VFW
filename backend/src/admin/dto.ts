@@ -372,6 +372,11 @@ export class UpdateSettingsDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(12)
+  gfcInvoicePrefix?: string;
+
+  @IsOptional()
+  @IsString()
   discountApprovalPct?: string;
 
   @IsOptional()

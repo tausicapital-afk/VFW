@@ -21,6 +21,7 @@ import { DocumentsModule } from './documents/documents.controller';
 import { ExportModule } from './export/export.controller';
 import { MessagingModule } from './messaging/messaging.module';
 import { PrismaModule } from './prisma/prisma.service';
+import { FxModule } from './fx/fx.controller';
 import { ReportsModule } from './reports/reports.controller';
 import { StorageModule } from './storage/storage.service';
 import { SubmissionsModule } from './submissions/submissions.controller';
@@ -46,6 +47,7 @@ import { SubmissionsModule } from './submissions/submissions.controller';
     StorageModule,
     DocumentsModule,
     ReportsModule,
+    FxModule,
     AdminModule,
     MessagingModule,
     ActivityModule,

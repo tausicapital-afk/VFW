@@ -11,6 +11,7 @@ import { AuthUser } from '../common/auth.guard';
 import { can } from '../common/acl';
 import { PrismaService } from '../prisma/prisma.service';
 import { PricingService } from '../pricing/pricing.service';
+import { buildInvoicePdf, type InvoicePdfData } from './invoice-pdf';
 import {
   ApproveDto,
   CreateSubmissionDto,
@@ -49,9 +50,21 @@ export class SubmissionsService {
 
   async list(user: AuthUser) {
     return this.prisma.submission.findMany({
-      where: this.scopeFor(user),
+      // Voided sales are soft-deleted: kept for audit, but absent from every
+      // normal list. Restore them from the voided view (listVoided).
+      where: { ...this.scopeFor(user), status: { not: SubmissionStatus.VOIDED } },
       include: DETAIL,
       orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /** The soft-deleted sales, for the roles that can restore them. */
+  async listVoided(user: AuthUser) {
+    if (!can('submission.void', user.role)) throw new ForbiddenException();
+    return this.prisma.submission.findMany({
+      where: { status: SubmissionStatus.VOIDED },
+      include: DETAIL,
+      orderBy: { voidedAt: 'desc' },
     });
   }
 
@@ -320,7 +333,10 @@ export class SubmissionsService {
 
     const settings = await this.prisma.settings.findUniqueOrThrow({ where: { id: 1 } });
     const discount = this.pricing.discountApproval(
-      submission.subtotal,
+      // Measured against the package price, because that is the base a discount
+      // now applies to — a deep discount on the package must still trip the
+      // threshold even when add-ons pad the subtotal.
+      submission.packagePrice,
       submission.discountAmount,
       settings.discountApprovalPct,
     );
@@ -612,21 +628,47 @@ export class SubmissionsService {
   }
 
   /**
+   * Which invoicing brand a sale bills under. A Vancouver show bills as VFW;
+   * every other city bills as GFC. Centralised so the rule — and the "Vancouver"
+   * it keys on — lives in exactly one place.
+   */
+  private invoiceBrand(cityName: string): 'VFW' | 'GFC' {
+    return /vancouver/i.test(cityName) ? 'VFW' : 'GFC';
+  }
+
+  /**
    * Allocate the next invoice number inside a transaction. Incrementing the
    * pinned Settings row takes a row lock, so two concurrent approvals cannot be
    * handed the same number — the sequence is gapless and human-facing.
+   *
+   * There are two independent sequences: VFW (Vancouver) and GFC (everywhere
+   * else). The submission's city decides which one it draws from, so a Vancouver
+   * sale reads VFW-2041 and a Toronto sale reads GFC-1001.
    */
-  private async allocateInvoice(tx: Prisma.TransactionClient): Promise<string> {
+  private async allocateInvoice(
+    tx: Prisma.TransactionClient,
+    cityName: string,
+  ): Promise<string> {
+    if (this.invoiceBrand(cityName) === 'VFW') {
+      const settings = await tx.settings.update({
+        where: { id: 1 },
+        data: { nextInvoiceSeq: { increment: 1 } },
+      });
+      return `${settings.invoicePrefix}${settings.nextInvoiceSeq - 1}`;
+    }
     const settings = await tx.settings.update({
       where: { id: 1 },
-      data: { nextInvoiceSeq: { increment: 1 } },
+      data: { nextGfcInvoiceSeq: { increment: 1 } },
     });
-    return `${settings.invoicePrefix}${settings.nextInvoiceSeq - 1}`;
+    return `${settings.gfcInvoicePrefix}${settings.nextGfcInvoiceSeq - 1}`;
   }
 
   async generateInvoice(id: string, user: AuthUser) {
     return this.prisma.$transaction(async (tx) => {
-      const submission = await tx.submission.findUnique({ where: { id } });
+      const submission = await tx.submission.findUnique({
+        where: { id },
+        include: { city: true },
+      });
       if (!submission) throw new NotFoundException('Submission not found');
       if (
         submission.status !== SubmissionStatus.APPROVED &&
@@ -638,7 +680,7 @@ export class SubmissionsService {
         throw new BadRequestException(`Already invoiced as ${submission.invoiceNo}`);
       }
 
-      const invoiceNo = await this.allocateInvoice(tx);
+      const invoiceNo = await this.allocateInvoice(tx, submission.city.name);
       const updated = await tx.submission.update({
         where: { id },
         data: { invoiceNo },
@@ -659,6 +701,133 @@ export class SubmissionsService {
   }
 
   /**
+   * Void (soft-delete) a sale. It leaves normal lists and reports but is kept
+   * in full for audit, and the status it held is remembered so an unvoid can put
+   * it back exactly. Held by Admin/Accounting via `submission.void`.
+   */
+  async void(id: string, reason: string | undefined, user: AuthUser) {
+    return this.prisma.$transaction(async (tx) => {
+      const submission = await tx.submission.findUnique({ where: { id } });
+      if (!submission) throw new NotFoundException('Submission not found');
+      if (submission.status === SubmissionStatus.VOIDED) {
+        throw new BadRequestException('This submission is already voided');
+      }
+      const updated = await tx.submission.update({
+        where: { id },
+        data: {
+          status: SubmissionStatus.VOIDED,
+          voidedFrom: submission.status,
+          voidedAt: new Date(),
+          voidedById: user.id,
+        },
+        include: DETAIL,
+      });
+      await this.audit.log(
+        {
+          submissionId: id,
+          actorId: user.id,
+          action: 'VOIDED',
+          detail: reason ? `Voided (soft delete) — ${reason}` : 'Voided (soft delete)',
+          payload: { from: submission.status, reason: reason ?? null },
+        },
+        tx,
+      );
+      return updated;
+    });
+  }
+
+  /** Reverse a void, restoring the sale to the exact status it held before. */
+  async unvoid(id: string, user: AuthUser) {
+    return this.prisma.$transaction(async (tx) => {
+      const submission = await tx.submission.findUnique({ where: { id } });
+      if (!submission) throw new NotFoundException('Submission not found');
+      if (submission.status !== SubmissionStatus.VOIDED) {
+        throw new BadRequestException('Only a voided submission can be restored');
+      }
+      const restoreTo = submission.voidedFrom ?? SubmissionStatus.DRAFT;
+      const updated = await tx.submission.update({
+        where: { id },
+        data: { status: restoreTo, voidedFrom: null, voidedAt: null, voidedById: null },
+        include: DETAIL,
+      });
+      await this.audit.log(
+        {
+          submissionId: id,
+          actorId: user.id,
+          action: 'RESTORED',
+          detail: `Restored from void to ${restoreTo}`,
+          payload: { to: restoreTo },
+        },
+        tx,
+      );
+      return updated;
+    });
+  }
+
+  /**
+   * Render an already-invoiced sale to a PDF the customer can be sent. The
+   * invoice number must exist first (Generate invoice allocates it), so this
+   * never mutates anything — it is a pure read that streams a document. Figures
+   * come from the stored, server-computed columns, never a re-derivation, so the
+   * PDF and the screen can never disagree.
+   */
+  async invoicePdf(id: string, user: AuthUser): Promise<{ buffer: Buffer; filename: string }> {
+    const s = await this.prisma.submission.findUnique({
+      where: { id },
+      include: { ...DETAIL, city: true },
+    });
+    if (!s) throw new NotFoundException('Submission not found');
+    // Same row scope as findOne: a rep can pull their own invoice, no one else's.
+    if (!can('submission.viewAll', user.role) && s.repId !== user.id) {
+      throw new NotFoundException('Submission not found');
+    }
+    if (!s.invoiceNo) {
+      throw new BadRequestException('Generate the invoice number first, then download the PDF.');
+    }
+
+    const settings = await this.prisma.settings.findUniqueOrThrow({ where: { id: 1 } });
+    const discountLabel =
+      Number(s.discountAmount) > 0
+        ? s.discountType === DiscountType.PCT
+          ? `Discount (${Number(s.discountValue)}% of package)`
+          : 'Discount (package)'
+        : null;
+
+    const data: InvoicePdfData = {
+      brand: this.invoiceBrand(s.city.name),
+      companyName: settings.company,
+      invoiceNo: s.invoiceNo,
+      docType: s.payStatus === 'PAID' ? 'Sales Receipt' : 'Invoice',
+      issuedAt: new Date(),
+      currency: s.currency,
+      customer: {
+        designer: s.contact.designer,
+        brand: s.contact.brand,
+        company: s.contact.company,
+        email: s.contact.email,
+        country: s.contact.country,
+      },
+      event: { name: s.event.name, city: `${s.city.name}, ${s.city.country}`, showDate: s.showDate },
+      packageName: s.package.name,
+      packagePrice: s.packagePrice.toFixed(2),
+      addons: s.addons.map((l) => ({ name: l.addon.name, qty: l.qty, amount: l.amount.toFixed(2) })),
+      subtotal: s.subtotal.toFixed(2),
+      discountLabel,
+      discountAmount: s.discountAmount.toFixed(2),
+      taxable: s.taxable.toFixed(2),
+      taxRatePct: s.taxRate.toFixed(2),
+      taxAmount: s.taxAmount.toFixed(2),
+      total: s.total.toFixed(2),
+      paidAmount: s.paidAmount.toFixed(2),
+      balance: s.balance.toFixed(2),
+      paymentMethod: s.paymentMethod,
+      paymentTerms: s.paymentTerms,
+    };
+
+    return { buffer: await buildInvoicePdf(data), filename: `${s.invoiceNo}.pdf` };
+  }
+
+  /**
    * QuickBooks export. Synchronous by design — no Redis, no job queue until
    * retries are actually needed. The QBO OAuth transport is out of scope and
    * stubbed: this moves the record APPROVED -> EXPORTED, allocates an invoice
@@ -666,7 +835,10 @@ export class SubmissionsService {
    */
   async export(id: string, dto: ExportDto, user: AuthUser) {
     return this.prisma.$transaction(async (tx) => {
-      const submission = await tx.submission.findUnique({ where: { id } });
+      const submission = await tx.submission.findUnique({
+        where: { id },
+        include: { city: true },
+      });
       if (!submission) throw new NotFoundException('Submission not found');
       if (submission.status !== SubmissionStatus.APPROVED) {
         throw new BadRequestException(
@@ -674,7 +846,8 @@ export class SubmissionsService {
         );
       }
 
-      const invoiceNo = submission.invoiceNo ?? (await this.allocateInvoice(tx));
+      const invoiceNo =
+        submission.invoiceNo ?? (await this.allocateInvoice(tx, submission.city.name));
       const docType =
         dto.docType ?? (submission.payStatus === 'PAID' ? 'Sales Receipt' : 'Invoice');
       const settings = await tx.settings.findUniqueOrThrow({ where: { id: 1 } });

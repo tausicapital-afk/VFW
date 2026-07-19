@@ -1819,6 +1819,19 @@ function SettingsForm({ settings, onSaved }: { settings: Settings; onSaved: () =
     onError: (e: Error) => { setSaved(false); setError(e.message); },
   });
 
+  // Pull live rates from the FX provider and save them into Settings, so Reports
+  // move to the live figures too. The dashboard is already live on every load.
+  const refreshFx = useMutation({
+    mutationFn: () => api.post<{ rates: Record<string, number> }>('/api/fx/refresh'),
+    onSuccess: (data) => {
+      setFx(Object.fromEntries(Object.entries(data.rates).map(([k, v]) => [k, String(v)])));
+      setError(null);
+      setSaved(false);
+      onSaved();
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
   return (
     <div className="split">
       <div className="grid">
@@ -1832,13 +1845,14 @@ function SettingsForm({ settings, onSaved }: { settings: Settings; onSaved: () =
                 <div className="help">Above this, a discount needs explicit accounting sign-off.</div>
               </div>
               <div className="f">
-                <label>Invoice prefix</label>
+                <label>VFW invoice prefix (Vancouver)</label>
                 <input value={settings.invoicePrefix} readOnly />
+                <div className="help">Next: {settings.invoicePrefix}{settings.nextInvoiceSeq}</div>
               </div>
               <div className="f">
-                <label>Next invoice number</label>
-                <input value={settings.nextInvoiceSeq} readOnly />
-                <div className="help">Allocated in a transaction — not editable by hand.</div>
+                <label>GFC invoice prefix (all other cities)</label>
+                <input value={settings.gfcInvoicePrefix} readOnly />
+                <div className="help">Next: {settings.gfcInvoicePrefix}{settings.nextGfcInvoiceSeq}. Each series is allocated in a transaction — not editable by hand.</div>
               </div>
             </div>
           </div>
@@ -1848,7 +1862,14 @@ function SettingsForm({ settings, onSaved }: { settings: Settings; onSaved: () =
           <div className="hd">
             <h3>FX rates to CAD</h3>
             <div className="sp" />
-            <span className="sm mut">The reporting currency</span>
+            <button
+              type="button"
+              className="btn sm"
+              disabled={refreshFx.isPending}
+              onClick={() => refreshFx.mutate()}
+            >
+              {refreshFx.isPending ? 'Fetching…' : 'Refresh live rates'}
+            </button>
           </div>
           <div className="bd">
             <div className="fields">
@@ -1866,7 +1887,9 @@ function SettingsForm({ settings, onSaved }: { settings: Settings; onSaved: () =
             </div>
             <div className="note" style={{ marginTop: 12 }}>
               Every consolidated figure in Reports converts through these before it is summed.
-              CAD is fixed at 1 — it is what everything else is expressed in.
+              CAD is fixed at 1 — it is what everything else is expressed in. The dashboard uses
+              live rates on every load; “Refresh live rates” pulls the current figures in here so
+              Reports use them too. If the provider is unreachable these saved rates are the fallback.
             </div>
           </div>
         </div>

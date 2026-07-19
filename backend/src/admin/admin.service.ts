@@ -929,7 +929,7 @@ export class AdminService {
     const after: Record<string, Prisma.InputJsonValue | null> = {};
     const data: Prisma.SettingsUpdateInput = {};
 
-    const scalars = ['company', 'fiscalYear', 'invoicePrefix', 'qbRealmId'] as const;
+    const scalars = ['company', 'fiscalYear', 'invoicePrefix', 'gfcInvoicePrefix', 'qbRealmId'] as const;
     for (const key of scalars) {
       const next = dto[key];
       if (next === undefined || next === current[key]) continue;

@@ -5,8 +5,9 @@ import { useAuth } from '../auth/AuthContext';
 import { can } from '../lib/acl';
 import { api } from '../lib/api';
 import { money } from '../lib/format';
+import { discountPctOfPackage, discountPreview } from '../lib/pricing';
 import { SEASON_TABS, seasonLabel, seasonTab, type SeasonTab } from '../lib/season';
-import type { Catalog, Currency, Submission } from '../lib/types';
+import type { Catalog, Currency, DiscountType, Submission } from '../lib/types';
 import { Page } from '../shell/Shell';
 
 const PAYMENT_METHODS = [
@@ -54,6 +55,7 @@ export function EditSubmission() {
   const [eventId, setEventId] = useState('');
   const [packageId, setPackageId] = useState('');
   const [addonIds, setAddonIds] = useState<string[]>([]);
+  const [discountType, setDiscountType] = useState<DiscountType>('PCT');
   const [discountValue, setDiscountValue] = useState(0);
   const [deposit, setDeposit] = useState(0);
   const [paymentMethod, setPaymentMethod] = useState(PAYMENT_METHODS[0]);
@@ -74,6 +76,7 @@ export function EditSubmission() {
     setEventId(sub.event.id);
     setPackageId(sub.package.id);
     setAddonIds(sub.addons.map((a) => a.addonId));
+    setDiscountType(sub.discountType);
     setDiscountValue(Number(sub.discountValue));
     setDeposit(Number(sub.deposit));
     setPaymentMethod(sub.paymentMethod ?? PAYMENT_METHODS[0]);
@@ -126,13 +129,13 @@ export function EditSubmission() {
       .filter((a) => addonIds.includes(a.id))
       .reduce((t, a) => t + Number(a.price), 0);
     const subtotal = base + addonTotal;
-    const discount = Math.round(subtotal * (discountValue / 100) * 100) / 100;
+    const discount = discountPreview(base, discountType, discountValue);
     const taxable = Math.max(0, subtotal - discount);
     const rate = Number(catalog.taxes.find((t) => t.code === pkg.taxCode)?.rate ?? 0);
     const tax = Math.round(taxable * (rate / 100) * 100) / 100;
     const total = Math.round((taxable + tax) * 100) / 100;
     return { base, addonTotal, subtotal, discount, taxable, rate, tax, total, balance: total - deposit };
-  }, [pkg, price, catalog, sellable, addonIds, discountValue, deposit]);
+  }, [pkg, price, catalog, sellable, addonIds, discountType, discountValue, deposit]);
 
   const resubmit = useMutation({
     mutationFn: () =>
@@ -142,7 +145,7 @@ export function EditSubmission() {
         email: email || undefined,
         country: country || undefined,
         eventId, packageId, addonIds,
-        discountType: 'PCT',
+        discountType,
         discountValue,
         deposit,
         paymentMethod,
@@ -172,17 +175,19 @@ export function EditSubmission() {
     );
   }
 
+  // A rep edits their own draft/returned sale; Admin/Accounting (submission.editAny)
+  // may edit anyone's — the same rule the server enforces in update().
   const editable =
-    sub.rep.id === user?.id &&
     ['DRAFT', 'RETURNED'].includes(sub.status) &&
-    can('submission.editOwn', user?.role);
+    ((sub.rep.id === user?.id && can('submission.editOwn', user?.role)) ||
+      can('submission.editAny', user?.role));
 
   if (!editable) {
     return (
       <Page crumb="Work" title="Cannot edit">
         <div className="empty">
           <h3>This submission cannot be edited</h3>
-          <p>Only your own draft or returned submissions can be corrected and resubmitted.</p>
+          <p>Only a draft or returned submission can be corrected and resubmitted.</p>
         </div>
       </Page>
     );
@@ -342,14 +347,25 @@ export function EditSubmission() {
             <div className="hd"><h3>Pricing &amp; payment</h3><span className="n">05</span></div>
             <div className="fields">
               <div className="f">
-                <label>Discount (%)</label>
-                <input
-                  type="number" min={0} max={100} step="0.01"
-                  value={discountValue}
-                  onChange={(e) => setDiscountValue(Number(e.target.value))}
-                />
-                {discountValue > 15 && (
-                  <div className="help">Above 15% — Accounting must sign this off explicitly.</div>
+                <label>Discount</label>
+                <div className="rowflex" style={{ gap: 8 }}>
+                  <select
+                    value={discountType}
+                    onChange={(e) => setDiscountType(e.target.value as DiscountType)}
+                    style={{ maxWidth: 150 }}
+                  >
+                    <option value="PCT">Percentage (%)</option>
+                    <option value="AMT">Amount ({currency})</option>
+                  </select>
+                  <input
+                    type="number" min={0} max={discountType === 'PCT' ? 100 : undefined} step="0.01"
+                    value={discountValue}
+                    onChange={(e) => setDiscountValue(Number(e.target.value))}
+                  />
+                </div>
+                <div className="help">Applies to the package price only — add-ons are never discounted.</div>
+                {discountPctOfPackage(preview?.base ?? 0, discountType, discountValue) > 15 && (
+                  <div className="help">Above 15% of the package — Accounting must sign this off explicitly.</div>
                 )}
               </div>
               <div className="f">
@@ -403,7 +419,10 @@ export function EditSubmission() {
                 <Row label="Add-ons" value={money(preview.addonTotal, currency)} />
                 <Row label="Subtotal" value={money(preview.subtotal, currency)} />
                 {preview.discount > 0 && (
-                  <Row label={`Discount (${discountValue}%)`} value={'− ' + money(preview.discount, currency)} />
+                  <Row
+                    label={discountType === 'PCT' ? `Discount (${discountValue}% of package)` : 'Discount (package)'}
+                    value={'− ' + money(preview.discount, currency)}
+                  />
                 )}
                 <Row label="Net revenue" value={money(preview.taxable, currency)} />
                 <Row label={`Tax (${preview.rate}%)`} value={money(preview.tax, currency)} />

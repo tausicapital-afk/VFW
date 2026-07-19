@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Module, Param, Patch, Post, Put } from '@nestjs/common';
+import { Body, Controller, Get, Module, Param, Patch, Post, Put, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser, Can, CurrentUser } from '../common/auth.guard';
 import { PricingService } from '../pricing/pricing.service';
@@ -10,6 +11,7 @@ import {
   PaymentDto,
   RejectDto,
   ReturnDto,
+  VoidDto,
 } from './dto';
 import { SubmissionsService } from './submissions.service';
 
@@ -30,6 +32,13 @@ export class SubmissionsController {
   @Can('submission.queueView')
   queue(@CurrentUser() user: AuthUser) {
     return this.submissions.queue(user);
+  }
+
+  // Also before :id — the soft-deleted sales, for the roles that can restore them.
+  @Get('voided')
+  @Can('submission.void')
+  voided(@CurrentUser() user: AuthUser) {
+    return this.submissions.listVoided(user);
   }
 
   @Get(':id')
@@ -82,6 +91,40 @@ export class SubmissionsController {
   @Can('invoice.generate')
   invoice(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.submissions.generateInvoice(id, user);
+  }
+
+  // The customer-facing document. Streams a PDF built from the stored figures;
+  // the invoice number must already exist (POST :id/invoice allocates it). We
+  // take the response object directly so the binary is not run through Nest's
+  // JSON serialization. A thrown error still surfaces before anything is written.
+  @Get(':id/invoice.pdf')
+  @Can('invoice.generate')
+  async invoicePdf(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUser,
+    @Res() res: Response,
+  ) {
+    const { buffer, filename } = await this.submissions.invoicePdf(id, user);
+    res
+      .status(200)
+      .set({
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Length': String(buffer.length),
+      })
+      .end(buffer);
+  }
+
+  @Post(':id/void')
+  @Can('submission.void')
+  void(@Param('id') id: string, @Body() dto: VoidDto, @CurrentUser() user: AuthUser) {
+    return this.submissions.void(id, dto.reason, user);
+  }
+
+  @Post(':id/unvoid')
+  @Can('submission.void')
+  unvoid(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.submissions.unvoid(id, user);
   }
 
   @Post(':id/export')

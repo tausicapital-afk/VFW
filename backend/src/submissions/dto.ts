@@ -101,6 +101,12 @@ export class ReturnDto {
   note: string;
 }
 
+export class VoidDto {
+  // Why the sale was voided — optional, but it lands in the audit trail.
+  @IsOptional() @IsString() @MaxLength(4000)
+  reason?: string;
+}
+
 /**
  * Recording a payment. Amount is deliberately unbounded below zero: a payment is
  * never deleted — a mistake is corrected with a negative (reversing) entry, so

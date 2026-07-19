@@ -16,6 +16,7 @@ export const ACL = {
   'submission.approve': ['ACCT', 'ADMIN'],
   'submission.reject': ['ACCT', 'ADMIN'],
   'submission.return': ['ACCT', 'ADMIN'],
+  'submission.void': ['ACCT', 'ADMIN'],
   'accounting.fields': ['ACCT', 'ADMIN'],
   'quickbooks.export': ['ACCT', 'ADMIN'],
   'invoice.generate': ['ACCT', 'ADMIN'],
