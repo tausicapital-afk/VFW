@@ -6,10 +6,11 @@ import { can } from '../lib/acl';
 import { api } from '../lib/api';
 import { downloadFile } from '../lib/export';
 import { fmtDate, fmtDateTime, money, PAY_LABEL } from '../lib/format';
-import type { AuditEntry, Catalog, DesignerFeedback, Submission } from '../lib/types';
+import type { AuditEntry, Catalog, DesignerFeedback, SendInvoiceResult, Submission } from '../lib/types';
 import { Page } from '../shell/Shell';
 import { DocumentsCard } from './DocumentsCard';
 import { FeedbackModal, Stars } from './Feedback';
+import { InstallmentsCard } from './InstallmentsCard';
 import { InternalCard } from './Internal';
 import { StatusPill } from './Submissions';
 
@@ -54,6 +55,8 @@ export function SubmissionDetail() {
   });
 
   const [payOpen, setPayOpen] = useState(false);
+  const [sendOpen, setSendOpen] = useState(false);
+  const [sentTo, setSentTo] = useState<string | null>(null);
 
   function refresh() {
     void qc.invalidateQueries({ queryKey: ['submission', id] });
@@ -135,6 +138,11 @@ export function SubmissionDetail() {
           {invoicePdf.isPending ? 'Preparing…' : 'Download invoice (PDF)'}
         </button>
       )}
+      {sub.invoiceNo && can('email.send', user?.role) && (
+        <button className="btn" onClick={() => setSendOpen(true)}>
+          Send invoice
+        </button>
+      )}
       {(sub.status === 'APPROVED' || sub.status === 'EXPORTED') &&
         can('quickbooks.export', user?.role) && (
           <Link className="btn blue" to="/qbo">
@@ -173,6 +181,11 @@ export function SubmissionDetail() {
           <b>Voided.</b> This sale is hidden from lists and reports but kept for audit.
           {sub.voidedFrom ? ` It was ${sub.voidedFrom} before being voided.` : ''}
           {canVoid ? ' Use Restore to bring it back.' : ''}
+        </div>
+      )}
+      {sentTo && (
+        <div className="note good" style={{ marginBottom: 16 }}>
+          Invoice emailed to <b>{sentTo}</b>. A copy is logged under <Link to="/emails">Emails</Link>.
         </div>
       )}
       {invoice.error && (
@@ -228,6 +241,9 @@ export function SubmissionDetail() {
               <div className="bd"><p className="sm">{sub.notes}</p></div>
             </div>
           )}
+
+          {/* The schedule first, then what actually arrived against it. */}
+          <InstallmentsCard sub={sub} onChanged={refresh} />
 
           <div className="card" style={{ marginTop: 16 }}>
             <div className="hd">
@@ -377,6 +393,13 @@ export function SubmissionDetail() {
       </div>
 
       {payOpen && <PaymentModal sub={sub} onClose={() => setPayOpen(false)} onDone={() => { setPayOpen(false); refresh(); }} />}
+      {sendOpen && (
+        <SendInvoiceModal
+          sub={sub}
+          onClose={() => setSendOpen(false)}
+          onSent={(to) => { setSendOpen(false); setSentTo(to); }}
+        />
+      )}
     </Page>
   );
 }
@@ -604,6 +627,92 @@ function PaymentModal({
             onClick={() => { setError(null); run.mutate(); }}
           >
             {run.isPending ? 'Recording…' : 'Record payment'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Compose an invoice email. The recipient defaults to the contact's email but is
+ * editable, and the subject/message are pre-filled from the sale — the user
+ * reviews before sending. The PDF is attached server-side from the stored
+ * figures (POST /api/emails/invoice), so nothing here re-derives a total.
+ */
+function SendInvoiceModal({
+  sub, onClose, onSent,
+}: {
+  sub: Submission;
+  onClose: () => void;
+  onSent: (to: string) => void;
+}) {
+  const [to, setTo] = useState(sub.contact.email ?? '');
+  const [subject, setSubject] = useState(`Invoice ${sub.invoiceNo}`);
+  const [message, setMessage] = useState(
+    `Dear ${sub.contact.designer || sub.contact.brand},\n\n` +
+      `Please find attached invoice ${sub.invoiceNo} for ${sub.event.name}. ` +
+      `The balance due is ${money(sub.balance, sub.currency)}.\n\n` +
+      `Thank you.`,
+  );
+  const [error, setError] = useState<string | null>(null);
+
+  const run = useMutation({
+    mutationFn: () =>
+      api.post<SendInvoiceResult>('/api/emails/invoice', {
+        submissionId: sub.id,
+        to,
+        subject,
+        message,
+      }),
+    onSuccess: (r) => onSent(r.to),
+    onError: (e: Error) => setError(e.message),
+  });
+
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="box" onClick={(e) => e.stopPropagation()}>
+        <div className="hd">
+          <h3>Send invoice {sub.invoiceNo}</h3>
+          <div className="sp" style={{ flex: 1 }} />
+          <button className="btn sm" onClick={onClose}>Close</button>
+        </div>
+        <div className="bd">
+          <div className="fields" style={{ gridTemplateColumns: '1fr' }}>
+            <div className="f">
+              <label>To</label>
+              <input
+                type="email"
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+                placeholder="designer@example.com"
+              />
+              {!sub.contact.email && (
+                <div className="help">This contact has no email on file — enter one to send.</div>
+              )}
+            </div>
+            <div className="f">
+              <label>Subject</label>
+              <input value={subject} onChange={(e) => setSubject(e.target.value)} />
+            </div>
+            <div className="f">
+              <label>Message</label>
+              <textarea rows={7} value={message} onChange={(e) => setMessage(e.target.value)} />
+            </div>
+          </div>
+          <div className="note" style={{ marginTop: 12 }}>
+            📎 <b className="mono">{sub.invoiceNo}.pdf</b> is attached automatically.
+          </div>
+          {error && <div className="note bad" style={{ marginTop: 12 }}>{error}</div>}
+        </div>
+        <div className="ft">
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button
+            className="btn primary"
+            disabled={run.isPending || !to || !subject || !message}
+            onClick={() => { setError(null); run.mutate(); }}
+          >
+            {run.isPending ? 'Sending…' : 'Send invoice'}
           </button>
         </div>
       </div>

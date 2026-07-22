@@ -56,3 +56,59 @@
   margin: 6px 4px 2px; padding: 7px 9px; border-radius: var(--r);
   background: var(--red-soft); color: var(--red); font-size: 11.5px;
 }
+
+/* ---------- EMAILS ----------
+   A list (left) with an optional reading pane (right on wide screens, stacked
+   below otherwise). Reuses .card / .tbl-wrap / .pill / .tag so it matches every
+   other module; only the split layout and the reader are new. */
+.email-split { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start; }
+@media (min-width: 1100px) {
+  .email-split:has(.email-detail) { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
+}
+
+/* An active tab in the Sent/Received switch. */
+.btn.on { background: var(--text); color: var(--card); border-color: var(--text); }
+
+/* The kind filter — matches .f select without needing a .f wrapper in the bar. */
+.email-select {
+  border: 1px solid var(--line); border-radius: var(--r); padding: 5px 9px;
+  background: var(--card); color: var(--text); font-size: 12px;
+}
+
+/* A neutral tag for email kinds. Brand tags (.tag.VFW) keep their colour — they
+   are more specific, so this base fill never overrides them. */
+.tag { background: var(--line-soft); color: var(--muted); }
+
+.email-row { cursor: pointer; }
+.email-row:hover { background: var(--paper); }
+.email-row.on { background: var(--blue-soft); }
+.email-preview { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.email-detail { position: sticky; top: 16px; }
+.email-reader .email-meta {
+  padding: 14px 16px; display: flex; flex-direction: column; gap: 6px;
+  border-bottom: 1px solid var(--line-soft); font-size: 13px;
+}
+.email-reader .email-meta .mut {
+  display: inline-block; min-width: 44px; color: var(--muted);
+  font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+}
+.email-body {
+  padding: 16px; margin: 0; white-space: pre-wrap; word-break: break-word;
+  font: inherit; font-size: 13px; line-height: 1.6; color: var(--text);
+}
+
+/* ---------- PAYMENT PLANS ----------
+   The plan builder is an editable grid, which the mockup's 720px modal crops.
+   Everything else about the box is unchanged. */
+.modal .box.wide { max-width: 940px; }
+
+/* Inputs inside a table cell: the modal's grid rows are edited in place, so the
+   controls have to sit flush in the cell rather than carry .f's block layout. */
+.plan-grid td input,
+.plan-grid td select { width: 100%; min-width: 96px; }
+.plan-grid td input[type='number'] { min-width: 88px; }
+
+/* An instalment whose due date has passed and is still unpaid. Reuses the
+   totals row's overdue colour so "late" reads the same everywhere. */
+.plan-late { color: var(--red); font-weight: 600; }

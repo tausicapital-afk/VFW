@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 import { ActivityModule } from './activity/activity.controller';
@@ -18,6 +19,7 @@ import { loggerOptions } from './common/logging';
 import { VfwThrottlerGuard, throttlerOptions } from './common/throttler';
 import { ContactsModule } from './contacts/contacts.controller';
 import { DocumentsModule } from './documents/documents.controller';
+import { EmailsModule } from './emails/emails.module';
 import { ExportModule } from './export/export.controller';
 import { MessagingModule } from './messaging/messaging.module';
 import { PrismaModule } from './prisma/prisma.service';
@@ -31,6 +33,9 @@ import { SubmissionsModule } from './submissions/submissions.controller';
     ConfigModule.forRoot({ isGlobal: true }),
     LoggerModule.forRoot(loggerOptions),
     ThrottlerModule.forRoot(throttlerOptions),
+    // Drives the inbound mail poller (emails/inbound.service.ts). No-ops unless
+    // an active SMTP mailbox has inbound enabled.
+    ScheduleModule.forRoot(),
     JwtModule.register({
       global: true,
       secret: process.env.JWT_SECRET,
@@ -50,6 +55,7 @@ import { SubmissionsModule } from './submissions/submissions.controller';
     FxModule,
     AdminModule,
     MessagingModule,
+    EmailsModule,
     ActivityModule,
     ExportModule,
   ],

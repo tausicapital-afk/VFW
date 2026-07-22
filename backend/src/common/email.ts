@@ -1,8 +1,10 @@
 import { Global, Injectable, Logger, Module, ServiceUnavailableException } from '@nestjs/common';
+import { EmailKind } from '@prisma/client';
 import * as nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
 import { ConfigService } from '../config/config.service';
 import { MailAccountService, SendingAccount } from '../config/mail-account.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 /**
  * Outbound email — one transport, one global template, and one fallback:
@@ -48,11 +50,26 @@ export class EmailNotConfiguredError extends ServiceUnavailableException {
   }
 }
 
+/** A file to attach. `content` is the raw bytes; kept small (an invoice PDF). */
+export interface MailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType?: string;
+}
+
 export interface Mail {
   to: string;
   subject: string;
   html: string;
   text: string;
+  attachments?: MailAttachment[];
+  // Metadata for the Emails log. `kind` classifies the message (and decides
+  // redaction — see EmailService.record); `triggeredById` / `submissionId` tie a
+  // send to the app user and sale that caused it (invoice sends only). System
+  // mail (OTP, reset) leaves them undefined, which is correct: no user, no sale.
+  kind?: EmailKind;
+  triggeredById?: string;
+  submissionId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -214,6 +231,48 @@ function textLayout(lines: string[]): string {
   return [...lines, ...footer].join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// Log redaction
+//
+// Everything sent passes through record(), including the messages whose entire
+// purpose is to carry a secret. Those must be logged as "a code went to this
+// address", never with the code itself — the log is read in the Emails module by
+// roles that must not be handed a live OTP or reset link.
+// ---------------------------------------------------------------------------
+
+/** Kinds whose BODY carries a code or link and must not be stored. */
+const REDACT_BODY: EmailKind[] = ['OTP', 'WELCOME', 'PASSWORD_RESET', 'INVITATION'];
+/** Kinds whose SUBJECT itself carries the code (OTP puts it right in the line). */
+const REDACT_SUBJECT: EmailKind[] = ['OTP'];
+
+/** A short, body-derived snippet for the list row; collapses whitespace. */
+function previewOf(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > 140 ? `${flat.slice(0, 139)}…` : flat;
+}
+
+export function redactForLog(
+  mail: Mail,
+  kind: EmailKind,
+): { subject: string; bodyText: string | null; bodyHtml: string | null; preview: string } {
+  const bodyRedacted = REDACT_BODY.includes(kind);
+  const subject = REDACT_SUBJECT.includes(kind) ? 'Verification code' : mail.subject;
+  if (bodyRedacted) {
+    return {
+      subject,
+      bodyText: null,
+      bodyHtml: null,
+      preview: 'Code or link omitted for security.',
+    };
+  }
+  return {
+    subject,
+    bodyText: mail.text,
+    bodyHtml: mail.html,
+    preview: previewOf(mail.text || mail.subject),
+  };
+}
+
 /** 465 is implicit TLS (secure); 587/25 start plaintext and upgrade via STARTTLS. */
 function isSecure(account: SendingAccount): boolean {
   const enc = account.encryption?.toLowerCase();
@@ -271,6 +330,15 @@ async function resendSend(account: SendingAccount, mail: Mail, from: string): Pr
       subject: mail.subject,
       html: mail.html,
       text: mail.text,
+      // Resend takes attachment bytes as base64 in the JSON body.
+      ...(mail.attachments?.length
+        ? {
+            attachments: mail.attachments.map((a) => ({
+              filename: a.filename,
+              content: a.content.toString('base64'),
+            })),
+          }
+        : {}),
     }),
     signal: AbortSignal.timeout(20_000),
   });
@@ -349,6 +417,18 @@ async function relaySend(account: SendingAccount, mail: Mail): Promise<void> {
     text: mail.text,
     fromAddress: account.fromAddress,
     fromName: account.fromName ?? '',
+    // The PHP relay must be taught to honour this (ops/mail-relay); an older
+    // relay ignores the field and delivers the message without the file rather
+    // than failing. See docs — invoice-by-relay needs the updated endpoint.
+    ...(mail.attachments?.length
+      ? {
+          attachments: mail.attachments.map((a) => ({
+            filename: a.filename,
+            contentType: a.contentType ?? 'application/octet-stream',
+            content: a.content.toString('base64'),
+          })),
+        }
+      : {}),
   });
 }
 
@@ -402,6 +482,7 @@ export class EmailService {
   constructor(
     private readonly config: ConfigService,
     private readonly accounts: MailAccountService,
+    private readonly prisma: PrismaService,
   ) {
     // Let the module-level template helpers read live config and the active
     // mailbox too — they have no `this` to reach these through.
@@ -539,6 +620,15 @@ export class EmailService {
           subject: mail.subject,
           text: mail.text,
           html: mail.html,
+          ...(mail.attachments?.length
+            ? {
+                attachments: mail.attachments.map((a) => ({
+                  filename: a.filename,
+                  content: a.content,
+                  contentType: a.contentType,
+                })),
+              }
+            : {}),
         });
     }
   }
@@ -580,7 +670,59 @@ export class EmailService {
       // The address is not logged: it is a credential-adjacent identifier and
       // this line may end up in a shared log sink.
       this.log.error(`SMTP send failed: ${err instanceof Error ? err.message : String(err)}`);
+      // Record the failure before surfacing it, so a bounced invoice is visible
+      // in the Emails module rather than vanishing.
+      await this.record(account, mail, 'FAILED', err instanceof Error ? err.message : String(err));
       throw new ServiceUnavailableException('The email could not be sent');
+    }
+
+    await this.record(account, mail, 'SENT');
+  }
+
+  /**
+   * Persist one outbound message to the Emails log — best effort.
+   *
+   * This is the single choke point every send passes through, so recording here
+   * captures OTP, resets and invites for free. Precisely because it does, the
+   * secret they carry must NOT be stored: {@link redactForLog} drops the body
+   * (and, for OTP, the subject) of a sensitive kind, keeping only that a message
+   * of that kind went to that address. A logging failure is swallowed — a sent
+   * email that failed to log is not a failed send, and must never read as one.
+   */
+  private async record(
+    account: SendingAccount,
+    mail: Mail,
+    status: 'SENT' | 'FAILED',
+    error?: string,
+  ): Promise<void> {
+    try {
+      const kind = mail.kind ?? EmailKind.OTHER;
+      const safe = redactForLog(mail, kind);
+      await this.prisma.emailMessage.create({
+        data: {
+          direction: 'OUTBOUND',
+          status,
+          kind,
+          fromAddress: account.fromAddress,
+          fromName: account.fromName ?? null,
+          toAddress: mail.to,
+          subject: safe.subject,
+          bodyText: safe.bodyText,
+          bodyHtml: safe.bodyHtml,
+          preview: safe.preview,
+          provider: account.provider,
+          // The env fallback is not a real MailAccount row — leave it unlinked.
+          mailAccountId: account.id === 'env' ? null : account.id,
+          error: error ?? null,
+          triggeredById: mail.triggeredById ?? null,
+          submissionId: mail.submissionId ?? null,
+          sentAt: status === 'SENT' ? new Date() : null,
+        },
+      });
+    } catch (err) {
+      this.log.error(
+        `Failed to record email to the log: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
@@ -623,6 +765,7 @@ export class EmailService {
           '',
           `If you're reading it, that mailbox is working.`,
         ]),
+        kind: EmailKind.TEST,
       };
     });
 
@@ -630,10 +773,12 @@ export class EmailService {
       await this.deliver(account, mail);
     } catch (err) {
       this.log.error(`Test send failed: ${err instanceof Error ? err.message : String(err)}`);
+      await this.record(account, mail, 'FAILED', err instanceof Error ? err.message : String(err));
       throw new ServiceUnavailableException(
         err instanceof Error ? err.message : 'The test email could not be sent',
       );
     }
+    await this.record(account, mail, 'SENT');
     return { label: account.label };
   }
 
@@ -657,6 +802,7 @@ export class EmailService {
       `Didn't create this account? You can safely ignore this email — without the code, nothing happens.</p>`;
     return {
       to,
+      kind: EmailKind.WELCOME,
       subject: `Welcome to ${brandName()} — verify your email`,
       html: layout({ title: 'Welcome', preheader: `Your verification code is ${code}`, bodyHtml }),
       text: textLayout([
@@ -684,6 +830,7 @@ export class EmailService {
       `If you didn't ask for this, you can ignore it.</p>`;
     return {
       to,
+      kind: EmailKind.OTP,
       subject: `${brandName()} verification code: ${code}`,
       html: layout({ title: 'Verification code', preheader: `Your code is ${code}`, bodyHtml }),
       text: textLayout([
@@ -713,6 +860,7 @@ export class EmailService {
       `<a href="${esc(link)}" style="color:${brandColour()};word-break:break-all;">${esc(link)}</a></p>`;
     return {
       to,
+      kind: EmailKind.PASSWORD_RESET,
       subject: `Reset your ${brandName()} password`,
       html: layout({ title: 'Reset your password', preheader: 'Choose a new password', bodyHtml }),
       text: textLayout([
@@ -736,6 +884,7 @@ export class EmailService {
       button('Reset your password', link);
     return {
       to,
+      kind: EmailKind.PASSWORD_CHANGED,
       subject: `Your ${brandName()} password was changed`,
       html: layout({ title: 'Password changed', preheader: 'Your password was just changed', bodyHtml }),
       text: textLayout([
@@ -760,6 +909,7 @@ export class EmailService {
       `<a href="${esc(link)}" style="color:${brandColour()};word-break:break-all;">${esc(link)}</a></p>`;
     return {
       to,
+      kind: EmailKind.INVITATION,
       subject: `Your invitation to ${brandName()}`,
       html: layout({ title: 'Your invitation', preheader: `Invitation code: ${code}`, bodyHtml }),
       text: textLayout([
@@ -768,6 +918,52 @@ export class EmailService {
         `Invitation code: ${code}`,
         link,
       ]),
+    };
+  }
+
+  /**
+   * A customer-facing invoice email with the PDF attached.
+   *
+   * Unlike the others this carries a person-written `message`: it is escaped and
+   * rendered with line breaks, never trusted as HTML. `triggeredById` and
+   * `submissionId` flow onto the log row so the send is attributed to the rep who
+   * sent it and links back to the sale. This body is NOT redacted — an invoice
+   * holds no secret — so it is fully readable in the Emails module.
+   */
+  invoiceEmail(opts: {
+    to: string;
+    subject: string;
+    message: string;
+    invoiceNo: string;
+    pdf: Buffer;
+    triggeredById: string;
+    submissionId: string;
+  }): Mail {
+    const messageHtml = esc(opts.message).replace(/\r?\n/g, '<br>');
+    const bodyHtml =
+      `<h1 style="margin:0 0 14px;font-size:22px;color:#0e0e11;">Invoice ${esc(opts.invoiceNo)}</h1>` +
+      `<p style="margin:0 0 14px;">${messageHtml}</p>` +
+      `<p style="margin:0 0 6px;color:#8a938f;font-size:13px;">` +
+      `Your invoice is attached to this email as a PDF (${esc(opts.invoiceNo)}.pdf).</p>`;
+    return {
+      to: opts.to,
+      kind: EmailKind.INVOICE,
+      triggeredById: opts.triggeredById,
+      submissionId: opts.submissionId,
+      subject: opts.subject,
+      html: layout({
+        title: `Invoice ${opts.invoiceNo}`,
+        preheader: `Invoice ${opts.invoiceNo} from ${brandName()}`,
+        bodyHtml,
+      }),
+      text: textLayout([
+        opts.message,
+        '',
+        `Invoice ${opts.invoiceNo} is attached to this email as a PDF.`,
+      ]),
+      attachments: [
+        { filename: `${opts.invoiceNo}.pdf`, content: opts.pdf, contentType: 'application/pdf' },
+      ],
     };
   }
 }

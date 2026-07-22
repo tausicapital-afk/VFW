@@ -36,6 +36,15 @@ export const ACL = {
   'accounting.fields': ['ACCT', 'ADMIN'],
   'quickbooks.export': ['ACCT', 'ADMIN'],
   'invoice.generate': ['ACCT', 'ADMIN'],
+  // Payment plans. Reading one carries no permission of its own: the plan rides
+  // on the submission payload, so whoever may see the sale sees how it is being
+  // paid — which is the point, a rep should not have to ask Accounting whether
+  // their designer is up to date. Writing is split in two because the two acts
+  // differ in kind: `plan` reschedules expectations and moves no money, while
+  // `mark` posts a real Payment to the ledger. Both are Accounting's today, but
+  // only one of them is a candidate for ever widening.
+  'installment.plan': ['ACCT', 'ADMIN'],
+  'installment.mark': ['ACCT', 'ADMIN'],
   'reports.view': ['ACCT', 'MGR', 'ADMIN'],
   'leaderboard.view': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
   // The customer book is PII — designers' direct emails and phone numbers. An
@@ -50,6 +59,13 @@ export const ACL = {
   'internal.comment': ['ACCT', 'MGR', 'ADMIN'],
   'internal.view': ['ACCT', 'MGR', 'ADMIN'],
   'messaging.use': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
+  // The Emails module. Reading is split like submissions: everyone may open the
+  // module (viewOwn), but the list is row-scoped — a rep sees only mail they
+  // triggered, while viewAll roles see the whole log. Sending an invoice is an
+  // accounting action, held by the same roles that can generate one.
+  'email.viewOwn': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
+  'email.viewAll': ['ACCT', 'MGR', 'ADMIN'],
+  'email.send': ['ACCT', 'ADMIN'],
   // Administration is user and role management: create an account, disable one,
   // change anyone's role. ACCT holds it as a second keyholder so account
   // recovery does not depend on a single admin being reachable. Note the

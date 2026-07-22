@@ -13,6 +13,8 @@ import {
   ReturnDto,
   VoidDto,
 } from './dto';
+import { InstallmentsController } from './installments/installments.controller';
+import { InstallmentsService } from './installments/installments.service';
 import { SubmissionsService } from './submissions.service';
 
 @Controller('api/submissions')
@@ -143,8 +145,11 @@ export class SubmissionsController {
 }
 
 @Module({
-  controllers: [SubmissionsController],
-  providers: [SubmissionsService, PricingService],
+  // InstallmentsController is registered after SubmissionsController, but the
+  // two cannot collide: every instalment route carries an extra path segment, so
+  // `:id` never swallows it.
+  controllers: [SubmissionsController, InstallmentsController],
+  providers: [SubmissionsService, InstallmentsService, PricingService],
   // Exported so ContactsService can reuse scopeFor() rather than reinventing it.
   exports: [SubmissionsService],
 })

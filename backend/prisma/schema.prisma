@@ -78,6 +78,7 @@ model User {
   voided            Submission[]     @relation("SubmissionVoider")
   contactsCreated   Contact[]
   paymentsRecorded  Payment[]
+  installmentsPaid  Installment[]    @relation("InstallmentPayer")
   documentsUploaded Document[]
   comments          InternalComment[]
   feedbackRecorded  DesignerFeedback[]
@@ -89,6 +90,8 @@ model User {
   conversationsCreated Conversation[]            @relation("ConvCreator")
   participations       ConversationParticipant[]
   messagesSent         Message[]                 @relation("MsgSender")
+
+  emailsTriggered      EmailMessage[]            @relation("EmailTriggeredBy")
 
   activityLogs         ActivityLog[]
   sessions             UserSession[]
@@ -340,6 +343,11 @@ enum DiscountType {
   AMT
 }
 
+enum InstallmentStatus {
+  PENDING
+  PAID
+}
+
 model Submission {
   id     String           @id @default(cuid())
   ref    String           @unique
@@ -419,9 +427,11 @@ model Submission {
 
   addons   SubmissionAddon[]
   payments Payment[]
+  installments Installment[]
   documents Document[]
   comments InternalComment[]
   audit    AuditEntry[]
+  emails   EmailMessage[]    @relation("EmailSubmission")
 
   @@index([status])
   @@index([repId, status])
@@ -458,7 +468,59 @@ model Payment {
   recordedById String
   recordedBy   User   @relation(fields: [recordedById], references: [id])
 
+  // Set when this payment was posted by marking an installment done, so the
+  // ledger row and the schedule row point at each other.
+  installment  Installment?
+
   @@index([submissionId])
+}
+
+// A payment plan is just the ordered set of Installment rows on a submission.
+// There is no separate "plan" record: the plan IS its instalments, which keeps
+// "what is still owed" a single question with a single answer.
+//
+// The invariant every write here defends: the PENDING instalments must sum to
+// the sale's balance. Marking one done posts a real Payment for its amount, so
+// the balance falls by exactly the amount that just left the PENDING set and the
+// invariant survives without anyone maintaining it. See InstallmentsService.
+model Installment {
+  id           String     @id @default(cuid())
+  submissionId String
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  // 1-based position in the plan — "instalment 2 of 3". Unique per submission so
+  // two concurrent plan writes cannot interleave into one renumbered schedule.
+  seq     Int
+  label   String?
+  dueDate DateTime @db.Date
+  amount  Decimal  @db.Decimal(14, 2)
+  // Copied from the submission at plan time. A sale's currency never changes, so
+  // this is a convenience, not a second source of truth.
+  currency Currency
+  // How this instalment is expected to arrive. Pre-fills the payment when the
+  // instalment is marked done; the person marking it can still override.
+  method   String?
+
+  status InstallmentStatus @default(PENDING)
+  paidAt DateTime?
+  // Who marked it done — not who received the money. The Payment row carries
+  // the ledger's own recordedBy.
+  paidById String?
+  paidBy   User?  @relation("InstallmentPayer", fields: [paidById], references: [id])
+
+  // The ledger entry this instalment posted. Cleared (not deleted) when the mark
+  // is undone: the Payment stays, and a reversing negative entry joins it, so
+  // the ledger remains append-only.
+  paymentId String?  @unique
+  payment   Payment? @relation(fields: [paymentId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([submissionId, seq])
+  @@index([submissionId])
+  // Powers "what is due, oldest first" across every sale.
+  @@index([status, dueDate])
 }
 
 model Document {
@@ -630,6 +692,18 @@ model MailAccount {
   // switching account can also switch the brand. Blank = fall back to config.
   fromName    String?
   isActive    Boolean  @default(false)
+
+  // Inbound (Received) — opt-in, SMTP mailboxes only. The poller (see
+  // emails/inbound.service.ts) connects over IMAP with THIS row's username +
+  // decrypted password. `imapHost` blank falls back to `host` (a cPanel mailbox
+  // answers IMAP on the same domain it answers SMTP). Off by default, so an
+  // existing deployment gains nothing to configure and keeps sending untouched.
+  // Note: many hosts (Railway) block the IMAP port outright — where they do, the
+  // poll simply keeps failing to connect and Sent is unaffected.
+  imapHost       String  @default("")
+  imapPort       Int     @default(993)
+  inboundEnabled Boolean @default(false)
+
   updatedById String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -639,6 +713,93 @@ model MailAccount {
   // the same mailbox, reached two different ways).
   @@unique([provider, host, username, fromAddress])
   @@index([isActive])
+}
+
+// ---------------------------------------------------------------------------
+// Emails — the log of mail the system has sent and (where the mailbox allows)
+// received. This is the record behind the Emails module.
+//
+// It is NOT financial evidence and stays out of AuditEntry: an invoice send DOES
+// append an audit entry (the money-relevant fact), but the message body itself
+// lives here. Additive — touches nothing in the money loop.
+//
+// Recording happens at the one send choke point, EmailService.send(), so it
+// captures every outbound message including OTP and reset. Precisely because it
+// does, the code / token / link in a sensitive message is NEVER stored — see the
+// redaction in EmailService. Bodies are kept only for kinds that carry no secret
+// (INVOICE, TEST, and inbound mail).
+// ---------------------------------------------------------------------------
+
+enum EmailDirection {
+  OUTBOUND
+  INBOUND
+}
+
+enum EmailStatus {
+  SENT
+  FAILED
+  RECEIVED
+}
+
+// What produced the message. Drives both the redaction rule and the module's
+// kind filter. OTHER is the catch-all so a new send site logs without a schema
+// change; give it a real kind when it earns one.
+enum EmailKind {
+  OTP
+  WELCOME
+  PASSWORD_RESET
+  PASSWORD_CHANGED
+  INVITATION
+  INVOICE
+  TEST
+  INBOUND
+  OTHER
+}
+
+model EmailMessage {
+  id            String         @id @default(cuid())
+  direction     EmailDirection
+  status        EmailStatus
+  kind          EmailKind      @default(OTHER)
+
+  fromAddress   String
+  fromName      String?
+  toAddress     String
+  subject       String
+  // Redacted (null) for sensitive kinds. Kept for INVOICE / TEST / inbound.
+  bodyText      String?        @db.Text
+  bodyHtml      String?        @db.Text
+  // A short snippet for the list row — safe to show even when the body is not.
+  preview       String?
+
+  provider      String? // smtp | resend | relay | imap
+  mailAccountId String?
+  // The failure reason when status = FAILED. Never a credential — just the "why".
+  error         String?
+
+  // The app user who caused the send. Null for system mail (OTP, reset) and for
+  // everything inbound. Drives the module's row-scoping: a rep sees their own.
+  triggeredById String?
+  triggeredBy   User?          @relation("EmailTriggeredBy", fields: [triggeredById], references: [id])
+
+  // The submission an invoice send belongs to, so the module can link back.
+  submissionId  String?
+  submission    Submission?    @relation("EmailSubmission", fields: [submissionId], references: [id])
+
+  // RFC Message-ID header. For inbound, the dedupe key across poll ticks.
+  messageId     String?
+
+  sentAt        DateTime?
+  receivedAt    DateTime?
+  createdAt     DateTime       @default(now())
+
+  @@index([direction, createdAt])
+  @@index([triggeredById])
+  @@index([submissionId])
+  // Idempotent inbound: the same message pulled twice by the poller upserts onto
+  // one row. Scoped by mailbox so two accounts can each hold a copy of a message
+  // sent to both. (Outbound rows leave messageId null and are never deduped.)
+  @@unique([mailAccountId, messageId])
 }
 
 // ---------------------------------------------------------------------------

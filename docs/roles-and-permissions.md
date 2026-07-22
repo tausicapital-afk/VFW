@@ -101,6 +101,22 @@ entered themselves, and viewing a shared brand shows only their own deals for it
 The Leaderboard is deliberately **not** scoped — showing everyone's numbers to
 everyone is the point of a leaderboard.
 
+## Payment plans: read is scope, write is permission
+
+A submission's instalment schedule (`installment.plan`, `installment.mark`) is
+the clearest example of the split above, so it is worth stating explicitly:
+
+- **Reading a plan carries no permission at all.** `GET
+  /api/submissions/:id/installments` is guarded only by the row scope, which it
+  gets by going through `SubmissionsService.findOne`. The schedule also rides on
+  the submission payload itself. That is deliberate: a rep should be able to see
+  whether their designer is up to date without asking Accounting.
+- **Writing is split in two**, because the two acts differ in kind.
+  `installment.plan` reschedules expectations and moves no money.
+  `installment.mark` posts a real `Payment` to the ledger and moves the sale's
+  balance. Both are `ACCT`/`ADMIN` today, but only the first is a candidate for
+  ever widening — a schedule is a promise, a mark is a receipt.
+
 ## Where the boundary actually is
 
 **The server is the boundary. The frontend ACL is cosmetic.** `frontend/src/lib/acl.ts`

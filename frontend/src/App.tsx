@@ -9,6 +9,7 @@ import { Board } from './pages/Board';
 import { Contacts } from './pages/Contacts';
 import { ContactDetail } from './pages/ContactDetail';
 import { Dashboard } from './pages/Dashboard';
+import { Emails } from './pages/Emails';
 import { Settings } from './pages/Settings';
 import { EditSubmission } from './pages/EditSubmission';
 import { Feedback } from './pages/Feedback';
@@ -78,6 +79,7 @@ function Routed() {
         <Route path="/contacts" element={<Contacts />} />
         <Route path="/contacts/:id" element={<ContactDetail />} />
         <Route path="/messages" element={<Guard permission="messaging.use"><Messages /></Guard>} />
+        <Route path="/emails" element={<Guard permission="email.viewOwn"><Emails /></Guard>} />
         <Route path="/queue" element={<Guard permission="submission.queueView"><Queue /></Guard>} />
         <Route path="/board" element={<Guard permission="leaderboard.view"><Board /></Guard>} />
         <Route path="/feedback" element={<Guard permission="feedback.view"><Feedback /></Guard>} />

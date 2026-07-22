@@ -20,6 +20,8 @@ export const ACL = {
   'accounting.fields': ['ACCT', 'ADMIN'],
   'quickbooks.export': ['ACCT', 'ADMIN'],
   'invoice.generate': ['ACCT', 'ADMIN'],
+  'installment.plan': ['ACCT', 'ADMIN'],
+  'installment.mark': ['ACCT', 'ADMIN'],
   'reports.view': ['ACCT', 'MGR', 'ADMIN'],
   'leaderboard.view': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
   'contacts.view': ['SALES', 'ACCT', 'MGR', 'ADMIN'],
@@ -29,6 +31,9 @@ export const ACL = {
   'internal.comment': ['ACCT', 'MGR', 'ADMIN'],
   'internal.view': ['ACCT', 'MGR', 'ADMIN'],
   'messaging.use': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
+  'email.viewOwn': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
+  'email.viewAll': ['ACCT', 'MGR', 'ADMIN'],
+  'email.send': ['ACCT', 'ADMIN'],
   'admin.manage': ['ACCT', 'ADMIN'],
   'activity.view': ['ACCT', 'ADMIN'],
 } as const satisfies Record<string, readonly Role[]>;

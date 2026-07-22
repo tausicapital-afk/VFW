@@ -92,6 +92,30 @@ export interface Payment {
   createdAt: string;
 }
 
+export type InstallmentStatus = 'PENDING' | 'PAID';
+
+/**
+ * One line of a payment plan. A plan is just the ordered set of these on a
+ * submission — there is no separate plan object to fetch.
+ *
+ * Note there is no "paid amount" here: marking one done posts a real Payment
+ * for `amount`, so the sale's paidAmount/balance are the only figures that ever
+ * say how much has been received.
+ */
+export interface Installment {
+  id: string;
+  seq: number;
+  label: string | null;
+  dueDate: string;
+  amount: Money;
+  currency: Currency;
+  method: string | null;
+  status: InstallmentStatus;
+  paidAt: string | null;
+  paidBy: { id: string; name: string } | null;
+  paymentId: string | null;
+}
+
 export interface Submission {
   id: string;
   ref: string;
@@ -135,6 +159,7 @@ export interface Submission {
   package: PackageRow;
   addons: { addonId: string; qty: number; amount: Money; addon: AddonRow }[];
   payments: Payment[];
+  installments: Installment[];
   tax: TaxProfile;
 }
 
@@ -144,6 +169,48 @@ export interface AuditEntry {
   detail: string | null;
   createdAt: string;
   actor: { id: string; name: string; role: Role } | null;
+}
+
+// --- Emails: the sent/received log (backend/src/emails) -----------------------
+
+export type EmailDirection = 'OUTBOUND' | 'INBOUND';
+export type EmailStatus = 'SENT' | 'FAILED' | 'RECEIVED';
+export type EmailKind =
+  | 'OTP' | 'WELCOME' | 'PASSWORD_RESET' | 'PASSWORD_CHANGED'
+  | 'INVITATION' | 'INVOICE' | 'TEST' | 'INBOUND' | 'OTHER';
+
+/** A row in the Emails list — the summary shape, without the full body. */
+export interface EmailRow {
+  id: string;
+  direction: EmailDirection;
+  status: EmailStatus;
+  kind: EmailKind;
+  fromAddress: string;
+  fromName: string | null;
+  toAddress: string;
+  subject: string;
+  /** A safe snippet — shown even when the body itself is withheld. */
+  preview: string | null;
+  provider: string | null;
+  error: string | null;
+  sentAt: string | null;
+  receivedAt: string | null;
+  createdAt: string;
+  triggeredBy: { id: string; name: string } | null;
+  submission: { id: string; ref: string; invoiceNo: string | null } | null;
+}
+
+/** The detail shape — the row plus the stored body (null when redacted). */
+export interface EmailDetail extends EmailRow {
+  bodyText: string | null;
+  bodyHtml: string | null;
+}
+
+/** The result of POST /api/emails/invoice. */
+export interface SendInvoiceResult {
+  ok: boolean;
+  invoiceNo: string;
+  to: string;
 }
 
 // --- Insight: reports, leaderboard, audit trail ------------------------------

@@ -27,7 +27,18 @@ const DETAIL = {
   event: { include: { city: true } },
   package: true,
   addons: { include: { addon: true } },
-  payments: { orderBy: { date: 'asc' } },
+  // Date first, then insertion order. `date` is date-only, so a payment and the
+  // negative entry that reverses it usually share one — sorting on date alone
+  // leaves their order to the planner, and the ledger reads as a reversal that
+  // precedes the payment it reverses.
+  payments: { orderBy: [{ date: 'asc' }, { createdAt: 'asc' }] },
+  // The payment plan rides on every submission read: it is not confidential, and
+  // a rep opening their own sale should see where the designer is in the
+  // schedule without a second request.
+  installments: {
+    orderBy: { seq: 'asc' },
+    include: { paidBy: { select: { id: true, name: true } } },
+  },
   tax: true,
 } satisfies Prisma.SubmissionInclude;
 
@@ -478,6 +489,35 @@ export class SubmissionsService {
   }
 
   /**
+   * Re-derive paidAmount, balance and payStatus from whatever is on the ledger
+   * right now, and write them back. Called inside the transaction that just
+   * changed the ledger, so the recompute sees the new row.
+   *
+   * Public because the installment plan posts payments too (see
+   * InstallmentsService): there must be exactly one way for a payment to move a
+   * balance, or the two paths drift and only one of them stays right.
+   */
+  async recomputeMoney(tx: Prisma.TransactionClient, id: string) {
+    const withLines = await tx.submission.findUniqueOrThrow({
+      where: { id },
+      include: { addons: true, payments: true },
+    });
+    const priced = this.priceExisting(withLines);
+
+    const submission = await tx.submission.update({
+      where: { id },
+      data: {
+        paidAmount: priced.paidAmount.toFixed(2),
+        balance: priced.balance.toFixed(2),
+        payStatus: priced.payStatus,
+      },
+      include: DETAIL,
+    });
+
+    return { submission, priced };
+  }
+
+  /**
    * Record a payment and let the balance follow from it. paidAmount, balance and
    * payStatus are never set by hand — they come back out of PricingService once
    * the new payment is on the ledger. A payment is never deleted: a mistake is
@@ -504,22 +544,7 @@ export class SubmissionsService {
         },
       });
 
-      // Re-read with the freshly-inserted payment so the recompute sees it.
-      const withLines = await tx.submission.findUniqueOrThrow({
-        where: { id },
-        include: { addons: true, payments: true },
-      });
-      const priced = this.priceExisting(withLines);
-
-      const updated = await tx.submission.update({
-        where: { id },
-        data: {
-          paidAmount: priced.paidAmount.toFixed(2),
-          balance: priced.balance.toFixed(2),
-          payStatus: priced.payStatus,
-        },
-        include: DETAIL,
-      });
+      const { submission: updated, priced } = await this.recomputeMoney(tx, id);
 
       await this.audit.log(
         {

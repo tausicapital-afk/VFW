@@ -23,7 +23,10 @@ function serviceWith(appUrl?: string) {
     hasAll: () => false,
     version: 0,
   };
-  return new EmailService(cfg as never, accounts as never);
+  // These specs only build mail (appUrl / the builders); nothing sends, so the
+  // recording path is never reached and a bare prisma stub is enough.
+  const prisma = { emailMessage: { create: async () => undefined } };
+  return new EmailService(cfg as never, accounts as never, prisma as never);
 }
 
 describe('emailed links', () => {

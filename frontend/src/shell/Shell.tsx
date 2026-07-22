@@ -29,6 +29,7 @@ const NAV: NavItem[] = [
   { to: '/submissions', label: 'Submissions', ic: '▤', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
   { to: '/contacts', label: 'Contacts', ic: '◈', roles: ['SALES', 'ACCT', 'MGR', 'ADMIN'] },
   { to: '/messages', label: 'Messages', ic: '✉', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'], badge: 'messages' },
+  { to: '/emails', label: 'Emails', ic: '@', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
   { to: '/queue', label: 'Approval queue', ic: '⚑', roles: ['SALES', 'ACCT', 'ADMIN'], badge: 'queue' },
   { to: '/qbo', label: 'QuickBooks', ic: '⇪', roles: ['ACCT', 'ADMIN'] },
   { grp: 'People' },

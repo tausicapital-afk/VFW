@@ -340,3 +340,58 @@ model EmailOtp {
   it inherits the header, footer and theming for free.
 - **Rebranding:** change `MAIL_FROM_NAME` (and optionally `MAIL_BRAND_COLOUR` /
   `MAIL_SUPPORT_ADDRESS`); every email updates together.
+
+---
+
+## The Emails module (sent + received)
+
+The console keeps a log of every message it sends, and — where the mailbox
+allows — the mail it receives. It lives at **Work → Emails** and behind
+`backend/src/emails/`.
+
+### Sent
+
+Recording happens at the one choke point, `EmailService.send()`, so **every**
+outbound message is logged automatically: OTP, welcome, reset, invitations,
+invoice sends, and test emails. A row is written `SENT` on success and `FAILED`
+(with the reason) on a transport error, so a bounced invoice is visible rather
+than lost.
+
+Because that choke point sees the secrets too, sensitive kinds are **redacted**
+before storage (`redactForLog` in `email.ts`): OTP/welcome/reset/invitation
+bodies are dropped, and the OTP subject (which carries the code) is replaced.
+Invoice and inbound bodies are kept in full — they hold no secret.
+
+Visibility is row-scoped like submissions: a rep sees only mail they triggered;
+`email.viewAll` roles (ACCT/MGR/ADMIN) see the whole log.
+
+### Send invoice
+
+An already-invoiced submission gains a **Send invoice** button
+(`email.send` → ACCT/ADMIN) beside *Download invoice (PDF)*. It opens an editable
+compose (recipient pre-filled from the contact, subject/message pre-filled from
+the sale), and on send attaches the PDF built from the stored figures — the same
+document the Download button produces. The send is logged (kind `INVOICE`,
+attributed to the sender and sale) and appends an `INVOICE_EMAILED` audit entry
+to the submission.
+
+Attachments ride all three providers (SMTP, Resend, relay). **Relay caveat:** the
+PHP relay in `ops/mail-relay` must be updated to honour the new `attachments`
+field — an older relay silently delivers the message *without* the PDF.
+
+### Received (IMAP poll)
+
+Opt-in, SMTP mailboxes only. Set `inboundEnabled` (and, if IMAP is not on the
+same host, `imapHost`/`imapPort`) on the active `MailAccount`. A cron
+(`emails/inbound.service.ts`, every minute) then connects over IMAP with that
+row's username + decrypted password, pulls recent mail, and stores it as
+`INBOUND`/`RECEIVED`, deduped by `(mailAccountId, messageId)`.
+
+> **Railway blocks the IMAP port** just as it blocks SMTP (see the transport note
+> above). There the poll simply keeps failing to connect and logs a warning;
+> Sent is unaffected. Inbound works where the port is reachable (local, a
+> cPanel-hosted deploy). If inbound is needed on Railway, switch to a provider
+> **inbound webhook** instead of IMAP.
+
+Inbound bodies are rendered as **text only** in the reader — never injected as
+HTML — so a received message cannot script the console.
