@@ -52,7 +52,7 @@
   "devDependencies": {
     "@nestjs/cli": "^10.4.9",
     "@nestjs/schematics": "^10.2.3",
-    "@nestjs/testing": "^10.4.22",
+    "@nestjs/testing": "^11.1.28",
     "@types/cookie-parser": "^1.4.8",
     "@types/express": "^5.0.0",
     "@types/jest": "^29.5.14",
