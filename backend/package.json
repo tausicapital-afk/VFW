@@ -19,8 +19,8 @@
     "seed": "ts-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1085.0",
-    "@aws-sdk/s3-request-presigner": "^3.1085.0",
+    "@aws-sdk/client-s3": "^3.1094.0",
+    "@aws-sdk/s3-request-presigner": "^3.1094.0",
     "@nestjs/common": "^10.4.15",
     "@nestjs/config": "^3.3.0",
     "@nestjs/core": "^10.4.15",
@@ -32,13 +32,13 @@
     "@nestjs/websockets": "^10.4.22",
     "@prisma/client": "^5.22.0",
     "@sentry/node": "^8.55.2",
-    "argon2": "^0.41.1",
+    "argon2": "^0.45.1",
     "class-transformer": "^0.5.1",
-    "class-validator": "^0.14.1",
+    "class-validator": "^0.15.1",
     "cookie-parser": "^1.4.7",
     "decimal.js": "^10.4.3",
     "exceljs": "^4.4.0",
-    "imapflow": "^1.4.8",
+    "imapflow": "^1.5.0",
     "mailparser": "^3.9.14",
     "nestjs-pino": "^4.6.1",
     "nodemailer": "^9.0.3",
@@ -65,7 +65,7 @@
     "pino-pretty": "^11.3.0",
     "prisma": "^5.22.0",
     "supertest": "^7.0.0",
-    "ts-jest": "^29.4.11",
+    "ts-jest": "^29.4.12",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.2"
   }
