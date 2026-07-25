@@ -107,15 +107,25 @@ export class StorageService {
    * `inline` controls the disposition: an attachment (the default) forces a
    * download, which is right for a contract; `inline: true` lets the browser
    * render it in place, which is what a chat image wants.
+   *
+   * `expiresIn` overrides the default lifetime. A download link wants to be
+   * brief; an <img src> does not, because a URL that expires under a page left
+   * open turns into a broken image with no way to ask for a fresh one. Callers
+   * that render rather than download pass a longer window on purpose.
    */
-  presignDownload(key: string, filename: string, inline = false): Promise<string> {
+  presignDownload(
+    key: string,
+    filename: string,
+    inline = false,
+    expiresIn = EXPIRES_SECONDS,
+  ): Promise<string> {
     const disposition = inline ? 'inline' : 'attachment';
     const cmd = new GetObjectCommand({
       Bucket: this.bucket,
       Key: key,
       ResponseContentDisposition: `${disposition}; filename="${filename.replace(/"/g, '')}"`,
     });
-    return getSignedUrl(this.requireClient(), cmd, { expiresIn: EXPIRES_SECONDS });
+    return getSignedUrl(this.requireClient(), cmd, { expiresIn });
   }
 }
 

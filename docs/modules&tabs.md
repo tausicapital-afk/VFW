@@ -25,6 +25,13 @@ Roles: **SALES** (Sales Representative), **INTERN**, **ACCT** (Accounting), **MG
 
 *No tabs.*
 
+The detail view carries an **Invoice number** card, and the edit view's availability both shift at
+approval — before it, a sale and its invoice number belong to whoever owns them; after it, both
+belong to Accounting. The button says *Edit* before a decision and *Amend* after one, and an
+amendment keeps the approval rather than sending the sale back through the queue. Editing an
+`EXPORTED` sale warns that QuickBooks will not follow. Full rules in
+`docs/roles-and-permissions.md` → *Editing a sale, and its invoice number*.
+
 ### Contacts — `/contacts`
 **SALES, ACCT, MGR, ADMIN.** Searchable directory of client contacts and brands, opening into a per-contact history (`/contacts/:id`).
 
@@ -48,6 +55,56 @@ Roles: **SALES** (Sales Representative), **INTERN**, **ACCT** (Accounting), **MG
 ---
 
 ## People
+
+### Attendance — `/attendance`
+**All roles.** The timesheet: which days you worked and for how long. A month calendar where each day
+opens an editor (status, start/finish, hours, note), plus a Clock in / Clock out pair for today and a
+KPI strip totalling the month.
+
+**Two tabs, but only for `ACCT`, `MGR` and `ADMIN`** — a rep sees the single screen with no tab bar,
+because "My timesheet" and nothing else is not a choice worth rendering.
+
+| Tab | Who | What |
+| --- | --- | --- |
+| My timesheet | all roles | Your own month, with the clock buttons. |
+| Team | `attendance.viewTeam` | Every active account rolled up for the month — days worked, hours, average, days away — and **including people who recorded nothing**, which is the point of the screen. Opening a person swaps the panel for their calendar, where a manager can correct a day. |
+
+Three things about the data model that the screen depends on:
+
+- **A day is a calendar day, not an instant** (`@db.Date`), and the times are wall-clock `"HH:MM"`
+  strings. The browser sends both, because the API runs in UTC and has no idea what time it is where
+  the person is standing.
+- **One row per person per day**, enforced by a unique constraint. Marking the same day twice rewrites
+  it rather than adding a second answer.
+- **Times beat a typed total.** If start and finish are both set, `hours` is derived from them —
+  otherwise the row could contradict itself.
+
+Attendance is deliberately *not* derived from the `UserSession` telemetry behind Logs: a socket being
+connected is a different claim from a day being worked.
+
+### Payroll — `/payroll`
+**All roles for your own pay; `ACCT` and `ADMIN` for everyone's.** What each person earned in a month,
+and the arithmetic it came from.
+
+| Tab | Who | What |
+| --- | --- | --- |
+| My pay | all roles | Your own statement: base, commission, gross — beside your full profile and the hours and sales it was derived from. |
+| Payroll run | `payroll.viewAll` | Every active account for the month, with run totals, and a row that opens into that person's statement. |
+
+A statement is **base + commission = gross**, with each part shown as its own arithmetic rather than
+as a total to be taken on faith:
+
+- **Base** comes from the account's pay type — `SALARY` (a fixed monthly figure), `HOURLY` (the rate
+  × the hours on their Attendance timesheet) or `COMMISSION_ONLY` (no base). Set in Administration →
+  Users & roles.
+- **Commission** is the sum of `commissionAmount` on the sales they closed, counted in the month the
+  sale was **approved**, consolidated to CAD. The rate is the one recorded on each sale when it was
+  created, so changing someone's percentage today moves their next sale and not one already booked.
+- **Commission not yet collected** is shown beside the total: commission is earned on approval, so
+  part of a month's gross can be sitting against invoices the client has not settled.
+
+Nothing is stored — the month is derived on every read. See `docs/roles-and-permissions.md` →
+*Payroll: derived, never stored* for why, and for the one place `MGR` sees less than Accounting.
 
 ### Leaderboard — `/board`
 **All roles.** Ranks sales representatives by performance over the selected period.
@@ -141,9 +198,20 @@ Reached from the user menu in the top-right rather than the rail.
 *No tabs.*
 
 ### Account — `/account`
-**All roles.** Your own profile details.
+**All roles.** Your own profile, and the only screen on which you can edit it.
 
-*No tabs.*
+*No tabs.* Two stacked cards:
+
+- **Profile** — name, job title, phone, department, avatar colour, and a profile picture uploaded
+  straight to R2 the same three-step way a submission document is (presign → PUT → commit). Below the
+  form, a read-only block for what an administrator owns: work email, role, employee ID, join date and
+  last sign-in.
+- **Password** — current + new + confirm. A successful change signs out every *other* device and keeps
+  this one, by re-issuing the caller's cookie after the `tokenVersion` bump.
+
+Everything here acts on the session's own user — there is no `:id` and no permission, which is what
+makes "may I edit this profile?" unanswerable rather than merely answered correctly. See
+`docs/roles-and-permissions.md` → *Self-service*.
 
 ---
 
@@ -188,6 +256,9 @@ browser (see *History* below).
 | Administration → Packages & pricing | Package rate card | `packages` | `admin.manage` |
 | Administration → Packages & pricing | Add-on catalogue | `addons` | `admin.manage` |
 | Administration → Tax rates | Tax profiles | `taxes` | `admin.manage` |
+| Attendance → My timesheet | The month | `attendance` | scoped in `load` (own sheet, or one you may open) |
+| Attendance → Team | Everyone | `attendance-team` | `attendance.viewTeam` |
+| Payroll → Payroll run | Everyone | `payroll` | `payroll.viewAll` |
 | Logs → Users | Users | `log-users` | `activity.view` |
 | Logs → Activity | Activity | `activity` | `activity.view` |
 | Logs → Sessions | Sessions | `sessions` | `activity.view` |
@@ -205,6 +276,11 @@ It is not always the whole story, and the two gates answer different questions:
 - **`load` answers "WHICH rows".** Contacts needs both: `contacts.view` refuses an INTERN outright
   (the customer book is designer PII and a trainee does not hold it), while the row scope gives a
   rep their own brands. Neither implies the other.
+- **Attendance is the cleanest example of the first bullet's opposite.** `attendance` carries no
+  `permission` at all, because `load` calls `AttendanceService.list` — the same method the screen
+  calls, resolving the same subject through the same check. A file can only ever hold a month the
+  caller could have opened. `attendance-team` needs a `permission` precisely because it has no
+  subject to scope: it is everybody by definition.
 - **Some rules are neither.** `internal-comments` goes through `InternalService.list` so the promise
   that nobody reads the coaching notes about their own sale survives into the file. A manager who
   carries deals passes the permission gate — only `notAboutMe` stops them. `people-exports.spec.ts`
@@ -244,7 +320,7 @@ declare its columns exactly one way; there is no shape that satisfies both or ne
 | Messages | Private staff conversation. A one-click dump of everyone's chat is a different decision from a table export and should not arrive as a side effect of consistency. |
 | New submission, Submission detail, Contact detail | One record, not a table. A submission's client-facing artefact is its invoice, which is its own concern. |
 | Administration → Settings, Administration → Configuration | Forms, not tables — and Configuration holds secrets. |
-| Console → Settings, Account | Personal preferences and your own profile. |
+| Console → Settings, Account | Personal preferences and your own profile — forms, not tables. Your hours are exportable from Attendance. |
 
 ### History — the Reports migration
 

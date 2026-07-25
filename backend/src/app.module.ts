@@ -7,6 +7,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 import { ActivityModule } from './activity/activity.controller';
 import { AdminModule } from './admin/admin.controller';
+import { AttendanceModule } from './attendance/attendance.controller';
 import { AuditModule } from './audit/audit.controller';
 import { AuthController } from './auth/auth.controller';
 import { AuthService } from './auth/auth.service';
@@ -23,6 +24,8 @@ import { EmailsModule } from './emails/emails.module';
 import { ExportModule } from './export/export.controller';
 import { MessagingModule } from './messaging/messaging.module';
 import { PrismaModule } from './prisma/prisma.service';
+import { PayrollModule } from './payroll/payroll.controller';
+import { ProfileModule } from './profile/profile.controller';
 import { FxModule } from './fx/fx.controller';
 import { ReportsModule } from './reports/reports.controller';
 import { StorageModule } from './storage/storage.service';
@@ -57,6 +60,9 @@ import { SubmissionsModule } from './submissions/submissions.controller';
     MessagingModule,
     EmailsModule,
     ActivityModule,
+    ProfileModule,
+    AttendanceModule,
+    PayrollModule,
     ExportModule,
   ],
   controllers: [AuthController],

@@ -4,6 +4,8 @@ import { ActivityModule } from '../activity/activity.controller';
 import { ActivityService } from '../activity/activity.service';
 import { AdminModule } from '../admin/admin.controller';
 import { AdminService } from '../admin/admin.service';
+import { AttendanceModule } from '../attendance/attendance.controller';
+import { AttendanceService } from '../attendance/attendance.service';
 import { AuditService } from '../audit/audit.service';
 import { ContactsModule } from '../contacts/contacts.controller';
 import { ContactsService } from '../contacts/contacts.service';
@@ -15,14 +17,18 @@ import { can } from '../common/acl';
 import { AuthUser, CurrentUser } from '../common/auth.guard';
 import { MessagingGateway } from '../messaging/messaging.gateway';
 import { MessagingModule } from '../messaging/messaging.module';
+import { PayrollModule } from '../payroll/payroll.controller';
+import { PayrollService } from '../payroll/payroll.service';
 import { SubmissionsModule } from '../submissions/submissions.controller';
 import { SubmissionsService } from '../submissions/submissions.service';
+import { attendanceDataset, attendanceTeamDataset } from './datasets/attendance.dataset';
 import { auditDataset } from './datasets/audit.dataset';
 import { addonsDataset, packagesDataset, taxesDataset } from './datasets/catalogue.dataset';
 import { contactsDataset } from './datasets/contacts.dataset';
 import { invitationsDataset } from './datasets/invitations.dataset';
 import { activityDataset, logUsersDataset, sessionsDataset } from './datasets/logs.dataset';
 import { feedbackDataset, internalCommentsDataset } from './datasets/people.dataset';
+import { payrollDataset } from './datasets/payroll.dataset';
 import { qboLedgerDataset } from './datasets/qbo-ledger.dataset';
 import { reportDatasets } from './datasets/reports.dataset';
 import { submissionsDataset } from './datasets/submissions.dataset';
@@ -101,6 +107,8 @@ export class ExportController {
     MessagingModule,
     ContactsModule,
     ReportsModule,
+    AttendanceModule,
+    PayrollModule,
   ],
   controllers: [ExportController],
   providers: [ExportRegistry, ExportService],
@@ -126,6 +134,8 @@ export class ExportModule {
     feedback: FeedbackService,
     internal: InternalService,
     reports: ReportsService,
+    attendance: AttendanceService,
+    payroll: PayrollService,
   ) {
     registry.register(submissionsDataset(submissions));
     registry.register(userApprovalsDataset(admin));
@@ -142,6 +152,9 @@ export class ExportModule {
     registry.register(qboLedgerDataset(submissions));
     registry.register(feedbackDataset(feedback));
     registry.register(internalCommentsDataset(internal));
+    registry.register(attendanceDataset(attendance));
+    registry.register(attendanceTeamDataset(attendance));
+    registry.register(payrollDataset(payroll));
     // One per report — see reports.dataset.ts for why they are not one dataset
     // taking a `type`.
     for (const report of reportDatasets(reports)) registry.register(report);

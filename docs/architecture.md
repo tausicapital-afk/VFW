@@ -146,6 +146,22 @@ without its approval, is worse than either failing outright.
 by attempted email so a failed login cannot reveal which addresses are
 registered), `PasswordReset`.
 
+> `User` carries three groups of fields that are edited by three different
+> people, and the split is the point. **Self-edited**: name, title, phone,
+> department, `colour`, `avatarKey` — statements about yourself, changed on the
+> Account screen with no permission check because there is no `:id` to get wrong.
+> **Admin-only**: `role`, `status`, `commissionPct`, `target`, `payType`,
+> `baseRate` — grants and obligations other people make about you. **Never
+> edited**: `email` (the login identity and where one-time codes go),
+> `passwordHash`, `tokenVersion`. `title` and `role` are deliberately separate
+> columns: a title people can rewrite about themselves must never be able to move
+> them between roles.
+
+**Time & pay** — `AttendanceEntry` (one row per person per calendar day, unique on
+`(userId, date)`), and no payroll table at all. A payroll period is derived on
+every read from the pay setup, the timesheet and the sales ledger; see
+`docs/roles-and-permissions.md` → *Payroll: derived, never stored*.
+
 **Catalogue** (admin-editable reference data) — `TaxProfile`, `City`, `Event`,
 `Package`, `PackagePrice`, `Addon`, `GlAccount`.
 
@@ -163,6 +179,13 @@ does the same via `upsert`.
 > `SubmissionAddon` copies the add-on's price onto the line at submission time.
 > If Accounting later edits the catalogue price, historical submissions must not
 > move.
+
+> `Submission.commissionPct` is copied from the rep at creation for the same
+> reason, and it is what makes payroll reproducible: changing someone's rate today
+> moves their next sale, never one already on the books. `invoiceNo` is `@unique`
+> — while the only way to get one was a row-locked increment, uniqueness was a
+> property of how it was produced; now that it can be typed by hand, the database
+> has to be the thing that says no.
 
 `Settings` is a single pinned row (`id = 1`) holding the fiscal year, invoice
 sequence, discount-approval threshold, FX rates to CAD (the reporting currency),

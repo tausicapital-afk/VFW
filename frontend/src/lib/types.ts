@@ -9,8 +9,81 @@ export interface User {
   name: string;
   email: string;
   role: Role;
+  phone?: string | null;
   department?: string | null;
+  title?: string | null;
   colour?: string;
+  /**
+   * A presigned link to the uploaded picture, or null for the initials avatar.
+   * Signed for an hour by the API; the session query refetches well inside that,
+   * so a page left open never ends up rendering a dead link.
+   */
+  avatarUrl?: string | null;
+}
+
+/** The Account screen's model: everything above, plus what it shows read-only. */
+export interface Profile extends User {
+  employeeId?: string | null;
+  status?: UserStatus;
+  hasAvatar: boolean;
+  createdAt: string;
+  lastLoginAt?: string | null;
+}
+
+// --- Attendance ------------------------------------------------------------
+
+export type AttendanceStatus =
+  | 'PRESENT' | 'REMOTE' | 'LEAVE' | 'SICK' | 'HOLIDAY' | 'ABSENT';
+
+export interface AttendanceEntry {
+  id: string;
+  userId: string;
+  /** A calendar day, "YYYY-MM-DD". Never parse this as an instant. */
+  date: string;
+  status: AttendanceStatus;
+  /** Decimal string, like money — total it with care, display it freely. */
+  hours: string;
+  checkIn: string | null;
+  checkOut: string | null;
+  note: string | null;
+  /** Set when somebody other than the subject last wrote the row. */
+  correctedBy: { id: string; name: string } | null;
+  updatedAt: string;
+}
+
+export interface AttendanceSummary {
+  days: number;
+  daysWorked: number;
+  hours: string;
+  avgHours: string;
+  byStatus: Record<AttendanceStatus, number>;
+}
+
+export interface AttendancePerson {
+  id: string;
+  name: string;
+  role: Role;
+  department: string | null;
+  colour: string;
+  avatarUrl: string | null;
+}
+
+export interface AttendanceSheet {
+  month: string;
+  user: AttendancePerson | null;
+  /** Whether this is the caller's own sheet — decides clock-in vs correction. */
+  self: boolean;
+  entries: AttendanceEntry[];
+  summary: AttendanceSummary;
+}
+
+export interface AttendanceTeam {
+  month: string;
+  rows: {
+    user: AttendancePerson;
+    entries: AttendanceEntry[];
+    summary: AttendanceSummary;
+  }[];
 }
 
 /**
@@ -360,7 +433,66 @@ export interface AdminUser extends User {
   employeeId: string | null;
   commissionPct: Money;
   target: Money;
+  payType: PayType;
+  /** Monthly under SALARY, hourly under HOURLY, ignored when commission-only. */
+  baseRate: Money;
   createdAt: string;
+}
+
+// --- Payroll ---------------------------------------------------------------
+
+export type PayType = 'SALARY' | 'HOURLY' | 'COMMISSION_ONLY';
+
+export interface PayrollStatement {
+  user: {
+    id: string;
+    name: string;
+    email: string;
+    phone: string | null;
+    role: Role;
+    title: string | null;
+    department: string | null;
+    employeeId: string | null;
+    colour: string;
+    status: UserStatus;
+    createdAt: string;
+    avatarUrl: string | null;
+    commissionPct: Money;
+    target: Money;
+    baseRate: Money;
+  };
+  attendance: { days: number; daysWorked: number; hours: string; avgHours: string };
+  sales: { count: number; revenue: Money; invoiced: Money };
+  pay: {
+    payType: PayType;
+    baseRate: Money;
+    /** The hours the base was multiplied by, or null when it was not hourly. */
+    baseHours: string | null;
+    base: Money;
+    commission: Money;
+    /** Of the commission above, how much sits against invoices not yet settled. */
+    commissionUnpaid: Money;
+    gross: Money;
+  };
+}
+
+/** One person's month. `self` decides whether the screen says "you" or a name. */
+export interface PayrollSheet extends PayrollStatement {
+  month: string;
+  self: boolean;
+}
+
+export interface PayrollRun {
+  month: string;
+  rows: PayrollStatement[];
+  totals: {
+    people: number;
+    base: Money;
+    commission: Money;
+    commissionUnpaid: Money;
+    gross: Money;
+    hours: string;
+  };
 }
 
 export interface Invitation {

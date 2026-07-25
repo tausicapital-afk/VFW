@@ -34,6 +34,10 @@ export const ACL = {
   'email.viewOwn': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
   'email.viewAll': ['ACCT', 'MGR', 'ADMIN'],
   'email.send': ['ACCT', 'ADMIN'],
+  'attendance.mark': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
+  'attendance.viewTeam': ['ACCT', 'MGR', 'ADMIN'],
+  'payroll.viewOwn': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
+  'payroll.viewAll': ['ACCT', 'ADMIN'],
   'admin.manage': ['ACCT', 'ADMIN'],
   'activity.view': ['ACCT', 'ADMIN'],
 } as const satisfies Record<string, readonly Role[]>;

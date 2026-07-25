@@ -77,6 +77,27 @@ export const ACL = {
   // consequence — a role that can edit roles can raise its own to ADMIN, so
   // this grant is effectively a grant of everything below it.
   'admin.manage': ['ACCT', 'ADMIN'],
+  // Attendance. Everyone marks their own days — an intern has a timesheet for
+  // the same reason a manager does — and the write path has no user parameter,
+  // so `mark` is only ever a claim about yourself.
+  'attendance.mark': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
+  // Reading, and correcting, someone else's timesheet. This is the supervisory
+  // half and is why it is a separate grant: a timesheet is how hours are
+  // approved and, eventually, paid, so seeing everyone's is a management act.
+  // MGR holds it where MGR holds no accounting permission at all — this is the
+  // one thing on this list that is genuinely about running a team rather than
+  // running the books.
+  'attendance.viewTeam': ['ACCT', 'MGR', 'ADMIN'],
+  // Payroll. Split like attendance, and for a sharper version of the same
+  // reason: what you are paid is yours to see, and what everyone else is paid is
+  // not. `viewOwn` is every role — a rep opens it to check their commission
+  // against the sales they closed, which is the whole point of tying the two
+  // together — and it can only ever resolve to the caller. `viewAll` is the pay
+  // of the entire company, including the people who hold it, so it stops at
+  // Accounting and Admin. Note MGR is NOT here: a sales manager reads the team's
+  // hours and their numbers, not their salaries.
+  'payroll.viewOwn': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
+  'payroll.viewAll': ['ACCT', 'ADMIN'],
   // The activity/logs screen is user-monitoring — who signed in, what they
   // opened, who they messaged. HR/security-sensitive, and long held by ADMIN
   // alone; ACCT now holds it too, so Accounting and Admin carry an identical,

@@ -28,6 +28,18 @@ enum Role {
   ADMIN
 }
 
+// How someone's base pay is worked out, before commission.
+//
+// The third case is not "no pay" — it is the commission-only rep, whose entire
+// earnings are the percentage of sales below. Keeping it as an explicit pay type
+// rather than a zero salary is the difference between "we know this person is on
+// commission" and "somebody forgot to fill in the rate".
+enum PayType {
+  SALARY
+  HOURLY
+  COMMISSION_ONLY
+}
+
 // Signup is invitation-only and still requires an admin to approve the account,
 // so a user exists in PENDING before they can authenticate.
 enum UserStatus {
@@ -63,9 +75,33 @@ model User {
   // value has fallen behind. A password reset bumps it, so a stolen session
   // dies with the password that leaked it.
   tokenVersion  Int        @default(0)
+  // The percentage of net revenue this person earns on a sale they close. Copied
+  // onto each Submission at creation — see the note on Submission.commissionPct —
+  // so changing it here moves the NEXT sale's commission, never one already on
+  // the books.
   commissionPct Decimal    @default(0) @db.Decimal(5, 2)
   target        Decimal    @default(0) @db.Decimal(14, 2)
+  // --- Payroll -------------------------------------------------------------
+  // Base pay, before commission. A monthly figure when SALARY, an hourly one
+  // when HOURLY (multiplied by the hours in Attendance), and ignored entirely
+  // when COMMISSION_ONLY.
+  //
+  // Held in CAD, the reporting currency, with no per-user currency to disagree
+  // with — the same choice `target` makes above.
+  payType       PayType    @default(COMMISSION_ONLY)
+  baseRate      Decimal    @default(0) @db.Decimal(14, 2)
   colour        String     @default("#0E0E11")
+  // Job title, as the person writes it ("Senior Sales Representative"). Free
+  // text and self-edited, unlike `role`, which is the permission grant and stays
+  // an administrator's to give. The two are deliberately not the same field: a
+  // title people can rewrite about themselves must never be able to move them
+  // between roles.
+  title         String?
+  // R2 object key for an uploaded profile picture, under avatars/<userId>/.
+  // Null is the normal state, and not a missing image: the initials-on-colour
+  // avatar is a first-class rendering, not a placeholder, so nothing breaks when
+  // object storage is unconfigured.
+  avatarKey     String?
   // Presence: when this user's last socket disconnected. Powers "last seen".
   lastSeenAt    DateTime?
   // When this user most recently authenticated. Null = has never logged in.
@@ -73,17 +109,17 @@ model User {
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
-  submissions       Submission[]     @relation("SubmissionRep")
-  approvals         Submission[]     @relation("SubmissionApprover")
-  voided            Submission[]     @relation("SubmissionVoider")
+  submissions       Submission[]       @relation("SubmissionRep")
+  approvals         Submission[]       @relation("SubmissionApprover")
+  voided            Submission[]       @relation("SubmissionVoider")
   contactsCreated   Contact[]
   paymentsRecorded  Payment[]
-  installmentsPaid  Installment[]    @relation("InstallmentPayer")
+  installmentsPaid  Installment[]      @relation("InstallmentPayer")
   documentsUploaded Document[]
   comments          InternalComment[]
   feedbackRecorded  DesignerFeedback[]
   auditEntries      AuditEntry[]
-  invitationsIssued Invitation[]     @relation("InvitationIssuer")
+  invitationsIssued Invitation[]       @relation("InvitationIssuer")
   passwordResets    PasswordReset[]
   emailOtps         EmailOtp[]
 
@@ -91,10 +127,13 @@ model User {
   participations       ConversationParticipant[]
   messagesSent         Message[]                 @relation("MsgSender")
 
-  emailsTriggered      EmailMessage[]            @relation("EmailTriggeredBy")
+  emailsTriggered EmailMessage[] @relation("EmailTriggeredBy")
 
-  activityLogs         ActivityLog[]
-  sessions             UserSession[]
+  activityLogs ActivityLog[]
+  sessions     UserSession[]
+
+  attendance       AttendanceEntry[] @relation("AttendanceSubject")
+  attendanceEdited AttendanceEntry[] @relation("AttendanceEditor")
 
   @@index([role, status])
 }
@@ -233,11 +272,11 @@ model GlAccount {
 }
 
 model Package {
-  id    String  @id
-  brand String
-  name  String
-  looks Int
-  blurb String?
+  id        String   @id
+  brand     String
+  name      String
+  looks     Int
+  blurb     String?
   // Sponsored packages are billed at a nominal fee; listValue records the
   // revenue that was forgone so reporting can show it.
   listValue Decimal? @db.Decimal(14, 2)
@@ -270,12 +309,12 @@ model PackagePrice {
 }
 
 model Addon {
-  id       String   @id
-  brand    String
-  name     String
-  price    Decimal  @db.Decimal(14, 2)
-  currency Currency
-  note     String?
+  id        String   @id
+  brand     String
+  name      String
+  price     Decimal  @db.Decimal(14, 2)
+  currency  Currency
+  note      String?
   // Which brands may buy this add-on.
   forBrands String[]
 
@@ -292,14 +331,14 @@ model Addon {
 // ---------------------------------------------------------------------------
 
 model Contact {
-  id       String  @id @default(cuid())
-  brand    String
-  designer String
-  company  String?
-  email    String?
-  phone    String?
-  country  String?
-  type     String  @default("Designer")
+  id        String   @id @default(cuid())
+  brand     String
+  designer  String
+  company   String?
+  email     String?
+  phone     String?
+  country   String?
+  type      String   @default("Designer")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -372,21 +411,21 @@ model Submission {
 
   // --- Money. All of it is computed server-side by PricingService; the client
   // --- sends inputs (package, addons, discount) and never sends a total.
-  currency     Currency
-  packagePrice Decimal      @db.Decimal(14, 2)
-  addonTotal   Decimal      @default(0) @db.Decimal(14, 2)
-  subtotal     Decimal      @db.Decimal(14, 2)
-  discountType DiscountType @default(PCT)
-  discountValue Decimal     @default(0) @db.Decimal(14, 2)
-  discountAmount Decimal    @default(0) @db.Decimal(14, 2)
-  taxable      Decimal      @db.Decimal(14, 2)
-  taxRate      Decimal      @db.Decimal(6, 3)
-  taxAmount    Decimal      @db.Decimal(14, 2)
-  total        Decimal      @db.Decimal(14, 2)
-  deposit      Decimal      @default(0) @db.Decimal(14, 2)
-  paidAmount   Decimal      @default(0) @db.Decimal(14, 2)
-  balance      Decimal      @db.Decimal(14, 2)
-  payStatus    PayStatus    @default(UNPAID)
+  currency       Currency
+  packagePrice   Decimal      @db.Decimal(14, 2)
+  addonTotal     Decimal      @default(0) @db.Decimal(14, 2)
+  subtotal       Decimal      @db.Decimal(14, 2)
+  discountType   DiscountType @default(PCT)
+  discountValue  Decimal      @default(0) @db.Decimal(14, 2)
+  discountAmount Decimal      @default(0) @db.Decimal(14, 2)
+  taxable        Decimal      @db.Decimal(14, 2)
+  taxRate        Decimal      @db.Decimal(6, 3)
+  taxAmount      Decimal      @db.Decimal(14, 2)
+  total          Decimal      @db.Decimal(14, 2)
+  deposit        Decimal      @default(0) @db.Decimal(14, 2)
+  paidAmount     Decimal      @default(0) @db.Decimal(14, 2)
+  balance        Decimal      @db.Decimal(14, 2)
+  payStatus      PayStatus    @default(UNPAID)
 
   // Commission is struck on net revenue (taxable), never on tax.
   commissionPct    Decimal @default(0) @db.Decimal(5, 2)
@@ -404,34 +443,40 @@ model Submission {
   costCentre String?
   department String?
 
-  submittedAt DateTime?
-  approvedAt  DateTime?
+  submittedAt  DateTime?
+  approvedAt   DateTime?
   approvedById String?
   approvedBy   User?     @relation("SubmissionApprover", fields: [approvedById], references: [id])
-  rejectedAt  DateTime?
+  rejectedAt   DateTime?
   rejectReason String?
-  returnNote  String?
-  exportedAt  DateTime?
-  qbDocNumber String?
-  invoiceNo   String?
+  returnNote   String?
+  exportedAt   DateTime?
+  qbDocNumber  String?
+  // Unique, because it is now hand-editable as well as allocated. While the only
+  // way to get one was `allocateInvoice` — a row-locked increment — uniqueness was
+  // a property of how it was produced. Once a person can type it, the database has
+  // to be the thing that says no: two sales billed under one invoice number is a
+  // reconciliation someone does by hand, months later, with the money already
+  // moved. Multiple NULLs are fine in Postgres, so an uninvoiced sale is unaffected.
+  invoiceNo    String?   @unique
 
   // Set when a sale is voided (soft-deleted): the status it held just before, so
   // an unvoid restores it exactly rather than guessing DRAFT. Null unless VOIDED.
-  voidedFrom   SubmissionStatus?
-  voidedAt     DateTime?
-  voidedById   String?
-  voidedBy     User?     @relation("SubmissionVoider", fields: [voidedById], references: [id])
+  voidedFrom SubmissionStatus?
+  voidedAt   DateTime?
+  voidedById String?
+  voidedBy   User?             @relation("SubmissionVoider", fields: [voidedById], references: [id])
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  addons   SubmissionAddon[]
-  payments Payment[]
+  addons       SubmissionAddon[]
+  payments     Payment[]
   installments Installment[]
-  documents Document[]
-  comments InternalComment[]
-  audit    AuditEntry[]
-  emails   EmailMessage[]    @relation("EmailSubmission")
+  documents    Document[]
+  comments     InternalComment[]
+  audit        AuditEntry[]
+  emails       EmailMessage[]    @relation("EmailSubmission")
 
   @@index([status])
   @@index([repId, status])
@@ -470,7 +515,7 @@ model Payment {
 
   // Set when this payment was posted by marking an installment done, so the
   // ledger row and the schedule row point at each other.
-  installment  Installment?
+  installment Installment?
 
   @@index([submissionId])
 }
@@ -490,10 +535,10 @@ model Installment {
 
   // 1-based position in the plan — "instalment 2 of 3". Unique per submission so
   // two concurrent plan writes cannot interleave into one renumbered schedule.
-  seq     Int
-  label   String?
-  dueDate DateTime @db.Date
-  amount  Decimal  @db.Decimal(14, 2)
+  seq      Int
+  label    String?
+  dueDate  DateTime @db.Date
+  amount   Decimal  @db.Decimal(14, 2)
   // Copied from the submission at plan time. A sale's currency never changes, so
   // this is a convenience, not a second source of truth.
   currency Currency
@@ -501,12 +546,12 @@ model Installment {
   // instalment is marked done; the person marking it can still override.
   method   String?
 
-  status InstallmentStatus @default(PENDING)
-  paidAt DateTime?
+  status   InstallmentStatus @default(PENDING)
+  paidAt   DateTime?
   // Who marked it done — not who received the money. The Payment row carries
   // the ledger's own recordedBy.
   paidById String?
-  paidBy   User?  @relation("InstallmentPayer", fields: [paidById], references: [id])
+  paidBy   User?             @relation("InstallmentPayer", fields: [paidById], references: [id])
 
   // The ledger entry this instalment posted. Cleared (not deleted) when the mark
   // is undone: the Payment stays, and a reversing negative entry joins it, so
@@ -574,14 +619,14 @@ model DesignerFeedback {
 // Append-only. Nothing in this table is ever updated or deleted — the UI
 // advertises that guarantee and Accounting relies on it.
 model AuditEntry {
-  id           String     @id @default(cuid())
+  id           String      @id @default(cuid())
   submissionId String?
   submission   Submission? @relation(fields: [submissionId], references: [id])
   action       String
   detail       String?
   // Before/after payloads for money-affecting changes.
   payload      Json?
-  createdAt    DateTime   @default(now())
+  createdAt    DateTime    @default(now())
 
   actorId String?
   actor   User?   @relation(fields: [actorId], references: [id])
@@ -592,27 +637,27 @@ model AuditEntry {
 
 // Single-row table (id is pinned to 1).
 model Settings {
-  id                  Int     @id @default(1)
-  company             String  @default("VFW Management Inc.")
-  fiscalYear          Int     @default(2026)
+  id                  Int      @id @default(1)
+  company             String   @default("VFW Management Inc.")
+  fiscalYear          Int      @default(2026)
   // Invoicing is split by brand. A Vancouver show bills under VFW (this prefix
   // + sequence); every other city bills under GFC (the gfc* pair below). Two
   // independent, gapless sequences — see SubmissionsService.allocateInvoice.
-  invoicePrefix       String  @default("VFW-")
-  nextInvoiceSeq      Int     @default(2041)
-  gfcInvoicePrefix    String  @default("GFC-")
-  nextGfcInvoiceSeq   Int     @default(1001)
+  invoicePrefix       String   @default("VFW-")
+  nextInvoiceSeq      Int      @default(2041)
+  gfcInvoicePrefix    String   @default("GFC-")
+  nextGfcInvoiceSeq   Int      @default(1001)
   // Allocated the same way as nextInvoiceSeq — by incrementing this row inside
   // the creating transaction, which takes a row lock. Counting submissions
   // instead would hand the same ref to two concurrent creates.
-  nextSubmissionSeq   Int     @default(1001)
+  nextSubmissionSeq   Int      @default(1001)
   // Discounts above this percentage need explicit accounting sign-off.
-  discountApprovalPct Decimal @default(15) @db.Decimal(5, 2)
+  discountApprovalPct Decimal  @default(15) @db.Decimal(5, 2)
   qbRealmId           String?
   // FX rates to CAD, the reporting currency. Held here so Accounting can
   // update them without a deploy.
-  fxRates             Json    @default("{\"CAD\":1,\"USD\":1.37,\"GBP\":1.74,\"EUR\":1.49,\"JPY\":0.0092}")
-  scoreWeights        Json    @default("{\"revenue\":30,\"approved\":20,\"collection\":30,\"retention\":20}")
+  fxRates             Json     @default("{\"CAD\":1,\"USD\":1.37,\"GBP\":1.74,\"EUR\":1.49,\"JPY\":0.0092}")
+  scoreWeights        Json     @default("{\"revenue\":30,\"approved\":20,\"collection\":30,\"retention\":20}")
   updatedAt           DateTime @updatedAt
 }
 
@@ -663,7 +708,7 @@ model ConfigSetting {
 // would read as drift on the next migrate.
 // ---------------------------------------------------------------------------
 model MailAccount {
-  id          String   @id @default(cuid())
+  id          String  @id @default(cuid())
   // What an admin calls it in the picker — "VFW (cPanel)", "Tausi (Gmail)".
   label       String
   // smtp | resend. How the message leaves the building.
@@ -674,15 +719,15 @@ model MailAccount {
   // while `resend` goes over 443 like any other API call. Keeping both means the
   // cPanel mailbox stays configured and usable the moment the app runs somewhere
   // that permits SMTP.
-  provider    String   @default("smtp")
+  provider    String  @default("smtp")
   // SMTP-only. Ignored (and left blank) for HTTP providers.
-  host        String   @default("")
-  port        Int      @default(465)
+  host        String  @default("")
+  port        Int     @default(465)
   // ssl | tls | none. A string, not an enum: adding a mode should not need a
   // migration, and the value is validated on write.
-  encryption  String   @default("ssl")
+  encryption  String  @default("ssl")
   // SMTP: the login. HTTP providers: unused.
-  username    String   @default("")
+  username    String  @default("")
   // The one secret, AES-256-GCM ciphertext either way: the SMTP password, or the
   // provider API key. One encrypted column rather than two, because it is the
   // same thing — the credential that proves we may send.
@@ -691,7 +736,7 @@ model MailAccount {
   // Overrides MAIL_FROM_NAME as the brand shown at the top of every email, so
   // switching account can also switch the brand. Blank = fall back to config.
   fromName    String?
-  isActive    Boolean  @default(false)
+  isActive    Boolean @default(false)
 
   // Inbound (Received) — opt-in, SMTP mailboxes only. The poller (see
   // emails/inbound.service.ts) connects over IMAP with THIS row's username +
@@ -757,20 +802,20 @@ enum EmailKind {
 }
 
 model EmailMessage {
-  id            String         @id @default(cuid())
-  direction     EmailDirection
-  status        EmailStatus
-  kind          EmailKind      @default(OTHER)
+  id        String         @id @default(cuid())
+  direction EmailDirection
+  status    EmailStatus
+  kind      EmailKind      @default(OTHER)
 
-  fromAddress   String
-  fromName      String?
-  toAddress     String
-  subject       String
+  fromAddress String
+  fromName    String?
+  toAddress   String
+  subject     String
   // Redacted (null) for sensitive kinds. Kept for INVOICE / TEST / inbound.
-  bodyText      String?        @db.Text
-  bodyHtml      String?        @db.Text
+  bodyText    String? @db.Text
+  bodyHtml    String? @db.Text
   // A short snippet for the list row — safe to show even when the body is not.
-  preview       String?
+  preview     String?
 
   provider      String? // smtp | resend | relay | imap
   mailAccountId String?
@@ -780,26 +825,26 @@ model EmailMessage {
   // The app user who caused the send. Null for system mail (OTP, reset) and for
   // everything inbound. Drives the module's row-scoping: a rep sees their own.
   triggeredById String?
-  triggeredBy   User?          @relation("EmailTriggeredBy", fields: [triggeredById], references: [id])
+  triggeredBy   User?   @relation("EmailTriggeredBy", fields: [triggeredById], references: [id])
 
   // The submission an invoice send belongs to, so the module can link back.
-  submissionId  String?
-  submission    Submission?    @relation("EmailSubmission", fields: [submissionId], references: [id])
+  submissionId String?
+  submission   Submission? @relation("EmailSubmission", fields: [submissionId], references: [id])
 
   // RFC Message-ID header. For inbound, the dedupe key across poll ticks.
-  messageId     String?
+  messageId String?
 
-  sentAt        DateTime?
-  receivedAt    DateTime?
-  createdAt     DateTime       @default(now())
+  sentAt     DateTime?
+  receivedAt DateTime?
+  createdAt  DateTime  @default(now())
 
-  @@index([direction, createdAt])
-  @@index([triggeredById])
-  @@index([submissionId])
   // Idempotent inbound: the same message pulled twice by the poller upserts onto
   // one row. Scoped by mailbox so two accounts can each hold a copy of a message
   // sent to both. (Outbound rows leave messageId null and are never deduped.)
   @@unique([mailAccountId, messageId])
+  @@index([direction, createdAt])
+  @@index([triggeredById])
+  @@index([submissionId])
 }
 
 // ---------------------------------------------------------------------------
@@ -907,15 +952,15 @@ model MessageAttachment {
 // ---------------------------------------------------------------------------
 
 model ActivityLog {
-  id     String @id @default(cuid())
+  id     String  @id @default(cuid())
   // Null-able and SetNull on delete: a log line outlives the account it names.
   userId String?
   user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   // LOGIN, LOGOUT, CONNECT, DISCONNECT, MODULE_VIEW, MESSAGE_SENT.
-  action String
+  action    String
   // Human one-liner for the feed: "Entered Messages", "Messaged Jane Doe".
-  detail String?
+  detail    String?
   // Structured context: { module, conversationId, recipientId, durationSec }.
   // Never message content.
   meta      Json?
@@ -947,6 +992,64 @@ model UserSession {
 }
 
 // ---------------------------------------------------------------------------
+// Attendance — the timesheet: which days someone worked and for how long.
+//
+// Deliberately NOT derived from UserSession above. A session records that a
+// browser was connected, which is a different claim from "I worked today": it
+// misses the day spent at a venue with the laptop shut and counts the evening a
+// tab was left open. So attendance is asserted by a person and, when it is
+// wrong, corrected by their manager — `updatedById` names whoever last wrote the
+// row, which is the only reason a correction is distinguishable from a claim.
+//
+// One row per person per day. That uniqueness is the model: a day is a thing you
+// either worked or did not, so a second row for the same date would be two
+// answers to one question, and the totals would have no way to choose.
+// ---------------------------------------------------------------------------
+
+enum AttendanceStatus {
+  PRESENT
+  REMOTE
+  LEAVE
+  SICK
+  HOLIDAY
+  ABSENT
+}
+
+model AttendanceEntry {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation("AttendanceSubject", fields: [userId], references: [id], onDelete: Cascade)
+
+  // A calendar day, not an instant. @db.Date on purpose: a timestamp would make
+  // "the 3rd" depend on the reader's timezone, and a timesheet that shifts by a
+  // day when read from another city is not a timesheet.
+  date     DateTime         @db.Date
+  status   AttendanceStatus @default(PRESENT)
+  // Hours worked, to the quarter. Stored rather than computed from the times
+  // below because the times are optional — plenty of people know they did six
+  // hours without knowing when they started.
+  hours    Decimal          @default(0) @db.Decimal(4, 2)
+  // Wall-clock "HH:MM" in the worker's own day. Strings, for the same reason
+  // `date` is a Date: there is no instant here to be right about, only what the
+  // clock on the wall said.
+  checkIn  String?
+  checkOut String?
+  note     String?
+
+  // Who last wrote this row. Equal to userId for a self-report; someone else
+  // means a correction, and the screen says so.
+  updatedById String?
+  updatedBy   User?   @relation("AttendanceEditor", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, date])
+  // The team view reads a month across everyone.
+  @@index([date])
+}
+
+// ---------------------------------------------------------------------------
 // Health — the record behind the public status page (GET /api/health in a
 // browser). One row per component per probe, written by the background prober
 // in backend/src/health/.
@@ -971,7 +1074,7 @@ model HealthProbe {
   // UNCONFIGURED is not an outage: it means the credentials were never set, so
   // there is nothing to be down. Uptime maths excludes those rows entirely
   // rather than counting them against the service.
-  status String
+  status    String
   // Round-trip of the probe itself. Null when there was nothing to time.
   latencyMs Int?
   // Why it failed, for an operator reading the table directly. Never rendered

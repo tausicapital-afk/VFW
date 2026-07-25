@@ -8,6 +8,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Matches,
   Max,
   MaxLength,
   Min,
@@ -99,6 +100,28 @@ export class RejectDto {
 export class ReturnDto {
   @IsString() @MinLength(1) @MaxLength(4000)
   note: string;
+}
+
+/**
+ * Setting an invoice number by hand.
+ *
+ * The pattern is deliberately loose — letters, digits, dashes, slashes, dots and
+ * spaces — because this number is not ours to dictate. It goes on a document a
+ * client files, and a business that has billed as `VFW-2041` for a decade, or
+ * needs `2026/03/017` to satisfy a foreign tax office, is not doing anything
+ * wrong. What is refused is only what would make the number unusable downstream:
+ * an empty string, something that will not fit a PDF header, and characters that
+ * have no business in a filename, since the invoice is emailed as `<number>.pdf`.
+ */
+export class InvoiceNoDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  @Matches(/^[A-Za-z0-9][A-Za-z0-9 ./-]*$/, {
+    message:
+      'An invoice number may use letters, digits, spaces, dots, dashes and slashes, and must start with a letter or digit',
+  })
+  invoiceNo: string;
 }
 
 export class VoidDto {

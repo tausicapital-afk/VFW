@@ -112,3 +112,70 @@
 /* An instalment whose due date has passed and is still unpaid. Reuses the
    totals row's overdue colour so "late" reads the same everywhere. */
 .plan-late { color: var(--red); font-weight: 600; }
+
+/* ---------- PROFILE ----------
+   The avatar colour swatches. Same shape and interaction as .theme-choice on
+   the Settings screen, minus the label — the colour is the whole option. */
+.colour-choices { display: flex; gap: 8px; flex-wrap: wrap; }
+.colour-choice {
+  width: 30px; height: 30px; border-radius: 50%; cursor: pointer;
+  border: 2px solid transparent; box-shadow: 0 0 0 1px var(--line);
+  transition: box-shadow .15s, transform .1s;
+}
+.colour-choice:hover { transform: translateY(-1px); }
+.colour-choice.on { box-shadow: 0 0 0 2px var(--blue); }
+
+/* ---------- ATTENDANCE ----------
+   A month is a grid of seven columns, so it is one here too. The cells carry the
+   status colour as a wash rather than a pill: at a glance the shape of a month
+   is what you are reading, and twenty-odd pills would be twenty-odd things to
+   read one at a time. */
+.cal-head, .cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.cal-head {
+  margin-bottom: 6px; font-size: 10.5px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .1em; text-align: center;
+}
+.cal-day {
+  min-height: 74px; padding: 7px 8px; border: 1px solid var(--line);
+  border-radius: var(--r); background: var(--card); color: var(--text);
+  display: flex; flex-direction: column; gap: 2px; align-items: flex-start;
+  cursor: pointer; text-align: left; font: inherit;
+  transition: border-color .15s, background .15s;
+}
+.cal-day:hover { border-color: var(--blue); }
+.cal-day.empty-cell { border: 0; background: none; cursor: default; min-height: 0; }
+.cal-day.weekend { background: var(--paper); }
+.cal-day.today { border-color: var(--ink); border-width: 2px; padding: 6px 7px; }
+.cal-day .n { font-family: "IBM Plex Mono"; font-size: 12.5px; color: var(--muted); }
+.cal-day.on .n { color: var(--text); font-weight: 600; }
+.cal-day .h { font-family: "IBM Plex Mono"; font-size: 15px; font-weight: 600; margin-top: auto; }
+.cal-day .s {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .07em;
+  font-weight: 600; color: var(--muted);
+}
+
+/* Status washes, borrowed from the pill palette so a day and its pill in the
+   editor are unmistakably the same thing. */
+.cal-day.PRESENT { background: var(--green-soft); border-color: var(--green); }
+.cal-day.REMOTE  { background: var(--blue-soft);  border-color: var(--blue); }
+.cal-day.LEAVE   { background: var(--amber-soft); border-color: var(--amber); }
+.cal-day.SICK    { background: var(--violet-soft); border-color: var(--violet); }
+.cal-day.HOLIDAY { background: var(--line-soft);  border-color: var(--line); }
+.cal-day.ABSENT  { background: var(--red-soft);   border-color: var(--red); }
+
+@media (max-width: 720px) {
+  .cal-day { min-height: 58px; padding: 5px 6px; }
+  .cal-day .h { font-size: 13px; }
+  .cal-day .s { display: none; }
+}
+
+/* The status picker: pills you can press. The pill keeps its own colours, so
+   the button underneath contributes only the pressed state. */
+.status-choices { display: flex; gap: 8px; flex-wrap: wrap; }
+.status-choice {
+  border: 1px solid var(--line); background: var(--card); border-radius: 100px;
+  padding: 4px; cursor: pointer; line-height: 0;
+  transition: border-color .15s, box-shadow .15s;
+}
+.status-choice:hover { border-color: var(--blue); }
+.status-choice.on { border-color: var(--blue); box-shadow: 0 0 0 2px var(--blue-soft); }
