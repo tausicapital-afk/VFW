@@ -251,38 +251,38 @@ describe('installment plans', () => {
     expect(res.body[0].status).toBe('PAID');
   });
 
-  it('a rep may read their own plan but not write one', async () => {
+  it('a rep may read, set up and mark their own plan', async () => {
     const s = await pending();
+
+    // Setting a plan is no longer Accounting's alone — a rep arranges the terms.
     const plan = await http(app)
       .put(`/api/submissions/${s.id}/installments`)
-      .set('Cookie', acct)
+      .set('Cookie', sales)
       .send({ installments: evenLines(s.balance, 2) });
+    expect(plan.status).toBe(200);
+    expect(plan.body).toHaveLength(2);
 
-    // Visible — that is the point of the feature.
+    // Visible — that is the point of the feature. It rides on the submission
+    // payload too, so the detail page needs no second request.
     const read = await http(app).get(`/api/submissions/${s.id}/installments`).set('Cookie', sales);
     expect(read.status).toBe(200);
     expect(read.body).toHaveLength(2);
-    // ...and it rides on the submission payload too, so the detail page needs
-    // no second request.
     expect((await sale(s.id, sales)).installments).toHaveLength(2);
 
-    // Setting and marking are Accounting's.
-    expect(
-      (
-        await http(app)
-          .put(`/api/submissions/${s.id}/installments`)
-          .set('Cookie', sales)
-          .send({ installments: evenLines(s.balance, 1) })
-      ).status,
-    ).toBe(403);
-    expect(
-      (
-        await http(app)
-          .post(`/api/submissions/${s.id}/installments/${plan.body[0].id}/mark`)
-          .set('Cookie', sales)
-          .send()
-      ).status,
-    ).toBe(403);
+    // Marking one done posts a real Payment — a rep may record money now too,
+    // and the ledger still derives the balance.
+    const marked = await http(app)
+      .post(`/api/submissions/${s.id}/installments/${plan.body[0].id}/mark`)
+      .set('Cookie', sales)
+      .send({ reference: 'WIRE-REP' });
+    expect(marked.status).toBe(201);
+    expect(marked.body[0].status).toBe('PAID');
+
+    const after = await sale(s.id, sales);
+    expect(after.payments).toHaveLength(1);
+    expect(Number(after.balance).toFixed(2)).toBe(
+      (Number(s.balance) - Number(plan.body[0].amount)).toFixed(2),
+    );
   });
 
   it('refuses to schedule a sale with nothing outstanding', async () => {

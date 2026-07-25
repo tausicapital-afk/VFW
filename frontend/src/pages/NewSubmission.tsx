@@ -3,6 +3,9 @@ import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { money } from '../lib/format';
+import {
+  generateSchedule, INTERVALS, PAYMENT_METHODS, toCents, today, type Cadence,
+} from '../lib/installments';
 import { discountPctOfPackage, discountPreview } from '../lib/pricing';
 import { SEASON_TABS, seasonLabel, seasonTab, type SeasonTab } from '../lib/season';
 import type { Catalog, Currency, DiscountType, DocumentType, Submission } from '../lib/types';
@@ -11,11 +14,6 @@ import { Page } from '../shell/Shell';
 
 /** A file chosen before the submission exists, held until we have its id. */
 type StagedFile = { file: File; type: DocumentType };
-
-const PAYMENT_METHODS = [
-  'Bank Transfer / Wire', 'Credit Card', 'Stripe', 'PayPal',
-  'Cheque', 'Cash', 'Sponsored — No Charge',
-];
 
 function Row({ label, value, cls }: { label: string; value: string; cls?: string }) {
   return (
@@ -48,9 +46,18 @@ export function NewSubmission() {
   const [discountType, setDiscountType] = useState<DiscountType>('PCT');
   const [discountValue, setDiscountValue] = useState(0);
   const [deposit, setDeposit] = useState(0);
-  const [paymentMethod, setPaymentMethod] = useState(PAYMENT_METHODS[0]);
+  const [paymentMethod, setPaymentMethod] = useState<string>(PAYMENT_METHODS[0]);
   const [notes, setNotes] = useState('');
   const [error, setError] = useState<string | null>(null);
+
+  // Payment arrangement. Off by default — most sales are paid in one go. When on,
+  // the rep chooses the shape (how many, from when, how often) and the actual
+  // schedule is generated against the *server's* balance once the sale exists, so
+  // the plan always ties out to the penny even though the total here is a preview.
+  const [planOn, setPlanOn] = useState(false);
+  const [planCount, setPlanCount] = useState(3);
+  const [planStart, setPlanStart] = useState(today());
+  const [planCadence, setPlanCadence] = useState<Cadence>('monthly');
 
   const fileRef = useRef<HTMLInputElement>(null);
   const [attachType, setAttachType] = useState<DocumentType>('contract');
@@ -119,6 +126,16 @@ export function NewSubmission() {
     return { base, addonTotal, subtotal, discount, taxable, rate, tax, total, balance: total - deposit };
   }, [pkg, price, catalog, sellable, addonIds, discountType, discountValue, deposit]);
 
+  // An indicative schedule shown while the rep builds the plan. Like the total, it
+  // is recomputed on the server at submit — this only shows the shape of the terms
+  // against the preview balance so the numbers are visible while they are chosen.
+  const planPreview = useMemo(() => {
+    if (!planOn || !preview || preview.balance <= 0) return null;
+    return generateSchedule(
+      planCount, planStart, planCadence, toCents(preview.balance), paymentMethod,
+    );
+  }, [planOn, preview, planCount, planStart, planCadence, paymentMethod]);
+
   // Holds the submission once created so that a retry after a failed attachment
   // upload flushes the remaining files instead of creating a duplicate sale.
   const createdRef = useRef<Submission | null>(null);
@@ -165,6 +182,30 @@ export function NewSubmission() {
         if (failed.length) {
           throw new Error(
             `Submission saved, but these files did not upload: ${failed.join(', ')}. Retry to attach them.`,
+          );
+        }
+      }
+
+      // Seed the payment plan, if the rep set one up. The schedule is generated
+      // against the balance the *server* computed (not the preview total), so it
+      // ties out to the penny. A deposit that clears the sale leaves nothing to
+      // schedule — quietly skip rather than send a plan the server would reject.
+      if (planOn && toCents(sub.balance) > 0) {
+        const lines = generateSchedule(
+          planCount, planStart, planCadence, toCents(sub.balance), paymentMethod,
+        );
+        try {
+          await api.put(`/api/submissions/${sub.id}/installments`, {
+            installments: lines.map((l) => ({
+              label: l.label,
+              dueDate: l.dueDate,
+              amount: Number(l.amount),
+              method: l.method,
+            })),
+          });
+        } catch (e) {
+          throw new Error(
+            `Submission saved, but the payment plan did not: ${(e as Error).message}. Retry to set it up.`,
           );
         }
       }
@@ -381,14 +422,93 @@ export function NewSubmission() {
           </div>
 
           <div className="sect">
-            <div className="hd"><h3>Sales notes</h3><span className="n">06</span></div>
+            <div className="hd"><h3>Payment arrangement</h3><span className="n">06</span></div>
+            <label className="chk" style={{ marginBottom: planOn ? 14 : 0 }}>
+              <input
+                type="checkbox"
+                checked={planOn}
+                onChange={(e) => setPlanOn(e.target.checked)}
+              />
+              <span className="t">
+                <b>Split the balance into instalments</b>
+                <div className="sm mut">
+                  Leave off if the client pays in one go. The deposit above is out of the plan —
+                  only the outstanding balance is scheduled.
+                </div>
+              </span>
+            </label>
+            {planOn && (
+              <>
+                <div className="fields">
+                  <div className="f">
+                    <label>Instalments</label>
+                    <input
+                      type="number" min={1} max={24}
+                      value={planCount}
+                      onChange={(e) =>
+                        setPlanCount(Math.max(1, Math.min(24, Number(e.target.value) || 1)))
+                      }
+                    />
+                  </div>
+                  <div className="f">
+                    <label>First due</label>
+                    <input
+                      type="date"
+                      value={planStart}
+                      onChange={(e) => setPlanStart(e.target.value)}
+                    />
+                  </div>
+                  <div className="f">
+                    <label>Then</label>
+                    <select
+                      value={planCadence}
+                      onChange={(e) => setPlanCadence(e.target.value as Cadence)}
+                    >
+                      {INTERVALS.map((i) => <option key={i.key} value={i.key}>{i.label}</option>)}
+                    </select>
+                  </div>
+                </div>
+                {planPreview && planPreview.length > 0 ? (
+                  <>
+                    <div className="tbl-wrap" style={{ marginTop: 12 }}>
+                      <table>
+                        <thead>
+                          <tr><th>#</th><th>Due</th><th className="num">Amount ({currency})</th></tr>
+                        </thead>
+                        <tbody>
+                          {planPreview.map((l, i) => (
+                            <tr key={i}>
+                              <td className="mono sm mut">{i + 1}</td>
+                              <td className="sm">{l.dueDate}</td>
+                              <td className="num">{money(l.amount, currency)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="help">
+                      Indicative. The final schedule is generated from Accounting's balance when the
+                      sale is sent, and stays editable on the sale afterwards.
+                    </div>
+                  </>
+                ) : (
+                  <p className="sm mut" style={{ marginTop: 8 }}>
+                    Pick a package to see the schedule — there is nothing to split yet.
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="sect">
+            <div className="hd"><h3>Sales notes</h3><span className="n">07</span></div>
             <div className="f">
               <textarea rows={4} value={notes} onChange={(e) => setNotes(e.target.value)} />
             </div>
           </div>
 
           <div className="sect">
-            <div className="hd"><h3>Attachments</h3><span className="n">07</span></div>
+            <div className="hd"><h3>Attachments</h3><span className="n">08</span></div>
             <p className="sm mut" style={{ marginTop: 0 }}>
               Optional. Attach the signed contract, PO, receipt or any supporting
               media — they upload once the submission is sent.

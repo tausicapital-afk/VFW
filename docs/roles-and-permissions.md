@@ -114,8 +114,14 @@ the clearest example of the split above, so it is worth stating explicitly:
 - **Writing is split in two**, because the two acts differ in kind.
   `installment.plan` reschedules expectations and moves no money.
   `installment.mark` posts a real `Payment` to the ledger and moves the sale's
-  balance. Both are `ACCT`/`ADMIN` today, but only the first is a candidate for
-  ever widening — a schedule is a promise, a mark is a receipt.
+  balance. Both are now held by **every role that can work a sale** (`SALES`,
+  `INTERN`, `ACCT`, `MGR`, `ADMIN`): a rep arranges the terms with their designer
+  and records the money as it lands, instead of routing each step through
+  Accounting. Widening *who* may write does not widen *what* a write does — a
+  mark still posts a `Payment` and lets the ledger derive the balance, and an
+  undo still reverses it with a visible negative entry, so the money story stays
+  auditable no matter who touched it. A rep can also seed the schedule at intake,
+  straight from the New Submission form.
 
 ## Where the boundary actually is
 

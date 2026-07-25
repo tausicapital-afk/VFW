@@ -4,50 +4,12 @@ import { useAuth } from '../auth/AuthContext';
 import { can } from '../lib/acl';
 import { api } from '../lib/api';
 import { fmtDate, fmtDateTime, money } from '../lib/format';
+import {
+  fromCents, generateSchedule, INTERVALS, PAYMENT_METHODS, step, toCents, today,
+  type Cadence, type DraftLine,
+} from '../lib/installments';
 import type { Installment, Submission } from '../lib/types';
 
-const PAYMENT_METHODS = [
-  'Bank Transfer / Wire', 'Credit Card', 'Stripe', 'PayPal',
-  'Cheque', 'Cash', 'Sponsored — No Charge',
-];
-
-const INTERVALS = [
-  { key: 'monthly', label: 'Monthly', months: 1, days: 0 },
-  { key: 'fortnightly', label: 'Every 2 weeks', months: 0, days: 14 },
-  { key: 'weekly', label: 'Weekly', months: 0, days: 7 },
-] as const;
-
-// --- Money on this screen is integer cents ------------------------------------
-// The server is the only thing allowed to decide what a sale costs, but a plan
-// builder has to add up rows as the user types them. Doing that in cents means
-// three instalments of a 8,624.00 balance land on 2,874.66 / 2,874.67 / 2,874.67
-// and not on 8,623.99 — and the equality check against the balance is exact.
-
-const toCents = (v: string | number): number => Math.round(Number(v || 0) * 100);
-const fromCents = (c: number): string => (c / 100).toFixed(2);
-
-/** Split `cents` into `n` parts; the last absorbs the rounding remainder. */
-function splitEvenly(cents: number, n: number): number[] {
-  const each = Math.floor(cents / n);
-  return Array.from({ length: n }, (_, i) => (i === n - 1 ? cents - each * (n - 1) : each));
-}
-
-/** Step a yyyy-mm-dd date forward, clamping to the end of a short month. */
-function step(date: string, months: number, days: number): string {
-  const d = new Date(date + 'T00:00:00');
-  if (months) {
-    const day = d.getDate();
-    d.setDate(1);
-    d.setMonth(d.getMonth() + months);
-    // "The 31st, monthly" means the 30th in a 30-day month, not the 1st of the next.
-    const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
-    d.setDate(Math.min(day, lastDay));
-  }
-  if (days) d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
-}
-
-const today = () => new Date().toISOString().slice(0, 10);
 const isOverdue = (i: Installment) =>
   i.status === 'PENDING' && i.dueDate.slice(0, 10) < today();
 
@@ -350,13 +312,6 @@ function MarkModal({
   );
 }
 
-interface DraftLine {
-  label: string;
-  dueDate: string;
-  amount: string;
-  method: string;
-}
-
 /**
  * Build the schedule. The generator ("4 instalments, monthly from…") is the fast
  * path; every row stays editable afterwards because real terms are rarely even —
@@ -378,7 +333,7 @@ function PlanModal({
 
   const [count, setCount] = useState(3);
   const [start, setStart] = useState(today());
-  const [cadence, setCadence] = useState<(typeof INTERVALS)[number]['key']>('monthly');
+  const [cadence, setCadence] = useState<Cadence>('monthly');
   const [error, setError] = useState<string | null>(null);
 
   const [lines, setLines] = useState<DraftLine[]>(() => {
@@ -393,29 +348,8 @@ function PlanModal({
         method: i.method ?? defaultMethod,
       }));
     }
-    return generate(3, today(), 'monthly', balanceCents, defaultMethod);
+    return generateSchedule(3, today(), 'monthly', balanceCents, defaultMethod);
   });
-
-  function generate(
-    n: number,
-    from: string,
-    every: (typeof INTERVALS)[number]['key'],
-    cents: number,
-    method: string,
-  ): DraftLine[] {
-    const spec = INTERVALS.find((i) => i.key === every) ?? INTERVALS[0];
-    const amounts = splitEvenly(cents, n);
-    let due = from;
-    return amounts.map((a, idx) => {
-      if (idx > 0) due = step(due, spec.months, spec.days);
-      return {
-        label: `Instalment ${idx + 1} of ${n}`,
-        dueDate: due,
-        amount: fromCents(a),
-        method,
-      };
-    });
-  }
 
   const scheduledCents = lines.reduce((t, l) => t + toCents(l.amount), 0);
   const remaining = balanceCents - scheduledCents;
@@ -484,7 +418,7 @@ function PlanModal({
               <button
                 className="btn"
                 onClick={() =>
-                  setLines(generate(count, start, cadence, balanceCents, defaultMethod))
+                  setLines(generateSchedule(count, start, cadence, balanceCents, defaultMethod))
                 }
               >
                 Split evenly

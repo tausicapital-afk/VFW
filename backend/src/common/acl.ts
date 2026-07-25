@@ -41,10 +41,15 @@ export const ACL = {
   // paid — which is the point, a rep should not have to ask Accounting whether
   // their designer is up to date. Writing is split in two because the two acts
   // differ in kind: `plan` reschedules expectations and moves no money, while
-  // `mark` posts a real Payment to the ledger. Both are Accounting's today, but
-  // only one of them is a candidate for ever widening.
-  'installment.plan': ['ACCT', 'ADMIN'],
-  'installment.mark': ['ACCT', 'ADMIN'],
+  // `mark` posts a real Payment to the ledger. Both are now open to every role
+  // that can work a sale — a rep arranges the terms with their designer and
+  // records the money as it lands, rather than routing each step through
+  // Accounting. The ledger stays the source of truth either way: a mark posts a
+  // Payment and the balance follows, and an undo reverses it with a visible
+  // negative entry, so widening who may write does not widen what a write can
+  // quietly do.
+  'installment.plan': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
+  'installment.mark': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
   'reports.view': ['ACCT', 'MGR', 'ADMIN'],
   'leaderboard.view': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
   // The customer book is PII — designers' direct emails and phone numbers. An
