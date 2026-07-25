@@ -31,6 +31,8 @@ export interface ExportFilters {
   to?: string;
   eventId?: string;
   cityId?: string;
+  month?: string;
+  userId?: string;
 }
 
 /**

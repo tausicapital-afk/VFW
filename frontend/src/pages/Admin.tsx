@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { api } from '../lib/api';
 import { fmtDate, money } from '../lib/format';
 import type {
-  AdminCatalogue, AdminUser, Currency, Invitation, Role, Settings, UserStatus,
+  AdminCatalogue, AdminUser, Currency, Invitation, PayType, Role, Settings, UserStatus,
 } from '../lib/types';
 import { useAuth } from '../auth/AuthContext';
 import { ExportMenu } from '../shell/ExportMenu';
@@ -16,6 +16,12 @@ const ROLE_LABEL: Record<Role, string> = {
   ACCT: 'Accounting',
   MGR: 'Sales Manager',
   ADMIN: 'Administrator',
+};
+
+const PAY_TYPE_LABEL: Record<PayType, string> = {
+  SALARY: 'Salary (monthly)',
+  HOURLY: 'Hourly',
+  COMMISSION_ONLY: 'Commission only',
 };
 
 const DEPARTMENTS = [
@@ -814,6 +820,8 @@ function UserDetailModal({
   const [department, setDepartment] = useState(user.department ?? '');
   const [commissionPct, setCommission] = useState(String(user.commissionPct));
   const [target, setTarget] = useState(String(user.target));
+  const [payType, setPayType] = useState<PayType>(user.payType);
+  const [baseRate, setBaseRate] = useState(String(user.baseRate));
   const [status, setStatus] = useState<UserStatus>(user.status);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
@@ -833,6 +841,8 @@ function UserDetailModal({
         department: department || null,
         commissionPct,
         target,
+        payType,
+        baseRate,
         ...(decided ? { status } : {}),
       }),
     onSuccess: () => { onSaved(); onClose(); },
@@ -852,6 +862,8 @@ function UserDetailModal({
     department !== (user.department ?? '') ||
     commissionPct !== String(user.commissionPct) ||
     target !== String(user.target) ||
+    payType !== user.payType ||
+    baseRate !== String(user.baseRate) ||
     status !== user.status;
 
   return (
@@ -913,6 +925,32 @@ function UserDetailModal({
               <label>Target (CAD)</label>
               <input inputMode="decimal" value={target} onChange={(e) => setTarget(e.target.value)} />
             </div>
+            <div className="f">
+              <label>Pay type</label>
+              <select value={payType} onChange={(e) => setPayType(e.target.value as PayType)}>
+                {(Object.keys(PAY_TYPE_LABEL) as PayType[]).map((t) => (
+                  <option key={t} value={t}>{PAY_TYPE_LABEL[t]}</option>
+                ))}
+              </select>
+              <div className="help">
+                Drives base pay on the Payroll screen. Commission is paid on top of all three.
+              </div>
+            </div>
+            {payType !== 'COMMISSION_ONLY' && (
+              <div className="f">
+                <label>{payType === 'HOURLY' ? 'Hourly rate (CAD)' : 'Monthly salary (CAD)'}</label>
+                <input
+                  inputMode="decimal"
+                  value={baseRate}
+                  onChange={(e) => setBaseRate(e.target.value)}
+                />
+                <div className="help">
+                  {payType === 'HOURLY'
+                    ? 'Multiplied by the hours on their timesheet for the month.'
+                    : 'Paid in full for the month, whatever the timesheet says.'}
+                </div>
+              </div>
+            )}
             {decided && (
               <div className="f">
                 <label>Status</label>

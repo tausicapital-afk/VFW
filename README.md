@@ -72,10 +72,10 @@ permission matrix (`can()` / the `ACL`).
 
 ### Navigation
 
-**Work** — Dashboard · New submission · Submissions · Contacts · Approval queue · QuickBooks
-**People** — Leaderboard · Designer feedback · Internal notes
+**Work** — Dashboard · New submission · Submissions · Contacts · Messages · Emails · Approval queue · QuickBooks
+**People** — Attendance · Payroll · Leaderboard · Designer feedback · Internal notes
 **Insight** — Reports · Audit trail
-**System** — Administration
+**System** — Administration · Logs
 
 The leaderboard ranks reps by a 100-point performance score. Contacts are
 auto-created the first time a sale is submitted for a brand not seen before.

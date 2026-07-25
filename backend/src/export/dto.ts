@@ -56,4 +56,16 @@ export class ExportQueryDto {
 
   @IsOptional() @IsString() @MaxLength(60)
   cityId?: string;
+
+  /** Attendance: which month the sheet on screen is showing ("2026-07"). */
+  @IsOptional() @IsString() @MaxLength(7)
+  month?: string;
+
+  /**
+   * Attendance: whose sheet. Narrowing only — the dataset hands this to the same
+   * service the screen uses, which refuses anyone else's to a caller without
+   * `attendance.viewTeam`, so it cannot be used to pull a colleague's hours.
+   */
+  @IsOptional() @IsString() @MaxLength(60)
+  userId?: string;
 }

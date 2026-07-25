@@ -1,4 +1,4 @@
-import { Currency, Role, UserStatus } from '@prisma/client';
+import { Currency, PayType, Role, UserStatus } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
@@ -117,6 +117,19 @@ export class UpdateUserDto {
   @IsString()
   @MaxLength(60)
   department?: string | null;
+
+  // Payroll. `baseRate` means a monthly figure under SALARY and an hourly one
+  // under HOURLY; it is ignored entirely for a commission-only account, and is
+  // deliberately not cleared when the type changes — an admin who switches
+  // someone to commission for a season should get their rate back on the way
+  // out, not have to remember it.
+  @IsOptional()
+  @IsEnum(PayType)
+  payType?: PayType;
+
+  @IsOptional()
+  @IsString()
+  baseRate?: string;
 }
 
 export class RejectUserDto {

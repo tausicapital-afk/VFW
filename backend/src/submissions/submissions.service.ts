@@ -21,6 +21,13 @@ import {
   RejectDto,
 } from './dto';
 
+/**
+ * The largest value the invoice counters can hold, leaving room to add one.
+ * Settings.nextInvoiceSeq is a Postgres `integer`, and a hand-typed number is not
+ * obliged to be a sensible size.
+ */
+const MAX_SEQUENCE = 2_147_483_646;
+
 const DETAIL = {
   rep: { select: { id: true, name: true, colour: true, role: true } },
   contact: true,
@@ -688,6 +695,130 @@ export class SubmissionsService {
     return `${settings.gfcInvoicePrefix}${settings.nextGfcInvoiceSeq - 1}`;
   }
 
+  /**
+   * Keep the automatic sequence ahead of a number somebody typed.
+   *
+   * Without this, hand-setting `VFW-2041` while the counter also sits at 2041
+   * means the next approval allocates the same number and dies on the unique
+   * index — an error at the worst possible moment, on somebody else's sale, with
+   * nothing on screen to explain it. Nudging the counter past a manual number
+   * turns that collision into a gap in the sequence, which is the far cheaper of
+   * the two: a missing number is a question, a duplicated one is a liability.
+   *
+   * Only numbers that actually look like they came from one of our two sequences
+   * move it. A client's own reference ("2026/03/017") is none of our business.
+   */
+  private async advanceSequencePast(tx: Prisma.TransactionClient, invoiceNo: string) {
+    const settings = await tx.settings.findUniqueOrThrow({ where: { id: 1 } });
+
+    for (const [prefix, field] of [
+      [settings.invoicePrefix, 'nextInvoiceSeq'],
+      [settings.gfcInvoicePrefix, 'nextGfcInvoiceSeq'],
+    ] as const) {
+      if (!prefix || !invoiceNo.startsWith(prefix)) continue;
+
+      const seq = Number(invoiceNo.slice(prefix.length));
+      if (!Number.isInteger(seq) || seq < settings[field]) continue;
+      // A number too large for the column to hold. `VFW-1774472300992` is a
+      // plausible thing to paste in (it is a timestamp), and writing it into an
+      // int4 counter is a 500 on a request that had nothing wrong with it. There
+      // is nothing to protect against anyway: the sequence counts up from ~2000
+      // and will not reach a number this size, so it cannot collide.
+      if (seq >= MAX_SEQUENCE) continue;
+
+      await tx.settings.update({ where: { id: 1 }, data: { [field]: seq + 1 } });
+      return;
+    }
+  }
+
+  /**
+   * Set or change the invoice number by hand.
+   *
+   * Who may do it changes at approval, which is the whole point of this endpoint:
+   *
+   * - **Before approval** (draft, pending, returned) it is whoever may edit the
+   *   sale — the rep who owns it, or Accounting under `submission.editAny`. The
+   *   number is not yet on a document anyone has seen, so correcting it is
+   *   ordinary data entry.
+   * - **After approval** (approved, exported) it is `invoice.generate` only —
+   *   Accounting and Admin. By then the number is on a PDF that may already be in
+   *   a client's inbox and in their ledger, so changing it is an accounting act
+   *   with consequences outside this system, not a typo fix.
+   *
+   * A rejected or voided sale is refused outright: neither is a live document, and
+   * numbering one would put a gap in the sequence for a sale that is not billed.
+   */
+  async setInvoiceNo(id: string, invoiceNo: string, user: AuthUser) {
+    const trimmed = invoiceNo.trim();
+
+    return this.prisma.$transaction(async (tx) => {
+      const submission = await tx.submission.findUnique({ where: { id } });
+      // 404, not 403, for a sale this caller could not see anyway — the same
+      // "cannot even probe for it" boundary findOne draws.
+      if (!submission) throw new NotFoundException('Submission not found');
+
+      const approved =
+        submission.status === SubmissionStatus.APPROVED ||
+        submission.status === SubmissionStatus.EXPORTED;
+
+      if (approved) {
+        if (!can('invoice.generate', user.role)) {
+          throw new ForbiddenException(
+            'This sale is approved — only Accounting or an administrator can change its invoice number now',
+          );
+        }
+      } else if (
+        submission.status === SubmissionStatus.REJECTED ||
+        submission.status === SubmissionStatus.VOIDED
+      ) {
+        throw new BadRequestException(
+          `A ${submission.status.toLowerCase()} sale cannot be invoiced`,
+        );
+      } else {
+        const mayEdit =
+          can('submission.editAny', user.role) ||
+          (can('submission.editOwn', user.role) && submission.repId === user.id);
+        if (!mayEdit) throw new NotFoundException('Submission not found');
+      }
+
+      if (submission.invoiceNo === trimmed) return submission;
+
+      // Checked here rather than left to the unique index, so the answer names
+      // the sale already holding the number instead of surfacing a raw
+      // constraint violation. The index is still what makes it true under a race.
+      const clash = await tx.submission.findUnique({
+        where: { invoiceNo: trimmed },
+        select: { ref: true },
+      });
+      if (clash) {
+        throw new BadRequestException(`Invoice ${trimmed} is already used by ${clash.ref}`);
+      }
+
+      await this.advanceSequencePast(tx, trimmed);
+
+      const updated = await tx.submission.update({
+        where: { id },
+        data: { invoiceNo: trimmed },
+        include: DETAIL,
+      });
+
+      await this.audit.log(
+        {
+          submissionId: id,
+          actorId: user.id,
+          action: submission.invoiceNo ? 'INVOICE_RENUMBERED' : 'INVOICE',
+          detail: submission.invoiceNo
+            ? `Invoice number changed from ${submission.invoiceNo} to ${trimmed}`
+            : `Invoice ${trimmed} set by hand`,
+          payload: { invoiceNo: trimmed, previous: submission.invoiceNo },
+        },
+        tx,
+      );
+
+      return updated;
+    });
+  }
+
   async generateInvoice(id: string, user: AuthUser) {
     return this.prisma.$transaction(async (tx) => {
       const submission = await tx.submission.findUnique({
@@ -904,15 +1035,36 @@ export class SubmissionsService {
   }
 
   /**
-   * Edit and resubmit. A RETURNED (or DRAFT) submission is a dead end until the
-   * rep can fix it: this re-prices the sale server-side from the catalogue and
-   * sends it back to PENDING.
+   * Edit and resubmit. This re-prices the sale server-side from the catalogue,
+   * so an edit can never carry a total the client chose.
    *
    * Two ways to be allowed in. A rep may edit their OWN record
    * (`submission.editOwn`); ACCT/ADMIN hold `submission.editAny` and may fix
    * anyone's, which is what lets Accounting correct a rep's mistake rather than
    * bouncing it back and waiting. Anyone else gets the same 404 as a record that
    * does not exist, so this cannot be used to probe for other reps' deals.
+   *
+   * **Which statuses are editable, and by whom, is where the real rule lives.**
+   *
+   * - `DRAFT`, `RETURNED`, `PENDING` — editable by whoever may edit it at all.
+   *   Nothing has been decided yet, so a correction is just a correction. Note
+   *   what happens to `submittedAt`: a draft or returned sale is *entering* the
+   *   queue and gets a fresh one, while a pending sale is already in it and keeps
+   *   the one it has. The queue is ordered by that column, so re-stamping it
+   *   would send a rep to the back of the line for fixing their own typo — and
+   *   give anyone who noticed a way to jump it by editing something trivial.
+   * - `APPROVED`, `EXPORTED` — editable **only** under `submission.editAny`, so
+   *   Accounting and Admin. Approval is a decision someone made about these
+   *   figures; changing them afterwards is an amendment to a decided record, and
+   *   the sale keeps its approval rather than quietly reverting to pending. The
+   *   audit line says AMENDED, not UPDATED, because the two are not the same
+   *   event when a reviewer reads the trail back.
+   * - `REJECTED`, `VOIDED` — refused. Neither is a live sale; the way back is to
+   *   return or unvoid it, which are decisions with their own audit entries.
+   *
+   * Amending an EXPORTED sale is allowed but is genuinely lossy: those figures
+   * are already in QuickBooks, and this system cannot reach in and change them.
+   * The audit entry says so, and so does the screen.
    */
   async update(id: string, dto: CreateSubmissionDto, user: AuthUser) {
     const existing = await this.prisma.submission.findUnique({ where: { id } });
@@ -923,12 +1075,28 @@ export class SubmissionsService {
       (can('submission.editOwn', user.role) && existing.repId === user.id);
     if (!mayEdit) throw new NotFoundException('Submission not found');
 
+    const decided =
+      existing.status === SubmissionStatus.APPROVED ||
+      existing.status === SubmissionStatus.EXPORTED;
+    // Arriving in the review queue for the first time, or after a return.
+    const entering =
+      existing.status === SubmissionStatus.DRAFT ||
+      existing.status === SubmissionStatus.RETURNED;
+
+    if (decided && !can('submission.editAny', user.role)) {
+      throw new ForbiddenException(
+        'This sale is approved — only Accounting or an administrator can amend it now',
+      );
+    }
+
     if (
-      existing.status !== SubmissionStatus.DRAFT &&
-      existing.status !== SubmissionStatus.RETURNED
+      existing.status === SubmissionStatus.REJECTED ||
+      existing.status === SubmissionStatus.VOIDED
     ) {
       throw new BadRequestException(
-        `Only a draft or returned submission can be edited — this one is ${existing.status}`,
+        existing.status === SubmissionStatus.VOIDED
+          ? 'This sale is voided — restore it before editing'
+          : 'This sale was rejected — return it to sales before editing',
       );
     }
 
@@ -943,8 +1111,11 @@ export class SubmissionsService {
       const updated = await tx.submission.update({
         where: { id },
         data: {
-          status: SubmissionStatus.PENDING,
-          submittedAt: new Date(),
+          // An amendment keeps the approval it already carries; everything else
+          // lands in (or stays in) the review queue.
+          status: decided ? existing.status : SubmissionStatus.PENDING,
+          // Only a sale arriving in the queue is stamped. See the note above.
+          submittedAt: entering ? new Date() : existing.submittedAt,
           returnNote: null,
           contactId: contact.id,
           eventId: event.id,
@@ -984,13 +1155,40 @@ export class SubmissionsService {
         include: DETAIL,
       });
 
+      // An amendment to a decided sale is not a resubmission, and the trail has
+      // to be able to tell them apart months later. Exported is called out by
+      // name: the figures QuickBooks holds are now stale, and nothing in this
+      // system can go and fix them.
+      const amendment = {
+        action: 'AMENDED',
+        detail:
+          existing.status === SubmissionStatus.EXPORTED
+            ? `Approved sale amended after export — the figures in QuickBooks (${existing.qbDocNumber ?? 'exported'}) no longer match and must be re-synced`
+            : 'Approved sale amended by Accounting',
+      };
+      const resubmission = {
+        action: 'RESUBMITTED',
+        detail:
+          existing.status === SubmissionStatus.PENDING
+            ? 'Corrected while awaiting approval'
+            : 'Corrected and resubmitted for approval',
+      };
+      const { action, detail } = decided ? amendment : resubmission;
+
       await this.audit.log(
         {
           submissionId: id,
           actorId: user.id,
-          action: 'RESUBMITTED',
-          detail: 'Corrected and resubmitted for approval',
-          payload: { total: updated.total.toString(), currency: updated.currency },
+          action,
+          detail,
+          payload: {
+            total: updated.total.toString(),
+            currency: updated.currency,
+            // What it was worth before, so the trail shows the movement rather
+            // than only the landing point.
+            previousTotal: existing.total.toString(),
+            previousStatus: existing.status,
+          },
         },
         tx,
       );

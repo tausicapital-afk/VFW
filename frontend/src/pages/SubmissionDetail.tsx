@@ -103,12 +103,18 @@ export function SubmissionDetail() {
 
   const isAcct = can('accounting.fields', user?.role);
   const isVoided = sub.status === 'VOIDED';
-  const editable = ['DRAFT', 'RETURNED'].includes(sub.status);
+  // Mirrors the status rule in SubmissionsService.update(). Before a decision,
+  // whoever owns the sale may correct it; after one, only Accounting/Admin may
+  // amend it. Rejected and voided are dead ends — return or unvoid them first.
+  const openForEdit = ['DRAFT', 'RETURNED', 'PENDING'].includes(sub.status);
+  const decided = ['APPROVED', 'EXPORTED'].includes(sub.status);
   const canEditSales =
-    sub.rep.id === user?.id && editable && can('submission.editOwn', user?.role);
+    sub.rep.id === user?.id && openForEdit && can('submission.editOwn', user?.role);
   // Admin/Accounting may correct anyone's editable submission — the same right
-  // the server grants (submission.editAny), surfaced in the UI.
-  const canEditAny = !canEditSales && editable && can('submission.editAny', user?.role);
+  // the server grants (submission.editAny) — and are the only ones who may amend
+  // one that has already been approved.
+  const canEditAny =
+    !canEditSales && (openForEdit || decided) && can('submission.editAny', user?.role);
   const canVoid = can('submission.void', user?.role);
 
   function promptVoid() {
@@ -125,7 +131,7 @@ export function SubmissionDetail() {
       <StatusPill status={sub.status} />
       {(canEditSales || canEditAny) && (
         <button className="btn primary" onClick={() => nav(`/submissions/${sub.id}/edit`)}>
-          {canEditAny ? 'Edit' : 'Edit & resubmit'}
+          {decided ? 'Amend' : canEditAny ? 'Edit' : sub.status === 'PENDING' ? 'Edit' : 'Edit & resubmit'}
         </button>
       )}
       {sub.status === 'APPROVED' && can('invoice.generate', user?.role) && !sub.invoiceNo && (
@@ -370,6 +376,8 @@ export function SubmissionDetail() {
             />
           )}
 
+          <InvoiceCard sub={sub} onSaved={refresh} />
+
           {can('feedback.view', user?.role) && <FeedbackCard sub={sub} />}
 
           {isAcct ? (
@@ -552,6 +560,96 @@ function AccountingCard({
             {save.isPending ? 'Saving…' : 'Save accounting'}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The invoice number, and who may change it.
+ *
+ * The rule shifts at approval, and the card says so rather than silently going
+ * read-only: before approval the number is data entry and belongs to whoever owns
+ * the sale; afterwards it is on a document a client may already hold, so it
+ * belongs to Accounting. The server enforces both — this only decides what to
+ * render, and what to explain.
+ */
+function InvoiceCard({ sub, onSaved }: { sub: Submission; onSaved: () => void }) {
+  const { user } = useAuth();
+  const [value, setValue] = useState(sub.invoiceNo ?? '');
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  const decided = sub.status === 'APPROVED' || sub.status === 'EXPORTED';
+  const dead = sub.status === 'REJECTED' || sub.status === 'VOIDED';
+
+  const mayEditSale =
+    can('submission.editAny', user?.role) ||
+    (can('submission.editOwn', user?.role) && sub.rep.id === user?.id);
+  const mayEdit = dead ? false : decided ? can('invoice.generate', user?.role) : mayEditSale;
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.put(`/api/submissions/${sub.id}/invoice-no`, { invoiceNo: value.trim() }),
+    onSuccess: () => { setError(null); setSaved(true); onSaved(); },
+    onError: (e: Error) => { setSaved(false); setError(e.message); },
+  });
+
+  // Nothing to show and nothing to do: a rep looking at a rejected sale, say.
+  if (!mayEdit && !sub.invoiceNo) return null;
+
+  const dirty = value.trim() !== (sub.invoiceNo ?? '');
+
+  return (
+    <div className="card" style={{ marginTop: 16 }}>
+      <div className="hd">
+        <h3>Invoice number</h3>
+        <div className="sp" style={{ flex: 1 }} />
+        {saved && !dirty && <span className="sm mut">Saved</span>}
+      </div>
+      <div className="bd">
+        {mayEdit ? (
+          <>
+            <div className="f">
+              <input
+                value={value}
+                maxLength={40}
+                placeholder="e.g. VFW-2041"
+                onChange={(e) => { setValue(e.target.value); setSaved(false); }}
+              />
+              <div className="help">
+                {sub.invoiceNo
+                  ? 'Changing this replaces the number on the invoice PDF and on any invoice sent from now on.'
+                  : 'Leave this blank to let approval allocate the next number in the sequence.'}
+              </div>
+            </div>
+
+            {decided && (
+              <div className="note warn" style={{ marginTop: 10 }}>
+                This sale is approved. If the invoice has already been sent, the client is holding a
+                document with the old number on it.
+              </div>
+            )}
+
+            {error && <div className="note bad" style={{ marginTop: 10 }}>{error}</div>}
+
+            <button
+              className="btn primary"
+              style={{ marginTop: 12 }}
+              disabled={!dirty || !value.trim() || save.isPending}
+              onClick={() => save.mutate()}
+            >
+              {save.isPending ? 'Saving…' : sub.invoiceNo ? 'Change number' : 'Set number'}
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="totals"><Row label="Invoice" value={sub.invoiceNo ?? '—'} /></div>
+            <div className="note lock" style={{ marginTop: 10 }}>
+              This sale is approved, so its invoice number is now Accounting's to change.
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

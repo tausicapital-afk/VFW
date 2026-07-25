@@ -7,6 +7,7 @@ import { can, type Permission } from '../lib/acl';
 import { api } from '../lib/api';
 import { messagingApi, qk, useMessagingRealtime, type Conversation } from '../lib/messaging';
 import type { Role, Submission, User } from '../lib/types';
+import { Avatar } from './Avatar';
 
 export const ROLE_LABEL: Record<Role, string> = {
   SALES: 'Sales Representative',
@@ -33,6 +34,8 @@ const NAV: NavItem[] = [
   { to: '/queue', label: 'Approval queue', ic: '⚑', roles: ['SALES', 'ACCT', 'ADMIN'], badge: 'queue' },
   { to: '/qbo', label: 'QuickBooks', ic: '⇪', roles: ['ACCT', 'ADMIN'] },
   { grp: 'People' },
+  { to: '/attendance', label: 'Attendance', ic: '◷', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
+  { to: '/payroll', label: 'Payroll', ic: '◎', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
   { to: '/board', label: 'Leaderboard', ic: '★', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
   { to: '/feedback', label: 'Designer feedback', ic: '☆', roles: ['ACCT', 'MGR', 'ADMIN'] },
   { to: '/internal', label: 'Internal notes', ic: '✎', roles: ['ACCT', 'MGR', 'ADMIN'] },
@@ -56,13 +59,8 @@ function moduleLabel(pathname: string): string {
   return best?.label ?? pathname;
 }
 
-function Avatar({ user }: { user: User }) {
-  const initials = user.name.split(' ').map((p) => p[0]).slice(0, 2).join('');
-  return (
-    <div className="av" style={{ background: user.colour ?? '#0E0E11' }}>
-      {initials}
-    </div>
-  );
+function UserAvatar({ user, size }: { user: User; size?: number }) {
+  return <Avatar name={user.name} colour={user.colour} src={user.avatarUrl} size={size} />;
 }
 
 export function Shell() {
@@ -197,7 +195,7 @@ export function Shell() {
 
         <div className="who">
           <div className="row">
-            <Avatar user={user} />
+            <UserAvatar user={user} size={30} />
             <div>
               <div className="nm">{user.name}</div>
               <div className="rl">{ROLE_LABEL[user.role]}</div>
@@ -261,7 +259,6 @@ function UserMenu() {
   }, [open]);
 
   if (!user) return null;
-  const initials = user.name.split(' ').map((p) => p[0]).slice(0, 2).join('');
   const go = (to: string) => { setOpen(false); navigate(to); };
 
   return (
@@ -272,14 +269,14 @@ function UserMenu() {
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
       >
-        <div className="av" style={{ background: user.colour ?? '#0E0E11' }}>{initials}</div>
+        <UserAvatar user={user} size={28} />
         <span className="nm">{user.name}</span>
         <span className="chev">▾</span>
       </button>
       {open && (
         <div className="usermenu-pop" role="menu">
           <div className="usermenu-head">
-            <div className="av" style={{ background: user.colour ?? '#0E0E11' }}>{initials}</div>
+            <UserAvatar user={user} size={36} />
             <div style={{ minWidth: 0 }}>
               <div className="nm">{user.name}</div>
               <div className="rl">{user.email}</div>

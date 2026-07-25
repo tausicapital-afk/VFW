@@ -8,6 +8,8 @@ import { AuditService } from '../audit/audit.service';
 import { AuthUser, SessionClaims } from '../common/auth.guard';
 import { EmailNotConfiguredError, EmailService } from '../common/email';
 import { PrismaService } from '../prisma/prisma.service';
+import { avatarUrl } from '../profile/avatar';
+import { StorageService } from '../storage/storage.service';
 import { ForgotDto, ResetDto, SignupDto, VerifyOtpDto } from './dto';
 
 const MAX_ATTEMPTS = 5;
@@ -42,6 +44,7 @@ export class AuthService {
     private readonly email: EmailService,
     private readonly audit: AuditService,
     private readonly activity: ActivityService,
+    private readonly storage: StorageService,
   ) {}
 
   async login(
@@ -119,14 +122,24 @@ export class AuthService {
     });
   }
 
+  /**
+   * The signed-in user, as every screen renders them. `avatarUrl` is signed here
+   * rather than left to the client so the shell can draw a picture from the
+   * session check alone, with no second request on every page load.
+   */
   async me(userId: string) {
-    return this.prisma.user.findUnique({
+    const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: {
-        id: true, name: true, email: true, role: true, department: true,
-        employeeId: true, commissionPct: true, target: true, colour: true,
+        id: true, name: true, email: true, phone: true, role: true, department: true,
+        title: true, employeeId: true, commissionPct: true, target: true, colour: true,
+        avatarKey: true,
       },
     });
+    if (!user) return null;
+
+    const { avatarKey, ...rest } = user;
+    return { ...rest, avatarUrl: await avatarUrl(this.storage, avatarKey) };
   }
 
   // -------------------------------------------------------------------------

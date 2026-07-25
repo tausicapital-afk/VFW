@@ -291,7 +291,7 @@ export class AdminService {
   private readonly userFields = {
     id: true, name: true, email: true, phone: true, role: true, department: true,
     status: true, employeeId: true, commissionPct: true, target: true, colour: true,
-    createdAt: true,
+    title: true, payType: true, baseRate: true, createdAt: true,
   } satisfies Prisma.UserSelect;
 
   async listUsers() {
@@ -423,6 +423,17 @@ export class AdminService {
       if (next !== user.target.toFixed(2)) {
         set('target', user.target.toFixed(2), next);
         data.target = next;
+      }
+    }
+    if (dto.payType !== undefined && dto.payType !== user.payType) {
+      set('payType', user.payType, dto.payType);
+      data.payType = dto.payType;
+    }
+    if (dto.baseRate !== undefined) {
+      const next = decimal(dto.baseRate, 'Base rate').toFixed(2);
+      if (next !== user.baseRate.toFixed(2)) {
+        set('baseRate', user.baseRate.toFixed(2), next);
+        data.baseRate = next;
       }
     }
     if (dto.status !== undefined && dto.status !== user.status) {

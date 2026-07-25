@@ -7,6 +7,7 @@ import {
   ApproveDto,
   CreateSubmissionDto,
   ExportDto,
+  InvoiceNoDto,
   PatchSubmissionDto,
   PaymentDto,
   RejectDto,
@@ -93,6 +94,25 @@ export class SubmissionsController {
   @Can('invoice.generate')
   invoice(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.submissions.generateInvoice(id, user);
+  }
+
+  /**
+   * Set or change the invoice number by hand.
+   *
+   * Note the missing `@Can()`. It is missing on purpose: who may do this depends
+   * on the sale's *status*, not only on the caller's role — before approval it is
+   * whoever may edit the sale, after approval it is Accounting and Admin. A
+   * route-level grant can only see the role, so it would have to be the looser of
+   * the two, and the check that matters would live in the service anyway. Better
+   * one check in the place that can actually make it than two that disagree.
+   */
+  @Put(':id/invoice-no')
+  setInvoiceNo(
+    @Param('id') id: string,
+    @Body() dto: InvoiceNoDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.submissions.setInvoiceNo(id, dto.invoiceNo, user);
   }
 
   // The customer-facing document. Streams a PDF built from the stored figures;

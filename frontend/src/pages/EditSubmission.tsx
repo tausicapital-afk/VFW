@@ -25,7 +25,8 @@ function Row({ label, value, cls }: { label: string; value: string; cls?: string
 }
 
 /**
- * Edit and resubmit a DRAFT or RETURNED submission. The form mirrors New
+ * Edit a submission that has not been decided yet (draft, returned, pending), or
+ * amend one that has (approved, exported) if you are Accounting. The form mirrors New
  * submission: the client sends what was *sold*, and the server re-prices it from
  * the catalogue on save — the preview here is indicative only.
  */
@@ -175,19 +176,28 @@ export function EditSubmission() {
     );
   }
 
-  // A rep edits their own draft/returned sale; Admin/Accounting (submission.editAny)
-  // may edit anyone's — the same rule the server enforces in update().
-  const editable =
-    ['DRAFT', 'RETURNED'].includes(sub.status) &&
-    ((sub.rep.id === user?.id && can('submission.editOwn', user?.role)) ||
-      can('submission.editAny', user?.role));
+  // The same rule the server enforces in update(). Undecided sales — draft,
+  // returned, and now pending — are correctable by whoever owns them; an approved
+  // or exported one is an amendment, and only Accounting/Admin may make it.
+  const decided = ['APPROVED', 'EXPORTED'].includes(sub.status);
+  const mine = sub.rep.id === user?.id && can('submission.editOwn', user?.role);
+  const editable = decided
+    ? can('submission.editAny', user?.role)
+    : ['DRAFT', 'RETURNED', 'PENDING'].includes(sub.status) &&
+      (mine || can('submission.editAny', user?.role));
 
   if (!editable) {
     return (
       <Page crumb="Work" title="Cannot edit">
         <div className="empty">
           <h3>This submission cannot be edited</h3>
-          <p>Only a draft or returned submission can be corrected and resubmitted.</p>
+          <p>
+            {decided
+              ? 'This sale is approved. Only Accounting or an administrator can amend it now.'
+              : sub.status === 'VOIDED'
+                ? 'This sale is voided. Restore it before editing.'
+                : 'This sale was rejected. It has to be returned to sales before it can be edited.'}
+          </p>
         </div>
       </Page>
     );
@@ -196,10 +206,29 @@ export function EditSubmission() {
   const ready = designer && brand && eventId && packageId;
 
   return (
-    <Page crumb="Work / Submissions" title={`Edit ${sub.ref}`}>
+    <Page crumb="Work / Submissions" title={`${decided ? 'Amend' : 'Edit'} ${sub.ref}`}>
       {sub.status === 'RETURNED' && sub.returnNote && (
         <div className="note warn" style={{ marginBottom: 16 }}>
           <b>Returned by Accounting:</b> {sub.returnNote}
+        </div>
+      )}
+      {sub.status === 'PENDING' && (
+        <div className="note" style={{ marginBottom: 16 }}>
+          This sale is queued for approval. Saving keeps it in the queue in its current
+          place — it is a correction, not a resubmission.
+        </div>
+      )}
+      {decided && (
+        <div className="note warn" style={{ marginBottom: 16 }}>
+          <b>This sale is already approved.</b> Saving re-prices it and keeps the approval —
+          it does not go back through the queue.
+          {sub.status === 'EXPORTED' && (
+            <>
+              {' '}It has also been exported to QuickBooks
+              {sub.qbDocNumber ? ` as ${sub.qbDocNumber}` : ''}, and those figures will
+              <b> not</b> change. Re-sync them by hand.
+            </>
+          )}
         </div>
       )}
       <div className="split">
@@ -396,7 +425,13 @@ export function EditSubmission() {
 
           <div className="rowflex">
             <button className="btn primary" disabled={!ready || resubmit.isPending}>
-              {resubmit.isPending ? 'Resubmitting…' : 'Resubmit to Accounting'}
+              {resubmit.isPending
+                ? 'Saving…'
+                : decided
+                  ? 'Save amendment'
+                  : sub.status === 'PENDING'
+                    ? 'Save correction'
+                    : 'Resubmit to Accounting'}
             </button>
             <button type="button" className="btn" onClick={() => nav(`/submissions/${id}`)}>
               Cancel
@@ -436,7 +471,7 @@ export function EditSubmission() {
               </div>
             )}
             <div className="note lock" style={{ marginTop: 14 }}>
-              Indicative only. Accounting's figure is recomputed from the rate card on resubmit.
+              Indicative only. Accounting's figure is recomputed from the rate card on save.
             </div>
           </div>
         </div>
