@@ -460,6 +460,10 @@ ticks, and image/media attachments. `backend/src/messaging/`,
 in the money loop changed — and deliberately **not** part of `AuditEntry`, which
 is financial evidence, not a chat log.
 
+> This section is the summary. The implementer's deep-dive — full data model, the
+> socket event vocabulary with payloads, and the send/deliver/read/presence
+> lifecycles — is **`docs/messaging.md`**.
+
 ### 11.1 Transport — the first WebSocket surface
 
 Everything else in this system is REST. Messaging adds a socket.io gateway
