@@ -1,6 +1,5 @@
-import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render } from '@testing-library/react';
-import { EventEmitter } from 'events';
 import { qk, useMessagingRealtime, type ChatMessage, type Conversation } from './messaging';
 import { connectSocket, disconnectSocket } from './socket';
 
@@ -10,9 +9,22 @@ vi.mock('./socket', () => ({
 }));
 
 /** A minimal stand-in for the socket.io client: on/off/emit is all this hook touches. */
-class FakeSocket extends EventEmitter {
+class FakeSocket {
+  private listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+
+  on(event: string, listener: (...args: unknown[]) => void) {
+    (this.listeners.get(event) ?? this.listeners.set(event, new Set()).get(event)!).add(listener);
+    return this;
+  }
+
   off(event: string, listener: (...args: unknown[]) => void) {
-    return this.removeListener(event, listener);
+    this.listeners.get(event)?.delete(listener);
+    return this;
+  }
+
+  emit(event: string, ...args: unknown[]) {
+    this.listeners.get(event)?.forEach((listener) => listener(...args));
+    return true;
   }
 }
 
@@ -25,15 +37,8 @@ function setup(initialData?: { conversations?: Conversation[] }) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   if (initialData?.conversations) qc.setQueryData(qk.conversations, initialData.conversations);
 
-  let qcRef: QueryClient | null = null;
-  function Capture() {
-    qcRef = useQueryClient();
-    return null;
-  }
-
   const utils = render(
     <QueryClientProvider client={qc}>
-      <Capture />
       <Probe />
     </QueryClientProvider>,
   );
