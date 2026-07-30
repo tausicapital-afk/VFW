@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { api } from '../lib/api';
 import { fmtDate, money } from '../lib/format';
 import type { Submission } from '../lib/types';
+import { ExportMenu } from '../shell/ExportMenu';
 import { Page } from '../shell/Shell';
 
 /**
@@ -146,7 +147,15 @@ export function Qbo() {
       </div>
 
       <div className="card">
-        <div className="hd"><h3>Export ledger</h3></div>
+        <div className="hd">
+          <h3>Export ledger</h3>
+          <div className="sp" />
+          {/* Only the ledger gets one. "Ready to export" is approved
+              submissions, which the Submissions export already covers by
+              status; a second file of the same rows would just be a second
+              file of the same rows. */}
+          <ExportMenu dataset="qbo-ledger" disabled={!done.length} />
+        </div>
         {readyTable(done, true)}
       </div>
 

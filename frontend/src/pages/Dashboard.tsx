@@ -3,16 +3,18 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { can } from '../lib/acl';
 import { api } from '../lib/api';
-import { shortMoney } from '../lib/format';
+import { fmtDate, money, PAY_LABEL, shortMoney } from '../lib/format';
 import type { Submission } from '../lib/types';
 import { Page } from '../shell/Shell';
 import { SubmissionsTable } from './Submissions';
 
-// Consolidated figures are converted to CAD, the reporting currency. These
-// rates live in Settings on the server so Accounting can change them without a
-// deploy — the dashboard will read them from there once /api/reports lands.
-const FX: Record<string, number> = { CAD: 1, USD: 1.37, GBP: 1.74, EUR: 1.49, JPY: 0.0092 };
-const toCAD = (v: string, cur: string) => Number(v) * (FX[cur] ?? 1);
+/** Live FX to CAD (the reporting currency), served by /api/fx with a manual
+ *  fallback. The dashboard converts each figure through these before summing. */
+interface FxResponse {
+  rates: Record<string, number>;
+  source: 'live' | 'manual';
+  asOf: string;
+}
 
 function Kpi({
   label, value, sub, accent,
@@ -39,15 +41,37 @@ export function Dashboard() {
     queryFn: () => api.get<Submission[]>('/api/submissions'),
   });
 
+  const { data: fx } = useQuery({
+    queryKey: ['fx'],
+    queryFn: () => api.get<FxResponse>('/api/fx'),
+    staleTime: 30 * 60 * 1000,
+  });
+
+  const rates = fx?.rates ?? { CAD: 1 };
+  const toCAD = (v: string, cur: string) => Number(v) * (rates[cur] ?? 1);
+
+  // The list is already rep-scoped by the server, so for a sales rep every figure
+  // below is *their own*; for Accounting/Managers it is the whole book.
   const rows = subs ?? [];
   const approved = rows.filter((s) => s.status === 'APPROVED' || s.status === 'EXPORTED');
   const pending = rows.filter((s) => s.status === 'PENDING');
 
   const revenue = approved.reduce((t, s) => t + toCAD(s.taxable, s.currency), 0);
+  const collected = approved.reduce((t, s) => t + toCAD(s.paidAmount, s.currency), 0);
   const outstanding = approved.reduce((t, s) => t + toCAD(s.balance, s.currency), 0);
-  const commission = approved.reduce((t, s) => t + toCAD(s.commissionAmount, s.currency), 0);
+  const paymentsMade = approved.reduce((t, s) => t + s.payments.length, 0);
 
   const isAccounting = can('submission.approve', user?.role);
+
+  // Upcoming debt collection: approved sales still owing, soonest show first so
+  // the money that has to be chased before its show sits at the top.
+  const owing = approved
+    .filter((s) => Number(s.balance) > 0)
+    .sort((a, b) => {
+      const ad = a.showDate ? Date.parse(a.showDate) : Number.POSITIVE_INFINITY;
+      const bd = b.showDate ? Date.parse(b.showDate) : Number.POSITIVE_INFINITY;
+      return ad - bd;
+    });
 
   return (
     <Page
@@ -61,15 +85,21 @@ export function Dashboard() {
     >
       <div className="kpis">
         <Kpi
-          label="Net revenue (approved)"
+          label={isAccounting ? 'Net revenue (approved)' : 'My net revenue'}
           value={shortMoney(revenue, 'CAD')}
           sub={`${approved.length} approved · CAD`}
           accent="accent"
         />
         <Kpi
-          label="Outstanding balance"
+          label="Collected"
+          value={shortMoney(collected, 'CAD')}
+          sub={`${paymentsMade} payment${paymentsMade === 1 ? '' : 's'} recorded`}
+          accent="ok"
+        />
+        <Kpi
+          label="Upcoming debt collection"
           value={shortMoney(outstanding, 'CAD')}
-          sub="Approved but not collected"
+          sub={owing.length ? `${owing.length} sale${owing.length === 1 ? '' : 's'} owing` : 'Nothing outstanding'}
           accent={outstanding > 0 ? 'amber' : 'ok'}
         />
         <Kpi
@@ -78,11 +108,54 @@ export function Dashboard() {
           sub={pending.length ? 'Needs review' : 'Queue is clear'}
           accent={pending.length ? 'red' : 'ok'}
         />
-        <Kpi
-          label="Commission on net"
-          value={shortMoney(commission, 'CAD')}
-          sub="Never struck on tax"
-        />
+      </div>
+
+      <div className="card" style={{ marginTop: 16 }}>
+        <div className="hd">
+          <h3>Upcoming debt collection</h3>
+          <div className="sp" />
+          {fx && (
+            <span className="sm mut">
+              FX {fx.source === 'live' ? 'live' : 'manual'} · {fmtDate(fx.asOf)}
+            </span>
+          )}
+        </div>
+        {isLoading ? (
+          <div className="empty"><h3>Loading…</h3></div>
+        ) : owing.length === 0 ? (
+          <div className="empty">
+            <h3>All settled</h3>
+            <p>No approved sale has an outstanding balance right now.</p>
+          </div>
+        ) : (
+          <div className="tbl-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Ref</th>
+                  <th>Customer</th>
+                  <th>Show date</th>
+                  <th>Payment</th>
+                  <th className="num">Balance due</th>
+                </tr>
+              </thead>
+              <tbody>
+                {owing.slice(0, 8).map((s) => (
+                  <tr key={s.id}>
+                    <td className="mono"><Link to={`/submissions/${s.id}`}>{s.ref}</Link></td>
+                    <td>
+                      <b>{s.contact.brand}</b>
+                      <div className="sm mut">{s.contact.designer}</div>
+                    </td>
+                    <td className="sm">{s.showDate ? fmtDate(s.showDate) : '—'}</td>
+                    <td><span className={'pill ' + s.payStatus}>{PAY_LABEL[s.payStatus]}</span></td>
+                    <td className="num">{money(s.balance, s.currency)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       <div className="card" style={{ marginTop: 16 }}>

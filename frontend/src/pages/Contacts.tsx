@@ -5,6 +5,7 @@ import { useAuth } from '../auth/AuthContext';
 import { can } from '../lib/acl';
 import { api } from '../lib/api';
 import type { Contact } from '../lib/types';
+import { ExportMenu } from '../shell/ExportMenu';
 import { Page } from '../shell/Shell';
 
 const TYPES = ['Designer', 'Sponsor', 'Vendor', 'Media', 'Buyer', 'School'];
@@ -36,6 +37,9 @@ export function Contacts() {
         />
         {q && <button className="btn sm" onClick={() => setQ('')}>Clear</button>}
         <div style={{ flex: 1 }} />
+        {/* The server re-applies both the search and the rep-scope, so a rep's
+            file holds their own customers and nobody else's. */}
+        <ExportMenu dataset="contacts" params={{ q }} disabled={isLoading || !rows.length} />
         <span className="sm mut">{scope}</span>
         {can('contacts.create', user?.role) && (
           <button className="btn sm primary" onClick={() => setAdding(true)}>+ New contact</button>

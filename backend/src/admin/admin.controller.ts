@@ -1,13 +1,18 @@
-import { Body, Controller, Get, Module, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Module, Param, Patch, Post } from '@nestjs/common';
 import { AuthUser, Can, CurrentUser } from '../common/auth.guard';
 import { AdminService } from './admin.service';
 import {
+  CreateAddonDto,
   CreateInvitationDto,
+  CreatePackageDto,
+  CreateTaxDto,
   RejectUserDto,
   UpdateAddonDto,
+  UpdateInvitationDto,
   UpdatePackageDto,
   UpdateSettingsDto,
   UpdateTaxDto,
+  UpdateUserDto,
 } from './dto';
 import { FeedbackController, FeedbackService } from '../feedback/feedback.controller';
 import { InternalController, InternalService } from '../internal/internal.controller';
@@ -44,6 +49,22 @@ export class AdminController {
     return this.admin.revokeInvitation(id, user);
   }
 
+  @Patch('invitations/:id')
+  @Can('admin.manage')
+  updateInvitation(
+    @Param('id') id: string,
+    @Body() dto: UpdateInvitationDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.admin.updateInvitation(id, dto, user);
+  }
+
+  @Delete('invitations/:id')
+  @Can('admin.manage')
+  deleteInvitation(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.admin.deleteInvitation(id, user);
+  }
+
   // --- Users ---------------------------------------------------------------
 
   @Get('users')
@@ -75,12 +96,34 @@ export class AdminController {
     return this.admin.rejectUser(id, dto, user);
   }
 
+  @Patch('users/:id')
+  @Can('admin.manage')
+  updateUser(
+    @Param('id') id: string,
+    @Body() dto: UpdateUserDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.admin.updateUser(id, dto, user);
+  }
+
+  @Delete('users/:id')
+  @Can('admin.manage')
+  deleteUser(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.admin.deleteUser(id, user);
+  }
+
   // --- Catalogue -----------------------------------------------------------
 
   @Get('admin/catalogue')
   @Can('admin.manage')
   catalogue() {
     return this.admin.catalogue();
+  }
+
+  @Post('admin/packages')
+  @Can('admin.manage')
+  createPackage(@Body() dto: CreatePackageDto, @CurrentUser() user: AuthUser) {
+    return this.admin.createPackage(dto, user);
   }
 
   @Patch('admin/packages/:id')
@@ -93,6 +136,12 @@ export class AdminController {
     return this.admin.updatePackage(id, dto, user);
   }
 
+  @Post('admin/addons')
+  @Can('admin.manage')
+  createAddon(@Body() dto: CreateAddonDto, @CurrentUser() user: AuthUser) {
+    return this.admin.createAddon(dto, user);
+  }
+
   @Patch('admin/addons/:id')
   @Can('admin.manage')
   updateAddon(
@@ -101,6 +150,12 @@ export class AdminController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.admin.updateAddon(id, dto, user);
+  }
+
+  @Post('admin/tax')
+  @Can('admin.manage')
+  createTax(@Body() dto: CreateTaxDto, @CurrentUser() user: AuthUser) {
+    return this.admin.createTax(dto, user);
   }
 
   @Patch('admin/tax/:code')
@@ -129,5 +184,11 @@ export class AdminController {
 @Module({
   controllers: [AdminController, FeedbackController, InternalController],
   providers: [AdminService, FeedbackService, InternalService],
+  // ExportModule reads the same listings these controllers serve, so its
+  // datasets stay in step with the tabs by construction rather than by a second
+  // query. InternalService matters most: its `list` is what applies the rule
+  // that nobody reads the comments written about their own sale, and an export
+  // that reached past it would quietly break that promise.
+  exports: [AdminService, FeedbackService, InternalService],
 })
 export class AdminModule {}

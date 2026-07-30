@@ -5,6 +5,7 @@ import { can } from '../lib/acl';
 import { api } from '../lib/api';
 import { fmtDate } from '../lib/format';
 import type { Contact, DesignerFeedback } from '../lib/types';
+import { ExportMenu } from '../shell/ExportMenu';
 import { Page } from '../shell/Shell';
 
 export function Stars({ n }: { n: number }) {
@@ -67,7 +68,13 @@ export function Feedback() {
       </div>
 
       <div className="card">
-        <div className="hd"><h3>All responses</h3></div>
+        <div className="hd">
+          <h3>All responses</h3>
+          <div className="sp" />
+          {/* The responses themselves. Reports has the trends rollup; this is
+              what was actually said. */}
+          <ExportMenu dataset="feedback" disabled={!rows.length} />
+        </div>
         {!rows.length ? (
           <div className="bd">
             <div className="empty">

@@ -79,7 +79,7 @@ prediction, not a result, until you have run it.
 ## 2. Phase 1 — prove the threshold by hand
 
 `Settings.discountApprovalPct` seeds at **15**. Sign in as Accounting
-(`accounting@vanfashionweek.com` / `Vfw@2026!`) and, as a rep, create a submission
+(`accounting@vanfashionweek.com`, local seed default `Vfw@2026!`) and, as a rep, create a submission
 discounted **25%** (`VFW-FW26` / `VFW-BRONZE`, `discountType: "PCT"`,
 `discountValue: 25`).
 

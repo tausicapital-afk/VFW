@@ -1,15 +1,19 @@
 import { Global, Injectable, Logger, Module, ServiceUnavailableException } from '@nestjs/common';
+import { EmailKind } from '@prisma/client';
 import * as nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
+import { ConfigService } from '../config/config.service';
+import { MailAccountService, SendingAccount } from '../config/mail-account.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 /**
  * Outbound email — one transport, one global template, and one fallback:
  * **failing loudly**.
  *
- * Transport is SMTP (cPanel / any provider) over nodemailer. Every message is
- * poured through the same {@link layout} so the whole system speaks with one
- * voice: change the header, the colours or the footer once and every email —
- * welcome, OTP, password reset — moves together.
+ * Transport is SMTP (cPanel / Gmail / any provider) over nodemailer. Every
+ * message is poured through the same {@link layout} so the whole system speaks
+ * with one voice: change the header, the colours or the footer once and every
+ * email — welcome, OTP, password reset — moves together.
  *
  * What this deliberately does NOT do is log the code or link to the console and
  * carry on. A silent local fallback looks like it works right up until the first
@@ -17,24 +21,40 @@ import type { Transporter } from 'nodemailer';
  * evidence is worthless. If the transport is not configured, send() throws and
  * the endpoint returns 503. That is a correct answer; a console.log is not.
  *
- * Configure with (cPanel SMTP example):
- *   MAIL_HOST=mail.veeb.co.ke
- *   MAIL_PORT=465
- *   MAIL_USERNAME=patriotic@veeb.co.ke
- *   MAIL_PASSWORD=********
- *   MAIL_ENCRYPTION=ssl            # ssl | tls | none
- *   MAIL_FROM_ADDRESS=patriotic@veeb.co.ke
- *   MAIL_FROM_NAME="Patriotic Payroll"
- *   APP_URL=https://app.yourdomain.com   (used to build the links)
+ * WHERE THE CREDENTIALS COME FROM, in order:
+ *
+ *  1. The active row in MailAccount — mailboxes an admin manages from the
+ *     Configuration screen. This is the normal path (see mail-account.service).
+ *  2. The MAIL_* settings, resolved DB-then-env by ConfigService, used ONLY
+ *     while that table is empty, so a deployment that predates it keeps sending
+ *     with no intervention:
+ *
+ *       MAIL_HOST=mail.veeb.co.ke      # a hostname, never an email address
+ *       MAIL_PORT=465
+ *       MAIL_USERNAME=vfw@veeb.co.ke
+ *       MAIL_PASSWORD=********
+ *       MAIL_ENCRYPTION=ssl            # ssl | tls | none
+ *       MAIL_FROM_ADDRESS=vfw@veeb.co.ke
+ *       MAIL_FROM_NAME="VFW Console"
+ *
+ * APP_URL (used to build every emailed link) stays global config either way — it
+ * is a property of the deployment, not of the mailbox.
  */
 
 export class EmailNotConfiguredError extends ServiceUnavailableException {
   constructor() {
     super(
       'Email is not configured on this server, so the message could not be sent. ' +
-        'Set MAIL_HOST, MAIL_USERNAME, MAIL_PASSWORD and MAIL_FROM_ADDRESS.',
+        'Add a mail account under Administration → Configuration.',
     );
   }
+}
+
+/** A file to attach. `content` is the raw bytes; kept small (an invoice PDF). */
+export interface MailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType?: string;
 }
 
 export interface Mail {
@@ -42,6 +62,14 @@ export interface Mail {
   subject: string;
   html: string;
   text: string;
+  attachments?: MailAttachment[];
+  // Metadata for the Emails log. `kind` classifies the message (and decides
+  // redaction — see EmailService.record); `triggeredById` / `submissionId` tie a
+  // send to the app user and sale that caused it (invoice sends only). System
+  // mail (OTP, reset) leaves them undefined, which is correct: no user, no sale.
+  kind?: EmailKind;
+  triggeredById?: string;
+  submissionId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -53,14 +81,60 @@ export interface Mail {
 // from BRAND_* env so the same code can wear a different suit per deployment.
 // ---------------------------------------------------------------------------
 
-function brandName() {
-  return process.env.MAIL_FROM_NAME?.trim() || 'VFW Console';
+// The template helpers below are module-level (they are called from inside
+// `layout()` / `button()`), so they cannot reach the injected services through
+// `this`. EmailService sets these references in its constructor, so brand
+// name/colour follow whatever the admin has configured.
+let cfg: ConfigService | null = null;
+let acctSvc: MailAccountService | null = null;
+
+function conf(key: string): string {
+  return (cfg?.get(key) ?? process.env[key]?.trim() ?? '').trim();
 }
+
+/**
+ * The brand shown at the top of every email. The sending mailbox's own "from
+ * name" wins, so switching account can switch the brand with it; MAIL_FROM_NAME
+ * is the deployment-wide default for accounts that do not set one.
+ */
+let brandOverride: string | undefined;
+function brandName() {
+  return (
+    brandOverride ||
+    acctSvc?.active()?.fromName ||
+    conf('MAIL_FROM_NAME') ||
+    'VFW Console'
+  );
+}
+
+/**
+ * Render `fn` as though `name` were the brand. Used when testing a mailbox that
+ * is not the active one, so the test email wears the brand of the account being
+ * tested rather than the one that happens to be live.
+ *
+ * `fn` must be synchronous — the override is module-level, and an await inside
+ * would leak it into whatever else rendered in the gap.
+ */
+function withBrand<T>(name: string | undefined, fn: () => T): T {
+  const previous = brandOverride;
+  brandOverride = name;
+  try {
+    return fn();
+  } finally {
+    brandOverride = previous;
+  }
+}
+
 function brandColour() {
-  return process.env.MAIL_BRAND_COLOUR?.trim() || '#0C7A4D';
+  return conf('MAIL_BRAND_COLOUR') || '#0C7A4D';
 }
 function supportAddress() {
-  return process.env.MAIL_SUPPORT_ADDRESS?.trim() || process.env.MAIL_FROM_ADDRESS?.trim() || '';
+  return (
+    conf('MAIL_SUPPORT_ADDRESS') ||
+    acctSvc?.active()?.fromAddress ||
+    conf('MAIL_FROM_ADDRESS') ||
+    ''
+  );
 }
 
 /** Escape anything interpolated into HTML that came from a person or the DB. */
@@ -157,30 +231,343 @@ function textLayout(lines: string[]): string {
   return [...lines, ...footer].join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// Log redaction
+//
+// Everything sent passes through record(), including the messages whose entire
+// purpose is to carry a secret. Those must be logged as "a code went to this
+// address", never with the code itself — the log is read in the Emails module by
+// roles that must not be handed a live OTP or reset link.
+// ---------------------------------------------------------------------------
+
+/** Kinds whose BODY carries a code or link and must not be stored. */
+const REDACT_BODY: EmailKind[] = ['OTP', 'WELCOME', 'PASSWORD_RESET', 'INVITATION'];
+/** Kinds whose SUBJECT itself carries the code (OTP puts it right in the line). */
+const REDACT_SUBJECT: EmailKind[] = ['OTP'];
+
+/** A short, body-derived snippet for the list row; collapses whitespace. */
+function previewOf(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > 140 ? `${flat.slice(0, 139)}…` : flat;
+}
+
+export function redactForLog(
+  mail: Mail,
+  kind: EmailKind,
+): { subject: string; bodyText: string | null; bodyHtml: string | null; preview: string } {
+  const bodyRedacted = REDACT_BODY.includes(kind);
+  const subject = REDACT_SUBJECT.includes(kind) ? 'Verification code' : mail.subject;
+  if (bodyRedacted) {
+    return {
+      subject,
+      bodyText: null,
+      bodyHtml: null,
+      preview: 'Code or link omitted for security.',
+    };
+  }
+  return {
+    subject,
+    bodyText: mail.text,
+    bodyHtml: mail.html,
+    preview: previewOf(mail.text || mail.subject),
+  };
+}
+
+/** 465 is implicit TLS (secure); 587/25 start plaintext and upgrade via STARTTLS. */
+function isSecure(account: SendingAccount): boolean {
+  const enc = account.encryption?.toLowerCase();
+  if (enc === 'ssl') return true;
+  if (enc === 'tls' || enc === 'none') return false;
+  return account.port === 465;
+}
+
+/**
+ * Resend over HTTPS.
+ *
+ * Why an HTTP provider exists at all: the host decides what is possible. Railway
+ * silently drops every outbound SMTP port — measured from inside the container,
+ * `mail.veeb.co.ke:465` and `:587` and `smtp.gmail.com:465` all time out while
+ * `api.github.com:443` connects in 73ms. No SMTP credential can work there, so
+ * "fix the mailbox settings" is the wrong instinct: a 60-second hang is the
+ * network, an "invalid login" is the credential.
+ *
+ * Called through global fetch (Node 20 in the container), so this adds no
+ * dependency: it is one POST to a JSON API.
+ */
+const RESEND_ENDPOINT = 'https://api.resend.com/emails';
+
+/** Lift the useful sentence out of Resend's error body; fall back to the status. */
+async function resendError(res: Response): Promise<string> {
+  let detail = '';
+  try {
+    const body = (await res.json()) as { message?: string; name?: string };
+    detail = body.message || body.name || '';
+  } catch {
+    // Non-JSON body (a proxy error page, say) — the status is all we have.
+  }
+  // 401 and 403 are different problems and must not be flattened: a bad key
+  // needs a new key, an unverified domain needs DNS records. Telling an admin
+  // "rejected the API key" when the key is fine sends them to the wrong screen.
+  if (res.status === 401) {
+    return `Resend rejected the API key${detail ? `: ${detail}` : ''}`;
+  }
+  if (res.status === 403 || res.status === 422) {
+    return `Resend refused the message${detail ? `: ${detail}` : ''} (usually the sending domain is not verified)`;
+  }
+  return `Resend returned ${res.status}${detail ? `: ${detail}` : ''}`;
+}
+
+async function resendSend(account: SendingAccount, mail: Mail, from: string): Promise<void> {
+  const res = await fetch(RESEND_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${account.secret}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from,
+      to: [mail.to],
+      subject: mail.subject,
+      html: mail.html,
+      text: mail.text,
+      // Resend takes attachment bytes as base64 in the JSON body.
+      ...(mail.attachments?.length
+        ? {
+            attachments: mail.attachments.map((a) => ({
+              filename: a.filename,
+              content: a.content.toString('base64'),
+            })),
+          }
+        : {}),
+    }),
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!res.ok) throw new Error(await resendError(res));
+}
+
+/**
+ * Prove the key works without sending. Resend has no dedicated ping, so this
+ * lists domains — the cheapest authenticated GET. A 200 means the key is live;
+ * it does NOT prove the from-address's domain is verified, which is why the test
+ * button sends a real message rather than stopping here.
+ */
+async function resendVerify(account: SendingAccount): Promise<void> {
+  const res = await fetch('https://api.resend.com/domains', {
+    headers: { Authorization: `Bearer ${account.secret}` },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) throw new Error(await resendError(res));
+}
+
+/**
+ * The relay: our own PHP endpoint on a box that IS allowed to send.
+ *
+ * Same trick as Resend — leave over 443 — but the far end is `ops/mail-relay`,
+ * which hands the message to the local mail server on the cPanel host. So mail
+ * still departs from veeb.co.ke under its own SPF/DKIM, with no third party and
+ * no monthly cap. `account.host` is the relay URL; `account.secret` is the
+ * shared token.
+ */
+async function relayPost(
+  account: SendingAccount,
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  let res: Response;
+  try {
+    res = await fetch(account.host, {
+      method: 'POST',
+      headers: {
+        'X-Relay-Token': account.secret,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(20_000),
+    });
+  } catch (err) {
+    // Reaching the relay at all is a distinct failure from the relay refusing
+    // the message: one means the URL or the box, the other means the payload.
+    const why = err instanceof Error ? err.message : String(err);
+    throw new Error(`Could not reach the relay at ${account.host}: ${why}`);
+  }
+
+  let payload: Record<string, unknown> = {};
+  try {
+    payload = (await res.json()) as Record<string, unknown>;
+  } catch {
+    // A 404 page or a PHP fatal — not JSON. Say so plainly; "unexpected token <"
+    // sends nobody anywhere useful.
+    throw new Error(
+      `The relay at ${account.host} did not return JSON (HTTP ${res.status}). ` +
+        `Check the URL points at the relay folder and that PHP is running there.`,
+    );
+  }
+
+  if (!res.ok || payload.ok !== true) {
+    const detail = typeof payload.error === 'string' ? payload.error : `HTTP ${res.status}`;
+    throw new Error(`The relay refused the message: ${detail}`);
+  }
+  return payload;
+}
+
+async function relaySend(account: SendingAccount, mail: Mail): Promise<void> {
+  await relayPost(account, {
+    to: mail.to,
+    subject: mail.subject,
+    html: mail.html,
+    text: mail.text,
+    fromAddress: account.fromAddress,
+    fromName: account.fromName ?? '',
+    // The PHP relay must be taught to honour this (ops/mail-relay); an older
+    // relay ignores the field and delivers the message without the file rather
+    // than failing. See docs — invoice-by-relay needs the updated endpoint.
+    ...(mail.attachments?.length
+      ? {
+          attachments: mail.attachments.map((a) => ({
+            filename: a.filename,
+            contentType: a.contentType ?? 'application/octet-stream',
+            content: a.content.toString('base64'),
+          })),
+        }
+      : {}),
+  });
+}
+
+/**
+ * Prove the relay is reachable and the token is right, without sending.
+ *
+ * There is no ping endpoint by design — the relay's only job is to send. So this
+ * posts a deliberately invalid message: the token is checked BEFORE the payload,
+ * so a bad token still answers 401 while a good one gets as far as "a valid
+ * 'to' address is required". Reaching that error is the proof.
+ */
+async function relayVerify(account: SendingAccount): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(account.host, {
+      method: 'POST',
+      headers: { 'X-Relay-Token': account.secret, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ probe: true }),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    throw new Error(`Could not reach the relay at ${account.host}: ${why}`);
+  }
+
+  if (res.status === 401) throw new Error('The relay rejected the token.');
+  if (res.status === 404) {
+    throw new Error(`No relay at ${account.host} (404) — check the URL.`);
+  }
+  // 400 is the expected answer to a probe with no recipient: token accepted,
+  // payload rejected. Anything else that is not 2xx is a real problem.
+  if (res.status !== 400 && !res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body.error) detail = body.error;
+    } catch {
+      /* not JSON — the status is all we have */
+    }
+    throw new Error(`The relay is not usable: ${detail}`);
+  }
+}
+
 @Injectable()
 export class EmailService {
   private readonly log = new Logger(EmailService.name);
   private transporter?: Transporter;
+  /** Identifies the account+config the memoised transporter was built against. */
+  private transporterKey = '';
 
-  private get host() {
-    return process.env.MAIL_HOST?.trim() || '';
-  }
-  private get user() {
-    return process.env.MAIL_USERNAME?.trim() || '';
-  }
-  private get pass() {
-    return process.env.MAIL_PASSWORD ?? '';
-  }
-  private get fromAddress() {
-    return process.env.MAIL_FROM_ADDRESS?.trim() || this.user;
-  }
-  private get from() {
-    return `${brandName()} <${this.fromAddress}>`;
+  constructor(
+    private readonly config: ConfigService,
+    private readonly accounts: MailAccountService,
+    private readonly prisma: PrismaService,
+  ) {
+    // Let the module-level template helpers read live config and the active
+    // mailbox too — they have no `this` to reach these through.
+    cfg = config;
+    acctSvc = accounts;
   }
 
-  /** Where the SPA lives, so an emailed link points at something real. */
-  get appUrl() {
-    return (process.env.APP_URL?.trim() || 'http://localhost:5173').replace(/\/$/, '');
+  /**
+   * The mailbox that sends. The active MailAccount row first; the legacy MAIL_*
+   * settings only while that table is empty.
+   *
+   * Note what does NOT happen: if rows exist but the active one's password will
+   * not decrypt, this returns undefined rather than quietly falling back to the
+   * env vars. Sending from a different mailbox than the one the screen says is
+   * active is worse than not sending — the admin gets a 503 and a decrypt error
+   * on the row, which points at the real problem.
+   */
+  private resolve(): SendingAccount | undefined {
+    const active = this.accounts.active();
+    if (active) return active;
+    if (this.accounts.any) return undefined;
+
+    const host = this.config.get('MAIL_HOST') ?? '';
+    const username = this.config.get('MAIL_USERNAME') ?? '';
+    const password = this.config.get('MAIL_PASSWORD') ?? '';
+    const fromAddress = this.config.get('MAIL_FROM_ADDRESS') ?? username;
+    if (!host || !username || !password || !fromAddress) return undefined;
+
+    const port = this.config.getNumber('MAIL_PORT') ?? 587;
+    return {
+      id: 'env',
+      label: 'Server environment',
+      provider: 'smtp',
+      host,
+      port,
+      encryption: this.config.get('MAIL_ENCRYPTION')?.toLowerCase() ?? (port === 465 ? 'ssl' : 'tls'),
+      username,
+      secret: password,
+      fromAddress,
+      fromName: this.config.get('MAIL_FROM_NAME'),
+    };
+  }
+
+  private fromHeader(account: SendingAccount): string {
+    return `${account.fromName || brandName()} <${account.fromAddress}>`;
+  }
+
+  /**
+   * Where the SPA lives, so an emailed link points at something real.
+   *
+   * In production an unset APP_URL throws rather than falling back to
+   * localhost. That fallback is the exact failure this module's header warns
+   * about — "a silent local fallback looks like it works right up until the
+   * first real user cannot get into their account". It did: production sent a
+   * real invitation whose only link was `http://localhost:5173/signup/…`, the
+   * send reported success, and nothing anywhere said otherwise. A password reset
+   * is worse still — the link IS the email.
+   *
+   * Failing here is safe and lands well. The builders are called inside the
+   * caller's try (see AdminService.createInvitation), so an admin gets this
+   * sentence plus the code to send by hand, instead of the invitee getting a
+   * dead link. `welcome` and `otp` carry a code rather than a link and never
+   * touch this, so OTP signup keeps working regardless.
+   *
+   * An explicit localhost value in production is treated the same as unset: it
+   * is how the value arrives when someone copies `.env` to the server, and the
+   * resulting email is equally dead either way.
+   */
+  get appUrl(): string {
+    const configured = this.config.get('APP_URL')?.trim().replace(/\/$/, '');
+    const production = process.env.NODE_ENV === 'production';
+    const isLocal = (u: string) => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::|\/|$)/i.test(u);
+
+    if (configured && !(production && isLocal(configured))) return configured;
+
+    if (production) {
+      this.log.error(
+        `APP_URL is ${configured ? `"${configured}"` : 'not set'} in production — refusing to email a link that points at localhost`,
+      );
+      throw new ServiceUnavailableException(
+        "APP_URL is not set to this console's public address, so an emailed link " +
+          'would point at localhost. Set it under Administration → Configuration.',
+      );
+    }
+    return 'http://localhost:5173';
   }
 
   /**
@@ -190,50 +577,209 @@ export class EmailService {
    * addresses are registered.
    */
   get configured(): boolean {
-    return Boolean(this.host && this.user && this.pass && this.fromAddress);
+    return Boolean(this.resolve());
   }
 
-  private get port(): number {
-    return Number(process.env.MAIL_PORT?.trim() || 587);
+  private buildTransport(account: SendingAccount): Transporter {
+    return nodemailer.createTransport({
+      host: account.host,
+      port: account.port,
+      secure: isSecure(account),
+      auth: { user: account.username, pass: account.secret },
+    });
   }
 
-  /** 465 is implicit TLS (secure); 587/25 start plaintext and upgrade via STARTTLS. */
-  private get secure(): boolean {
-    const enc = process.env.MAIL_ENCRYPTION?.trim().toLowerCase();
-    if (enc === 'ssl') return true;
-    if (enc === 'tls' || enc === 'none') return false;
-    return this.port === 465;
-  }
-
-  private get transport(): Transporter {
-    if (!this.transporter) {
-      this.transporter = nodemailer.createTransport({
-        host: this.host,
-        port: this.port,
-        secure: this.secure,
-        auth: { user: this.user, pass: this.pass },
-      });
+  private transportFor(account: SendingAccount): Transporter {
+    // Rebuild when the admin switches account or edits a credential, so a saved
+    // change takes effect on the next send without a restart. Both version
+    // counters bump on every write to their store.
+    const key = `${account.id}:${this.accounts.version}:${this.config.version}`;
+    if (!this.transporter || this.transporterKey !== key) {
+      this.transporter = this.buildTransport(account);
+      this.transporterKey = key;
     }
     return this.transporter;
   }
 
+  /**
+   * The one place a provider is chosen. Everything above this — the template,
+   * the builders, the callers — is provider-blind, which is the point: adding
+   * Mailgun later is another branch here and nothing else.
+   */
+  private async deliver(account: SendingAccount, mail: Mail): Promise<void> {
+    const from = this.fromHeader(account);
+    switch (account.provider) {
+      case 'resend':
+        return resendSend(account, mail, from);
+      case 'relay':
+        return relaySend(account, mail);
+      default:
+        await this.transportFor(account).sendMail({
+          from,
+          to: mail.to,
+          subject: mail.subject,
+          text: mail.text,
+          html: mail.html,
+          ...(mail.attachments?.length
+            ? {
+                attachments: mail.attachments.map((a) => ({
+                  filename: a.filename,
+                  content: a.content,
+                  contentType: a.contentType,
+                })),
+              }
+            : {}),
+        });
+    }
+  }
+
+  /** Prove the credential without sending. One branch per provider, as above. */
+  private async proveCredential(account: SendingAccount): Promise<void> {
+    switch (account.provider) {
+      case 'resend':
+        return resendVerify(account);
+      case 'relay':
+        return relayVerify(account);
+      default:
+        await this.buildTransport(account).verify();
+    }
+  }
+
+  /**
+   * Connect and authenticate, without sending anything.
+   *
+   * Used by the health prober behind the status page. Deliberately lets the
+   * SMTP error through rather than flattening it to a 503: the caller is
+   * diagnosing, and "invalid login" and "connection refused" are different
+   * problems. Callers must not put the result in front of an anonymous user —
+   * these messages name hosts and accounts.
+   */
+  async verify(): Promise<void> {
+    const account = this.resolve();
+    if (!account) throw new EmailNotConfiguredError();
+    await this.proveCredential(account);
+  }
+
   async send(mail: Mail): Promise<void> {
-    if (!this.configured) throw new EmailNotConfiguredError();
+    const account = this.resolve();
+    if (!account) throw new EmailNotConfiguredError();
 
     try {
-      await this.transport.sendMail({
-        from: this.from,
-        to: mail.to,
-        subject: mail.subject,
-        text: mail.text,
-        html: mail.html,
-      });
+      await this.deliver(account, mail);
     } catch (err) {
       // The address is not logged: it is a credential-adjacent identifier and
       // this line may end up in a shared log sink.
       this.log.error(`SMTP send failed: ${err instanceof Error ? err.message : String(err)}`);
+      // Record the failure before surfacing it, so a bounced invoice is visible
+      // in the Emails module rather than vanishing.
+      await this.record(account, mail, 'FAILED', err instanceof Error ? err.message : String(err));
       throw new ServiceUnavailableException('The email could not be sent');
     }
+
+    await this.record(account, mail, 'SENT');
+  }
+
+  /**
+   * Persist one outbound message to the Emails log — best effort.
+   *
+   * This is the single choke point every send passes through, so recording here
+   * captures OTP, resets and invites for free. Precisely because it does, the
+   * secret they carry must NOT be stored: {@link redactForLog} drops the body
+   * (and, for OTP, the subject) of a sensitive kind, keeping only that a message
+   * of that kind went to that address. A logging failure is swallowed — a sent
+   * email that failed to log is not a failed send, and must never read as one.
+   */
+  private async record(
+    account: SendingAccount,
+    mail: Mail,
+    status: 'SENT' | 'FAILED',
+    error?: string,
+  ): Promise<void> {
+    try {
+      const kind = mail.kind ?? EmailKind.OTHER;
+      const safe = redactForLog(mail, kind);
+      await this.prisma.emailMessage.create({
+        data: {
+          direction: 'OUTBOUND',
+          status,
+          kind,
+          fromAddress: account.fromAddress,
+          fromName: account.fromName ?? null,
+          toAddress: mail.to,
+          subject: safe.subject,
+          bodyText: safe.bodyText,
+          bodyHtml: safe.bodyHtml,
+          preview: safe.preview,
+          provider: account.provider,
+          // The env fallback is not a real MailAccount row — leave it unlinked.
+          mailAccountId: account.id === 'env' ? null : account.id,
+          error: error ?? null,
+          triggeredById: mail.triggeredById ?? null,
+          submissionId: mail.submissionId ?? null,
+          sentAt: status === 'SENT' ? new Date() : null,
+        },
+      });
+    } catch (err) {
+      this.log.error(
+        `Failed to record email to the log: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * Send a real message to the signed-in admin to prove a mailbox works.
+   *
+   * `accountId` targets one specific mailbox, so an admin can prove the Gmail
+   * box works before making it the one every sign-up code depends on. Omit it to
+   * test whatever is currently sending.
+   *
+   * Unlike {@link send}, this runs `transporter.verify()` first and lets its
+   * error through — the whole point of a test is to surface *why* it failed (bad
+   * login, wrong port, unreachable host), not a generic "could not send". The
+   * result goes to an admin who is already allowed to see these credentials.
+   */
+  async sendTest(to: string, name: string, accountId?: string): Promise<{ label: string }> {
+    const account = accountId ? this.accounts.byId(accountId) : this.resolve();
+    if (!account) throw new EmailNotConfiguredError();
+
+    // Prove the credential before composing anything. SMTP does a handshake,
+    // Resend an authenticated GET, the relay a probe POST. Either way the error
+    // is allowed through — that is the whole value of a test.
+    await this.proveCredential(account);
+
+    const mail = withBrand(account.fromName, () => {
+      const first = esc((name || '').split(' ')[0] || 'there');
+      const brand = esc(brandName());
+      const bodyHtml =
+        `<h1 style="margin:0 0 14px;font-size:22px;color:#0e0e11;">Email is working ✅</h1>` +
+        `<p style="margin:0 0 6px;">Hi ${first}, this is a test message from ${brand}, ` +
+        `sent through <b>${esc(account.label)}</b> (${esc(account.fromAddress)}). ` +
+        `If you're reading it, that mailbox is working — sign-up codes, password resets ` +
+        `and invitations sent from it will be delivered.</p>`;
+      return {
+        to,
+        subject: `${brandName()} — test email`,
+        html: layout({ title: 'Test email', preheader: 'Your email settings are working', bodyHtml }),
+        text: textLayout([
+          `This is a test email from ${brandName()}, sent through ${account.label} (${account.fromAddress}).`,
+          '',
+          `If you're reading it, that mailbox is working.`,
+        ]),
+        kind: EmailKind.TEST,
+      };
+    });
+
+    try {
+      await this.deliver(account, mail);
+    } catch (err) {
+      this.log.error(`Test send failed: ${err instanceof Error ? err.message : String(err)}`);
+      await this.record(account, mail, 'FAILED', err instanceof Error ? err.message : String(err));
+      throw new ServiceUnavailableException(
+        err instanceof Error ? err.message : 'The test email could not be sent',
+      );
+    }
+    await this.record(account, mail, 'SENT');
+    return { label: account.label };
   }
 
   // -------------------------------------------------------------------------
@@ -256,6 +802,7 @@ export class EmailService {
       `Didn't create this account? You can safely ignore this email — without the code, nothing happens.</p>`;
     return {
       to,
+      kind: EmailKind.WELCOME,
       subject: `Welcome to ${brandName()} — verify your email`,
       html: layout({ title: 'Welcome', preheader: `Your verification code is ${code}`, bodyHtml }),
       text: textLayout([
@@ -283,6 +830,7 @@ export class EmailService {
       `If you didn't ask for this, you can ignore it.</p>`;
     return {
       to,
+      kind: EmailKind.OTP,
       subject: `${brandName()} verification code: ${code}`,
       html: layout({ title: 'Verification code', preheader: `Your code is ${code}`, bodyHtml }),
       text: textLayout([
@@ -312,6 +860,7 @@ export class EmailService {
       `<a href="${esc(link)}" style="color:${brandColour()};word-break:break-all;">${esc(link)}</a></p>`;
     return {
       to,
+      kind: EmailKind.PASSWORD_RESET,
       subject: `Reset your ${brandName()} password`,
       html: layout({ title: 'Reset your password', preheader: 'Choose a new password', bodyHtml }),
       text: textLayout([
@@ -335,6 +884,7 @@ export class EmailService {
       button('Reset your password', link);
     return {
       to,
+      kind: EmailKind.PASSWORD_CHANGED,
       subject: `Your ${brandName()} password was changed`,
       html: layout({ title: 'Password changed', preheader: 'Your password was just changed', bodyHtml }),
       text: textLayout([
@@ -359,6 +909,7 @@ export class EmailService {
       `<a href="${esc(link)}" style="color:${brandColour()};word-break:break-all;">${esc(link)}</a></p>`;
     return {
       to,
+      kind: EmailKind.INVITATION,
       subject: `Your invitation to ${brandName()}`,
       html: layout({ title: 'Your invitation', preheader: `Invitation code: ${code}`, bodyHtml }),
       text: textLayout([
@@ -367,6 +918,52 @@ export class EmailService {
         `Invitation code: ${code}`,
         link,
       ]),
+    };
+  }
+
+  /**
+   * A customer-facing invoice email with the PDF attached.
+   *
+   * Unlike the others this carries a person-written `message`: it is escaped and
+   * rendered with line breaks, never trusted as HTML. `triggeredById` and
+   * `submissionId` flow onto the log row so the send is attributed to the rep who
+   * sent it and links back to the sale. This body is NOT redacted — an invoice
+   * holds no secret — so it is fully readable in the Emails module.
+   */
+  invoiceEmail(opts: {
+    to: string;
+    subject: string;
+    message: string;
+    invoiceNo: string;
+    pdf: Buffer;
+    triggeredById: string;
+    submissionId: string;
+  }): Mail {
+    const messageHtml = esc(opts.message).replace(/\r?\n/g, '<br>');
+    const bodyHtml =
+      `<h1 style="margin:0 0 14px;font-size:22px;color:#0e0e11;">Invoice ${esc(opts.invoiceNo)}</h1>` +
+      `<p style="margin:0 0 14px;">${messageHtml}</p>` +
+      `<p style="margin:0 0 6px;color:#8a938f;font-size:13px;">` +
+      `Your invoice is attached to this email as a PDF (${esc(opts.invoiceNo)}.pdf).</p>`;
+    return {
+      to: opts.to,
+      kind: EmailKind.INVOICE,
+      triggeredById: opts.triggeredById,
+      submissionId: opts.submissionId,
+      subject: opts.subject,
+      html: layout({
+        title: `Invoice ${opts.invoiceNo}`,
+        preheader: `Invoice ${opts.invoiceNo} from ${brandName()}`,
+        bodyHtml,
+      }),
+      text: textLayout([
+        opts.message,
+        '',
+        `Invoice ${opts.invoiceNo} is attached to this email as a PDF.`,
+      ]),
+      attachments: [
+        { filename: `${opts.invoiceNo}.pdf`, content: opts.pdf, contentType: 'application/pdf' },
+      ],
     };
   }
 }

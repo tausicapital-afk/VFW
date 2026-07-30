@@ -15,8 +15,16 @@ operate and redeploy it. Written 2026-07-13, updated 2026-07-14.
 | API health | https://frontend-production-b4a4.up.railway.app/api/health |
 | Backend (direct) | https://backend-production-8dcb.up.railway.app — **being removed**, see [Closing the backend's public door](#closing-the-backends-public-door) |
 
-**Sign in:** `it@vanfashionweek.com` / `Vfw@2026!` (System Administrator).
-Every seeded account shares that password — see [Seed data](#seed-data).
+**Sign in:** `it@vanfashionweek.com` (System Administrator). Every seeded account
+shares one password, set by `SEED_PASSWORD` when the database was seeded — see
+[Seed data](#seed-data).
+
+> **The live password must not be the seed default.** The default (`Vfw@2026!`)
+> is published in `backend/prisma/seed.ts` and was, until recently, printed on
+> the login page. If production is still on it, anyone who has seen this repo has
+> System Administrator on the public URL above. `seed.ts` now refuses to apply
+> the default to a non-local database, but that guard is new and does not undo a
+> past seed — rotate the live password and confirm, rather than assuming.
 
 ---
 
@@ -231,7 +239,18 @@ DATABASE_URL="postgresql://…@<host>.proxy.rlwy.net:<port>/railway" \
 
 The seed is idempotent (all upserts). It creates the FW26 catalog (6 taxes,
 6 cities, 7 events, 14 packages, 30 prices, 11 add-ons, 8 GL accounts) and
-**7 users**, all with password `Vfw@2026!`:
+**7 users**, all sharing one password.
+
+Against a remote database that password must come from `SEED_PASSWORD`; the seed
+refuses to run otherwise, because its built-in default is published in the file:
+
+```bash
+SEED_PASSWORD='<something private>' DATABASE_URL="postgresql://…" \
+  npx ts-node --compiler-options '{"module":"CommonJS"}' prisma/seed.ts
+```
+
+Keep the value in the password manager, not here and not in a commit. Locally,
+`DATABASE_URL` points at localhost and the default applies with no ceremony.
 
 | Role | Email |
 |------|-------|

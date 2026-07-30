@@ -4,11 +4,13 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { can } from '../lib/acl';
 import { api } from '../lib/api';
+import { downloadFile } from '../lib/export';
 import { fmtDate, fmtDateTime, money, PAY_LABEL } from '../lib/format';
-import type { AuditEntry, Catalog, DesignerFeedback, Submission } from '../lib/types';
+import type { AuditEntry, Catalog, DesignerFeedback, SendInvoiceResult, Submission } from '../lib/types';
 import { Page } from '../shell/Shell';
 import { DocumentsCard } from './DocumentsCard';
 import { FeedbackModal, Stars } from './Feedback';
+import { InstallmentsCard } from './InstallmentsCard';
 import { InternalCard } from './Internal';
 import { StatusPill } from './Submissions';
 
@@ -53,6 +55,8 @@ export function SubmissionDetail() {
   });
 
   const [payOpen, setPayOpen] = useState(false);
+  const [sendOpen, setSendOpen] = useState(false);
+  const [sentTo, setSentTo] = useState<string | null>(null);
 
   function refresh() {
     void qc.invalidateQueries({ queryKey: ['submission', id] });
@@ -62,6 +66,21 @@ export function SubmissionDetail() {
 
   const invoice = useMutation({
     mutationFn: () => api.post(`/api/submissions/${id}/invoice`),
+    onSuccess: refresh,
+  });
+
+  const invoicePdf = useMutation({
+    mutationFn: () =>
+      downloadFile(`/api/submissions/${id}/invoice.pdf`, `${sub?.invoiceNo ?? 'invoice'}.pdf`),
+  });
+
+  const voidSale = useMutation({
+    mutationFn: (reason: string) => api.post(`/api/submissions/${id}/void`, { reason }),
+    onSuccess: refresh,
+  });
+
+  const restoreSale = useMutation({
+    mutationFn: () => api.post(`/api/submissions/${id}/unvoid`),
     onSuccess: refresh,
   });
 
@@ -83,22 +102,51 @@ export function SubmissionDetail() {
   }
 
   const isAcct = can('accounting.fields', user?.role);
+  const isVoided = sub.status === 'VOIDED';
+  // Mirrors the status rule in SubmissionsService.update(). Before a decision,
+  // whoever owns the sale may correct it; after one, only Accounting/Admin may
+  // amend it. Rejected and voided are dead ends — return or unvoid them first.
+  const openForEdit = ['DRAFT', 'RETURNED', 'PENDING'].includes(sub.status);
+  const decided = ['APPROVED', 'EXPORTED'].includes(sub.status);
   const canEditSales =
-    sub.rep.id === user?.id &&
-    ['DRAFT', 'RETURNED'].includes(sub.status) &&
-    can('submission.editOwn', user?.role);
+    sub.rep.id === user?.id && openForEdit && can('submission.editOwn', user?.role);
+  // Admin/Accounting may correct anyone's editable submission — the same right
+  // the server grants (submission.editAny) — and are the only ones who may amend
+  // one that has already been approved.
+  const canEditAny =
+    !canEditSales && (openForEdit || decided) && can('submission.editAny', user?.role);
+  const canVoid = can('submission.void', user?.role);
+
+  function promptVoid() {
+    const reason = window.prompt(
+      'Void this submission? It will be hidden from lists and reports but kept for audit, and can be restored. Optionally note why:',
+      '',
+    );
+    // Cancel returns null; an empty string is a confirmed void with no reason.
+    if (reason !== null) voidSale.mutate(reason);
+  }
 
   const actions = (
     <>
       <StatusPill status={sub.status} />
-      {canEditSales && (
+      {(canEditSales || canEditAny) && (
         <button className="btn primary" onClick={() => nav(`/submissions/${sub.id}/edit`)}>
-          Edit &amp; resubmit
+          {decided ? 'Amend' : canEditAny ? 'Edit' : sub.status === 'PENDING' ? 'Edit' : 'Edit & resubmit'}
         </button>
       )}
       {sub.status === 'APPROVED' && can('invoice.generate', user?.role) && !sub.invoiceNo && (
         <button className="btn" disabled={invoice.isPending} onClick={() => invoice.mutate()}>
           {invoice.isPending ? 'Generating…' : 'Generate invoice'}
+        </button>
+      )}
+      {sub.invoiceNo && can('invoice.generate', user?.role) && (
+        <button className="btn" disabled={invoicePdf.isPending} onClick={() => invoicePdf.mutate()}>
+          {invoicePdf.isPending ? 'Preparing…' : 'Download invoice (PDF)'}
+        </button>
+      )}
+      {sub.invoiceNo && can('email.send', user?.role) && (
+        <button className="btn" onClick={() => setSendOpen(true)}>
+          Send invoice
         </button>
       )}
       {(sub.status === 'APPROVED' || sub.status === 'EXPORTED') &&
@@ -107,6 +155,16 @@ export function SubmissionDetail() {
             {sub.status === 'EXPORTED' ? 'View export' : 'Export to QuickBooks'}
           </Link>
         )}
+      {canVoid && !isVoided && (
+        <button className="btn dgr" disabled={voidSale.isPending} onClick={promptVoid}>
+          {voidSale.isPending ? 'Voiding…' : 'Void'}
+        </button>
+      )}
+      {canVoid && isVoided && (
+        <button className="btn" disabled={restoreSale.isPending} onClick={() => restoreSale.mutate()}>
+          {restoreSale.isPending ? 'Restoring…' : 'Restore'}
+        </button>
+      )}
     </>
   );
 
@@ -124,8 +182,29 @@ export function SubmissionDetail() {
           <b>Rejected:</b> {sub.rejectReason}
         </div>
       )}
+      {isVoided && (
+        <div className="note warn" style={{ marginBottom: 16 }}>
+          <b>Voided.</b> This sale is hidden from lists and reports but kept for audit.
+          {sub.voidedFrom ? ` It was ${sub.voidedFrom} before being voided.` : ''}
+          {canVoid ? ' Use Restore to bring it back.' : ''}
+        </div>
+      )}
+      {sentTo && (
+        <div className="note good" style={{ marginBottom: 16 }}>
+          Invoice emailed to <b>{sentTo}</b>. A copy is logged under <Link to="/emails">Emails</Link>.
+        </div>
+      )}
       {invoice.error && (
         <div className="note bad" style={{ marginBottom: 16 }}>{(invoice.error as Error).message}</div>
+      )}
+      {invoicePdf.error && (
+        <div className="note bad" style={{ marginBottom: 16 }}>{(invoicePdf.error as Error).message}</div>
+      )}
+      {voidSale.error && (
+        <div className="note bad" style={{ marginBottom: 16 }}>{(voidSale.error as Error).message}</div>
+      )}
+      {restoreSale.error && (
+        <div className="note bad" style={{ marginBottom: 16 }}>{(restoreSale.error as Error).message}</div>
       )}
 
       <div className="split">
@@ -168,6 +247,9 @@ export function SubmissionDetail() {
               <div className="bd"><p className="sm">{sub.notes}</p></div>
             </div>
           )}
+
+          {/* The schedule first, then what actually arrived against it. */}
+          <InstallmentsCard sub={sub} onChanged={refresh} />
 
           <div className="card" style={{ marginTop: 16 }}>
             <div className="hd">
@@ -294,6 +376,8 @@ export function SubmissionDetail() {
             />
           )}
 
+          <InvoiceCard sub={sub} onSaved={refresh} />
+
           {can('feedback.view', user?.role) && <FeedbackCard sub={sub} />}
 
           {isAcct ? (
@@ -317,6 +401,13 @@ export function SubmissionDetail() {
       </div>
 
       {payOpen && <PaymentModal sub={sub} onClose={() => setPayOpen(false)} onDone={() => { setPayOpen(false); refresh(); }} />}
+      {sendOpen && (
+        <SendInvoiceModal
+          sub={sub}
+          onClose={() => setSendOpen(false)}
+          onSent={(to) => { setSendOpen(false); setSentTo(to); }}
+        />
+      )}
     </Page>
   );
 }
@@ -474,6 +565,96 @@ function AccountingCard({
   );
 }
 
+/**
+ * The invoice number, and who may change it.
+ *
+ * The rule shifts at approval, and the card says so rather than silently going
+ * read-only: before approval the number is data entry and belongs to whoever owns
+ * the sale; afterwards it is on a document a client may already hold, so it
+ * belongs to Accounting. The server enforces both — this only decides what to
+ * render, and what to explain.
+ */
+function InvoiceCard({ sub, onSaved }: { sub: Submission; onSaved: () => void }) {
+  const { user } = useAuth();
+  const [value, setValue] = useState(sub.invoiceNo ?? '');
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  const decided = sub.status === 'APPROVED' || sub.status === 'EXPORTED';
+  const dead = sub.status === 'REJECTED' || sub.status === 'VOIDED';
+
+  const mayEditSale =
+    can('submission.editAny', user?.role) ||
+    (can('submission.editOwn', user?.role) && sub.rep.id === user?.id);
+  const mayEdit = dead ? false : decided ? can('invoice.generate', user?.role) : mayEditSale;
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.put(`/api/submissions/${sub.id}/invoice-no`, { invoiceNo: value.trim() }),
+    onSuccess: () => { setError(null); setSaved(true); onSaved(); },
+    onError: (e: Error) => { setSaved(false); setError(e.message); },
+  });
+
+  // Nothing to show and nothing to do: a rep looking at a rejected sale, say.
+  if (!mayEdit && !sub.invoiceNo) return null;
+
+  const dirty = value.trim() !== (sub.invoiceNo ?? '');
+
+  return (
+    <div className="card" style={{ marginTop: 16 }}>
+      <div className="hd">
+        <h3>Invoice number</h3>
+        <div className="sp" style={{ flex: 1 }} />
+        {saved && !dirty && <span className="sm mut">Saved</span>}
+      </div>
+      <div className="bd">
+        {mayEdit ? (
+          <>
+            <div className="f">
+              <input
+                value={value}
+                maxLength={40}
+                placeholder="e.g. VFW-2041"
+                onChange={(e) => { setValue(e.target.value); setSaved(false); }}
+              />
+              <div className="help">
+                {sub.invoiceNo
+                  ? 'Changing this replaces the number on the invoice PDF and on any invoice sent from now on.'
+                  : 'Leave this blank to let approval allocate the next number in the sequence.'}
+              </div>
+            </div>
+
+            {decided && (
+              <div className="note warn" style={{ marginTop: 10 }}>
+                This sale is approved. If the invoice has already been sent, the client is holding a
+                document with the old number on it.
+              </div>
+            )}
+
+            {error && <div className="note bad" style={{ marginTop: 10 }}>{error}</div>}
+
+            <button
+              className="btn primary"
+              style={{ marginTop: 12 }}
+              disabled={!dirty || !value.trim() || save.isPending}
+              onClick={() => save.mutate()}
+            >
+              {save.isPending ? 'Saving…' : sub.invoiceNo ? 'Change number' : 'Set number'}
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="totals"><Row label="Invoice" value={sub.invoiceNo ?? '—'} /></div>
+            <div className="note lock" style={{ marginTop: 10 }}>
+              This sale is approved, so its invoice number is now Accounting's to change.
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function PaymentModal({
   sub, onClose, onDone,
 }: {
@@ -544,6 +725,92 @@ function PaymentModal({
             onClick={() => { setError(null); run.mutate(); }}
           >
             {run.isPending ? 'Recording…' : 'Record payment'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Compose an invoice email. The recipient defaults to the contact's email but is
+ * editable, and the subject/message are pre-filled from the sale — the user
+ * reviews before sending. The PDF is attached server-side from the stored
+ * figures (POST /api/emails/invoice), so nothing here re-derives a total.
+ */
+function SendInvoiceModal({
+  sub, onClose, onSent,
+}: {
+  sub: Submission;
+  onClose: () => void;
+  onSent: (to: string) => void;
+}) {
+  const [to, setTo] = useState(sub.contact.email ?? '');
+  const [subject, setSubject] = useState(`Invoice ${sub.invoiceNo}`);
+  const [message, setMessage] = useState(
+    `Dear ${sub.contact.designer || sub.contact.brand},\n\n` +
+      `Please find attached invoice ${sub.invoiceNo} for ${sub.event.name}. ` +
+      `The balance due is ${money(sub.balance, sub.currency)}.\n\n` +
+      `Thank you.`,
+  );
+  const [error, setError] = useState<string | null>(null);
+
+  const run = useMutation({
+    mutationFn: () =>
+      api.post<SendInvoiceResult>('/api/emails/invoice', {
+        submissionId: sub.id,
+        to,
+        subject,
+        message,
+      }),
+    onSuccess: (r) => onSent(r.to),
+    onError: (e: Error) => setError(e.message),
+  });
+
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="box" onClick={(e) => e.stopPropagation()}>
+        <div className="hd">
+          <h3>Send invoice {sub.invoiceNo}</h3>
+          <div className="sp" style={{ flex: 1 }} />
+          <button className="btn sm" onClick={onClose}>Close</button>
+        </div>
+        <div className="bd">
+          <div className="fields" style={{ gridTemplateColumns: '1fr' }}>
+            <div className="f">
+              <label>To</label>
+              <input
+                type="email"
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+                placeholder="designer@example.com"
+              />
+              {!sub.contact.email && (
+                <div className="help">This contact has no email on file — enter one to send.</div>
+              )}
+            </div>
+            <div className="f">
+              <label>Subject</label>
+              <input value={subject} onChange={(e) => setSubject(e.target.value)} />
+            </div>
+            <div className="f">
+              <label>Message</label>
+              <textarea rows={7} value={message} onChange={(e) => setMessage(e.target.value)} />
+            </div>
+          </div>
+          <div className="note" style={{ marginTop: 12 }}>
+            📎 <b className="mono">{sub.invoiceNo}.pdf</b> is attached automatically.
+          </div>
+          {error && <div className="note bad" style={{ marginTop: 12 }}>{error}</div>}
+        </div>
+        <div className="ft">
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button
+            className="btn primary"
+            disabled={run.isPending || !to || !subject || !message}
+            onClick={() => { setError(null); run.mutate(); }}
+          >
+            {run.isPending ? 'Sending…' : 'Send invoice'}
           </button>
         </div>
       </div>

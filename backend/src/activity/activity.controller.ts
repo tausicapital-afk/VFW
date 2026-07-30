@@ -13,8 +13,9 @@ function context(req: Request) {
 }
 
 /**
- * The Logs screen. Reading it is admin-only (`activity.view`) — it is
- * user-monitoring, not an operational dashboard. The one write, `track`, is the
+ * The Logs screen. Reading it needs `activity.view`, held by Admin and
+ * Accounting — it is user-monitoring, not an operational dashboard. The one
+ * write, `track`, is the
  * exception: any signed-in user may record that they opened a module (they can
  * only ever log their own view, so there is nothing to abuse), which is why it
  * carries no `activity.view` gate.

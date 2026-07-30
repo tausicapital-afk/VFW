@@ -4,6 +4,7 @@
    Money and IDs are always set in mono, like a ledger.
    ============================================================ */
 :root{
+  color-scheme:light;
   --ink:#0E0E11;
   --ink-2:#17171D;
   --ink-3:#26262F;
@@ -30,6 +31,7 @@
   --violet-soft:#EDE7FB;
   --r:5px;
   --rail:236px;
+  --rail-collapsed:64px;
   --shadow:0 1px 0 rgba(16,18,22,.04), 0 8px 24px -18px rgba(16,18,22,.35);
 }
 *{box-sizing:border-box;margin:0;padding:0}
@@ -108,6 +110,8 @@ a{color:var(--blue)}
 .rail .brand{display:flex;align-items:center;gap:10px;padding:6px 8px 18px}
 .rail .brand .mk{width:32px;height:32px;border-radius:50%;background:#fff;color:#0E0E11;display:grid;place-items:center;font-family:"Archivo";font-weight:800;font-size:11px}
 .rail .brand b{font-family:"Archivo";font-weight:700;color:#fff;font-size:13px;letter-spacing:.14em;text-transform:uppercase}
+.rail-collapse{margin-left:auto;width:26px;height:26px;flex:0 0 auto;border:0;border-radius:var(--r);background:var(--ink-3);color:#C9CED6;font-size:14px;line-height:1;cursor:pointer;display:grid;place-items:center;transition:background .15s,color .15s}
+.rail-collapse:hover{background:#fff;color:var(--ink)}
 .rail .grp{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:#5C6472;padding:16px 10px 6px}
 .nav{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:var(--r);color:#C9CED6;cursor:pointer;border:0;background:none;width:100%;text-align:left;font-size:13.5px}
 .nav:hover{background:var(--ink-3);color:#fff}
@@ -121,6 +125,27 @@ a{color:var(--blue)}
 .rail .who .nm{color:#fff;font-weight:600;font-size:13px;line-height:1.2}
 .rail .who .rl{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:#6D7482}
 
+/* Collapsed rail — icon-only strip. Desktop only: the collapse toggle is
+   hidden below 860px, where the rail is an off-canvas drawer (see media query),
+   so these never need to fight the mobile layout. */
+@media(min-width:861px){
+  #app.on.collapsed{grid-template-columns:var(--rail-collapsed) 1fr}
+  .collapsed .rail{padding:18px 8px}
+  /* Hide every text label but keep the icons; tooltips (title=) name each row. */
+  .collapsed .rail .lbl,
+  .collapsed .rail .brand b,
+  .collapsed .rail .grp,
+  .collapsed .rail .who .row > div{display:none}
+  /* Center the icons and let each row collapse to a square. */
+  .collapsed .rail .nav{position:relative;justify-content:center;gap:0;padding:9px 0}
+  .collapsed .rail .nav .ic{width:auto}
+  .collapsed .rail .brand,
+  .collapsed .rail .who .row{flex-direction:column;gap:8px;align-items:center}
+  .collapsed .rail-collapse{margin-left:0}
+  /* The count badge would overflow the narrow rail, so shrink it to a dot. */
+  .collapsed .rail .nav .badge{position:absolute;top:4px;right:8px;margin:0;min-width:8px;height:8px;padding:0;font-size:0;line-height:0}
+}
+
 .main{min-width:0;display:flex;flex-direction:column}
 .topbar{background:#fff;border-bottom:1px solid var(--line);padding:14px 26px;display:flex;align-items:center;gap:16px;position:sticky;top:0;z-index:20}
 .topbar h1{font-size:19px;font-weight:700;letter-spacing:-.01em}
@@ -133,7 +158,9 @@ a{color:var(--blue)}
 .mtop{display:none}
 
 @media(max-width:860px){
-  #app.on{grid-template-columns:1fr}
+  #app.on,#app.on.collapsed{grid-template-columns:1fr}
+  /* Collapse is desktop-only; the drawer always opens full-width with labels. */
+  .rail-collapse{display:none}
   /* The rail becomes an off-canvas drawer that slides in from the left. */
   .rail{
     position:fixed;top:0;left:0;bottom:0;z-index:60;width:262px;
@@ -213,6 +240,7 @@ th.num{font-family:"IBM Plex Sans"}
 .pill.PAID{background:var(--green-soft);color:var(--green)}
 .pill.PARTIAL{background:var(--amber-soft);color:var(--amber)}
 .pill.UNPAID{background:var(--red-soft);color:var(--red)}
+.pill.VOIDED{background:var(--ink-3);color:#fff;text-decoration:line-through}
 .tag{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;padding:2px 7px;border-radius:3px}
 .tag.VFW{background:#0E0E11;color:#fff}
 .tag.VKFW{background:var(--gold);color:#3A3000}
@@ -244,14 +272,29 @@ th.num{font-family:"IBM Plex Sans"}
 .fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
 .f label{display:block;font-size:11px;font-weight:600;color:#4A505C;margin-bottom:4px}
 .f label .req{color:var(--red)}
-.f input,.f select,.f textarea{width:100%;border:1px solid var(--line);border-radius:var(--r);padding:8px 10px;background:#fff}
+.f input,.f select,.f textarea{width:100%;border:1px solid var(--line);border-radius:var(--r);padding:8px 10px;background:#fff;color:var(--text)}
+.f input::placeholder,.f textarea::placeholder{color:var(--muted)}
 .f input:focus,.f select:focus,.f textarea:focus{border-color:var(--blue);outline:none;box-shadow:0 0 0 3px var(--blue-soft)}
+/* Inline table-cell inputs (editable price / rate cells) live outside a .f
+   wrapper, so they'd otherwise fall back to the browser's default white box —
+   which stays white in dark theme. Give them the same themed surface. */
+td input{border:1px solid var(--line);border-radius:var(--r);padding:6px 9px;background:#fff;color:var(--text)}
+td input:focus{border-color:var(--blue);outline:none;box-shadow:0 0 0 3px var(--blue-soft)}
 .f input[readonly]{background:#F4F6F8;color:#5A6270}
 .f.err input,.f.err select{border-color:var(--red);background:#FFF9F8}
 .f .msg{font-size:11px;color:var(--red);margin-top:3px;display:none}
 .f.err .msg{display:block}
 .f .help{font-size:11px;color:var(--muted);margin-top:3px}
 .f.wide{grid-column:1/-1}
+
+/* File-upload rows (new-submission attachments, the documents card) hold a bare
+   select and a native file input outside a .f wrapper, so they'd fall back to
+   the browser's light-themed defaults. Give them the same field + button look. */
+.upload select{border:1px solid var(--line);border-radius:var(--r);padding:8px 10px;background:#fff;color:inherit}
+.upload select:focus{border-color:var(--blue);outline:none;box-shadow:0 0 0 3px var(--blue-soft)}
+.upload input[type=file]{color:inherit;font-size:13px;max-width:100%}
+.upload input[type=file]::file-selector-button{margin-right:10px;border:1px solid var(--line);background:#fff;color:inherit;border-radius:var(--r);padding:6px 11px;font:inherit;font-weight:500;cursor:pointer}
+.upload input[type=file]::file-selector-button:hover{background:var(--paper)}
 .checks{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:8px}
 .chk{display:flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:var(--r);padding:9px 11px;cursor:pointer;background:#fff}
 .chk:hover{border-color:#B9BFC8}
@@ -273,7 +316,7 @@ th.num{font-family:"IBM Plex Sans"}
 
 /* ---------- MISC ---------- */
 .toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
-.toolbar input[type=search],.toolbar select{border:1px solid var(--line);border-radius:var(--r);padding:8px 10px;background:#fff}
+.toolbar input[type=search],.toolbar select{border:1px solid var(--line);border-radius:var(--r);padding:8px 10px;background:#fff;color:var(--text)}
 .toolbar input[type=search]{min-width:240px}
 .empty{text-align:center;padding:52px 20px;color:var(--muted)}
 .empty h3{font-size:16px;color:var(--text);margin-bottom:6px}
@@ -375,6 +418,7 @@ pre.code{background:var(--ink);color:#D7DCE4;padding:14px;border-radius:var(--r)
    cards the most elevated — the inverse ordering of light mode.
    ============================================================ */
 :root[data-theme="dark"]{
+  color-scheme:dark;
   --ink:#0B0B0E;
   --ink-2:#141419;
   --ink-3:#23232D;
@@ -404,8 +448,11 @@ pre.code{background:var(--ink);color:#D7DCE4;padding:14px;border-radius:var(--r)
 :root[data-theme="dark"] .f input,
 :root[data-theme="dark"] .f select,
 :root[data-theme="dark"] .f textarea,
+:root[data-theme="dark"] td input,
 :root[data-theme="dark"] .toolbar input[type=search],
 :root[data-theme="dark"] .toolbar select,
+:root[data-theme="dark"] .upload select,
+:root[data-theme="dark"] .upload input[type=file]::file-selector-button,
 :root[data-theme="dark"] .stickybar,
 :root[data-theme="dark"] .modal .box,
 :root[data-theme="dark"] .modal .box .ft,
@@ -417,6 +464,9 @@ pre.code{background:var(--ink);color:#D7DCE4;padding:14px;border-radius:var(--r)
 :root[data-theme="dark"] .f input[readonly],
 :root[data-theme="dark"] .avpick{background:var(--paper)}
 :root[data-theme="dark"] .f input[readonly]{color:#AEB4BE}
+/* Form labels hardcode a dark slate for the light sheet; lift them on dark so
+   they stay legible above the muted body text. */
+:root[data-theme="dark"] .f label{color:#C4CAD3}
 
 :root[data-theme="dark"] th,
 :root[data-theme="dark"] tbody tr:hover,

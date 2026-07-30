@@ -5,7 +5,7 @@
  * Idempotent: every write is an upsert, so this is safe to re-run against a
  * database that already holds submissions.
  */
-import { PrismaClient, Role, Currency, UserStatus } from '@prisma/client';
+import { PrismaClient, PayType, Role, Currency, UserStatus } from '@prisma/client';
 import * as argon2 from 'argon2';
 
 const prisma = new PrismaClient();
@@ -124,17 +124,53 @@ const ADDONS = [
 ];
 
 // Demo staff, matching DB.users in the mockup. The shared password exists so the
-// team can click through the app; it is dev-only and every account is seeded
-// ACTIVE. Real accounts arrive via invitation + admin approval.
-const DEMO_PASSWORD = 'Vfw@2026!';
+// team can click through the app; every account is seeded ACTIVE. Real accounts
+// arrive via invitation + admin approval.
+const LOCAL_DEFAULT_PASSWORD = 'Vfw@2026!';
+
+/**
+ * The default is published — it is in this file, and it was on the login page —
+ * so it is a password only in the sense that a doormat key is a lock. That is
+ * fine against localhost and nowhere else: these accounts include a System
+ * Administrator, and seeding them onto anything reachable hands that role to
+ * whoever read the repo.
+ *
+ * So the default is available to localhost only. Any other database has to say
+ * what the password is, out of band, via SEED_PASSWORD.
+ */
+function seedPassword(): string {
+  const explicit = process.env.SEED_PASSWORD?.trim();
+  if (explicit) return explicit;
+
+  const url = process.env.DATABASE_URL ?? '';
+  const isLocal = /@(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(url);
+  if (!isLocal) {
+    throw new Error(
+      'Refusing to seed a non-local database with the default demo password.\n' +
+        'DATABASE_URL does not point at localhost, and the default is published in\n' +
+        'this file — seeding it would create a System Administrator account whose\n' +
+        'password is public. Set one explicitly:\n\n' +
+        '  SEED_PASSWORD=<something private> npx ts-node prisma/seed.ts\n\n' +
+        'All seeded accounts share it. See docs/DEPLOYMENT.md → Seed data.',
+    );
+  }
+  return LOCAL_DEFAULT_PASSWORD;
+}
+
+const DEMO_PASSWORD = seedPassword();
+
+// Pay setup is seeded so the Payroll screen has all three shapes to show on a
+// fresh database rather than a column of zeros: two commission-only reps, an
+// hourly one, and salaried staff. It is demo data — real rates are set in
+// Administration -> Users & roles.
 const USERS = [
-  { employeeId: 'VFW-1001', name: 'Marielle Fontaine', email: 'marielle@vanfashionweek.com', phone: '+1 604 555 0142', role: Role.SALES, department: 'Sales', commissionPct: 8, target: 160000, colour: '#2F6BFF' },
-  { employeeId: 'VFW-1002', name: 'Diego Salazar', email: 'diego@vanfashionweek.com', phone: '+1 604 555 0177', role: Role.SALES, department: 'Sales', commissionPct: 8, target: 38000, colour: '#0C7A4D' },
-  { employeeId: 'VFW-1003', name: 'Aiko Tanaka', email: 'aiko@vanfashionweek.com', phone: '+81 3 5555 0198', role: Role.SALES, department: 'International', commissionPct: 10, target: 30000, colour: '#6B4BC4' },
-  { employeeId: 'VFW-1004', name: 'Priya Raman', email: 'priya@vanfashionweek.com', phone: '+1 604 555 0110', role: Role.SALES, department: 'Sales', commissionPct: 8, target: 25000, colour: '#A96C05' },
-  { employeeId: 'VFW-2001', name: 'Hannah Okafor', email: 'accounting@vanfashionweek.com', phone: '+1 604 555 0100', role: Role.ACCT, department: 'Accounting', commissionPct: 0, target: 0, colour: '#0E0E11' },
-  { employeeId: 'VFW-3001', name: 'Marcus Bell', email: 'sales.director@vanfashionweek.com', phone: '+1 604 555 0101', role: Role.MGR, department: 'Sales', commissionPct: 0, target: 0, colour: '#B3332A' },
-  { employeeId: 'VFW-9001', name: 'System Administrator', email: 'it@vanfashionweek.com', phone: '+1 604 555 0199', role: Role.ADMIN, department: 'Administration', commissionPct: 0, target: 0, colour: '#B0A288' },
+  { employeeId: 'VFW-1001', name: 'Marielle Fontaine', email: 'marielle@vanfashionweek.com', phone: '+1 604 555 0142', role: Role.SALES, department: 'Sales', title: 'Senior Sales Representative', commissionPct: 8, target: 160000, payType: PayType.COMMISSION_ONLY, baseRate: 0, colour: '#2F6BFF' },
+  { employeeId: 'VFW-1002', name: 'Diego Salazar', email: 'diego@vanfashionweek.com', phone: '+1 604 555 0177', role: Role.SALES, department: 'Sales', title: 'Sales Representative', commissionPct: 8, target: 38000, payType: PayType.HOURLY, baseRate: 32, colour: '#0C7A4D' },
+  { employeeId: 'VFW-1003', name: 'Aiko Tanaka', email: 'aiko@vanfashionweek.com', phone: '+81 3 5555 0198', role: Role.SALES, department: 'International', title: 'International Sales', commissionPct: 10, target: 30000, payType: PayType.COMMISSION_ONLY, baseRate: 0, colour: '#6B4BC4' },
+  { employeeId: 'VFW-1004', name: 'Priya Raman', email: 'priya@vanfashionweek.com', phone: '+1 604 555 0110', role: Role.SALES, department: 'Sales', title: 'Sales Representative', commissionPct: 8, target: 25000, payType: PayType.HOURLY, baseRate: 28, colour: '#A96C05' },
+  { employeeId: 'VFW-2001', name: 'Hannah Okafor', email: 'accounting@vanfashionweek.com', phone: '+1 604 555 0100', role: Role.ACCT, department: 'Accounting', title: 'Head of Accounting', commissionPct: 0, target: 0, payType: PayType.SALARY, baseRate: 7200, colour: '#0E0E11' },
+  { employeeId: 'VFW-3001', name: 'Marcus Bell', email: 'sales.director@vanfashionweek.com', phone: '+1 604 555 0101', role: Role.MGR, department: 'Sales', title: 'Sales Director', commissionPct: 0, target: 0, payType: PayType.SALARY, baseRate: 8500, colour: '#B3332A' },
+  { employeeId: 'VFW-9001', name: 'System Administrator', email: 'it@vanfashionweek.com', phone: '+1 604 555 0199', role: Role.ADMIN, department: 'Administration', title: 'Systems Administrator', commissionPct: 0, target: 0, payType: PayType.SALARY, baseRate: 6800, colour: '#B0A288' },
 ];
 
 async function main() {
@@ -212,7 +248,13 @@ async function main() {
     users: await prisma.user.count(),
   };
   console.log('Seed complete:', counts);
-  console.log(`Demo password for all seeded accounts: ${DEMO_PASSWORD}`);
+  // Never echo a password that was passed in — it would land in the shell
+  // history and the deploy log of whoever ran this.
+  console.log(
+    process.env.SEED_PASSWORD?.trim()
+      ? 'Seeded accounts share the password given in SEED_PASSWORD.'
+      : `Demo password for all seeded accounts: ${DEMO_PASSWORD}`,
+  );
 }
 
 main()

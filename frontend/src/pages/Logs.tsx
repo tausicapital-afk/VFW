@@ -7,6 +7,7 @@ import type {
   ActivityUser,
   SessionPage,
 } from '../lib/types';
+import { ExportMenu } from '../shell/ExportMenu';
 import { Page } from '../shell/Shell';
 
 /**
@@ -124,6 +125,14 @@ function UsersTab() {
         </div>
       </div>
 
+      {/* A toolbar rather than a card header, so the export sits where it sits
+          on the Activity and Sessions tabs. This table has no filters — the
+          file is simply everyone. */}
+      <div className="toolbar">
+        <div style={{ flex: 1 }} />
+        <ExportMenu dataset="log-users" disabled={!users.length} />
+      </div>
+
       <div className="card">
         <div className="tbl-wrap">
           {isLoading ? (
@@ -224,6 +233,9 @@ function ActivityTab() {
           Clear
         </button>
         <div style={{ flex: 1 }} />
+        {/* The filter, not the page — the server re-applies q and action and
+            returns every matching event, not the 50 on screen. */}
+        <ExportMenu dataset="activity" params={{ q: q.trim(), action }} disabled={!total} />
         <span className="sm mut">{total} events</span>
       </div>
 
@@ -325,6 +337,7 @@ function SessionsTab() {
           <option value="closed">Ended</option>
         </select>
         <div style={{ flex: 1 }} />
+        <ExportMenu dataset="sessions" params={{ state }} disabled={!total} />
         <span className="sm mut">{total} sessions</span>
       </div>
 

@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { useAuth } from '../auth/AuthContext';
+import { can } from '../lib/acl';
 import { api } from '../lib/api';
 import { fmtDate, money } from '../lib/format';
 import type { Catalog, Submission } from '../lib/types';
@@ -23,7 +25,13 @@ type Action = { kind: 'approve' | 'reject' | 'return'; sub: Submission };
 
 export function Queue() {
   const qc = useQueryClient();
+  const { user } = useAuth();
   const [action, setAction] = useState<Action | null>(null);
+
+  // A rep reads this screen to track their own submissions; deciding on one is
+  // Accounting's job. The server enforces it either way — this only keeps a rep
+  // from being offered a button that would 403.
+  const canDecide = can('submission.approve', user?.role);
 
   const { data: queue, isLoading } = useQuery({
     queryKey: ['queue'],
@@ -58,8 +66,12 @@ export function Queue() {
           <div className="empty"><h3>Loading…</h3></div>
         ) : pending.length === 0 ? (
           <div className="empty">
-            <h3>Queue is clear</h3>
-            <p>Every submission has been reviewed.</p>
+            <h3>{canDecide ? 'Queue is clear' : 'Nothing of yours is waiting'}</h3>
+            <p>
+              {canDecide
+                ? 'Every submission has been reviewed.'
+                : 'None of your submissions are waiting on accounting.'}
+            </p>
           </div>
         ) : (
           <div className="tbl-wrap">
@@ -73,7 +85,7 @@ export function Queue() {
                   <th className="num">Discount</th>
                   <th className="num">Total</th>
                   <th>Submitted</th>
-                  <th />
+                  {canDecide && <th />}
                 </tr>
               </thead>
               <tbody>
@@ -104,19 +116,21 @@ export function Queue() {
                       </td>
                       <td className="num">{money(s.total, s.currency)}</td>
                       <td className="sm mut">{fmtDate(s.submittedAt)}</td>
-                      <td>
-                        <div className="rowflex" style={{ justifyContent: 'flex-end' }}>
-                          <button className="btn sm primary" onClick={() => setAction({ kind: 'approve', sub: s })}>
-                            Approve
-                          </button>
-                          <button className="btn sm" onClick={() => setAction({ kind: 'return', sub: s })}>
-                            Return
-                          </button>
-                          <button className="btn sm dgr" onClick={() => setAction({ kind: 'reject', sub: s })}>
-                            Reject
-                          </button>
-                        </div>
-                      </td>
+                      {canDecide && (
+                        <td>
+                          <div className="rowflex" style={{ justifyContent: 'flex-end' }}>
+                            <button className="btn sm primary" onClick={() => setAction({ kind: 'approve', sub: s })}>
+                              Approve
+                            </button>
+                            <button className="btn sm" onClick={() => setAction({ kind: 'return', sub: s })}>
+                              Return
+                            </button>
+                            <button className="btn sm dgr" onClick={() => setAction({ kind: 'reject', sub: s })}>
+                              Reject
+                            </button>
+                          </div>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}

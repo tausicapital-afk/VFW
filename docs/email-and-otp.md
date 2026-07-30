@@ -3,6 +3,13 @@
 The system's outbound email — welcome, verification, password reset — and the
 email-OTP signup flow that replaced administrator approval. Written 2026-07-14.
 
+> **Looking at this because mail is not arriving? Read
+> [`email-delivery.md`](email-delivery.md) first.** This file covers *what* the
+> app sends. That one covers *how a message physically gets out* — the mail
+> accounts, the relay, and why Railway cannot use SMTP at all. Nearly every
+> "email is broken" symptom is answered there, and the answer is almost never the
+> mailbox settings.
+
 ---
 
 ## What this covers
@@ -125,31 +132,112 @@ Each returns a full `Mail` with **both** an HTML and a plain-text body.
 
 ## Configuration
 
-SMTP is configured entirely through environment variables. Real credentials live
-only in gitignored `backend/.env`; `backend/.env.example` carries placeholders.
+> ## ⚠️ Railway blocks SMTP. Read this before debugging any mail failure.
+>
+> Measured 2026-07-15 from inside the running Railway container:
+>
+> ```
+> mail.veeb.co.ke:465  -> TIMEOUT (silently dropped)
+> mail.veeb.co.ke:587  -> TIMEOUT (silently dropped)
+> smtp.gmail.com:465   -> ETIMEDOUT
+> api.github.com:443   -> CONNECTED in 73ms
+> ```
+>
+> Railway black-holes every outbound SMTP port on this plan. General egress is
+> fine. **No SMTP credential can ever work in production as hosted** — this is not
+> a wrong password, port or encryption mode, and the same credentials authenticate
+> in 1.7s from a normal machine.
+>
+> **Read the symptom:** a ~60s hang then 504/503 is the *network*. An "invalid
+> login" is the *credential*. Do not regenerate cPanel passwords over a hang.
+>
+> Production must therefore use an **HTTP provider** (`resend`), which goes over
+> 443 like any other API call. The SMTP accounts stay valid and useful for any
+> host that permits SMTP.
+
+Sending is owned by **mail accounts** — one row per sender in the `MailAccount`
+table, exactly one marked active. *Administration → Configuration → Mail
+accounts* is where an administrator adds them. Each row picks a **provider**:
+
+- **`smtp`** — dial a mailbox directly (cPanel, Gmail, SES-SMTP). Needs host,
+  port, encryption, username, password.
+- **`resend`** — POST over HTTPS to the Resend API. Needs only an API key and a
+  from-address; host/port/username are meaningless and stored blank.
+
+Either way the secret is **encrypted at rest** and never returned to the browser.
+Changes take effect immediately, no redeploy, and each row has its own **Send
+test** button so a sender can be proven *before* it is made active.
+
+Adding a provider is one branch in `EmailService.deliver()` — everything above
+it (the template, the builders, every caller) is provider-blind.
+
+> **Resend needs a verified domain.** Until the sending domain has its DNS
+> records in Resend, it will only accept mail to the account owner's own address,
+> and a send from an unverified domain fails **403** — distinct from **401** for a
+> bad key, so the error text tells you which screen to go to.
+
+Hold as many as you like and switch with one click. That is the point of the
+table: a key/value setting can only describe one mailbox, so a second account had
+nowhere to live and switching meant retyping four fields and losing the old ones.
+
+**Resolution order:**
+
+1. The **active `MailAccount` row**. The normal path.
+2. The **`MAIL_*` settings** below — but *only while the table is empty*, so a
+   deployment that predates mail accounts keeps sending untouched. Adding the
+   first account takes over from them permanently. This fallback is always SMTP,
+   so on Railway it can never deliver.
+
+If rows exist but the active one's password will not decrypt (the root key
+changed), `EmailService` returns 503 rather than falling back to `MAIL_*` —
+sending from a different mailbox than the screen names is worse than not sending.
+The row shows a decrypt error telling you to re-enter the password.
+
+`MAIL_*` still resolves **database `ConfigSetting` row → environment variable →
+default**, per key, and `EmailService` reads through `ConfigService` rather than
+`process.env` directly. It rebuilds its transport whenever either store changes.
+
+> **Common gotcha (this is what "email not configured on the server" means in
+> production).** The `MAIL_*` vars live in local `backend/.env`, which is
+> gitignored and **never ships to Railway** — so a fresh Railway backend has no
+> mail account and no `MAIL_*`, and every invite/OTP shows *"Email is not
+> configured on this server."* Fix it by adding a mail account under
+> *Administration → Configuration*. No redeploy, no Railway variables.
+
+> **Gmail needs an App Password.** Google switched off plain-password SMTP in
+> 2022: the account password returns `535-5.7.8 Username and Password not
+> accepted` no matter how it is stored. Enable 2FA on the account, generate an
+> App Password for "Mail", and use that 16-character value. Gmail also rewrites
+> `From` to the authenticated address unless the alias is verified, and free
+> accounts cap around 500 recipients/day.
+
+The `MAIL_*` variables (the empty-table fallback, and the shared appearance
+settings — `MAIL_FROM_NAME`, `MAIL_BRAND_COLOUR`, `MAIL_SUPPORT_ADDRESS` and
+`APP_URL` still apply to every account):
 
 | Variable | Example | Purpose |
 |---|---|---|
-| `MAIL_HOST` | `mail.veeb.co.ke` | SMTP server |
+| `MAIL_HOST` | `mail.veeb.co.ke` | SMTP server — a **hostname**, never an email address |
 | `MAIL_PORT` | `465` | `465` = implicit TLS (ssl); `587` = STARTTLS |
-| `MAIL_USERNAME` | `patriotic@veeb.co.ke` | SMTP auth user |
+| `MAIL_USERNAME` | `vfw@veeb.co.ke` | SMTP auth user — the full mailbox address |
 | `MAIL_PASSWORD` | `••••••••` | SMTP auth password |
 | `MAIL_ENCRYPTION` | `ssl` | `ssl` \| `tls` \| `none` (auto-derives from port if unset) |
-| `MAIL_FROM_ADDRESS` | `patriotic@veeb.co.ke` | envelope From address |
-| `MAIL_FROM_NAME` | `Patriotic Payroll` | From name **and the brand name shown in every email** |
+| `MAIL_FROM_ADDRESS` | `vfw@veeb.co.ke` | envelope From address |
+| `MAIL_FROM_NAME` | `VFW Console` | **default** brand name, for accounts with no sender name of their own |
 | `MAIL_BRAND_COLOUR` | `#0C7A4D` | accent for header + buttons (optional) |
-| `MAIL_SUPPORT_ADDRESS` | `patriotic@veeb.co.ke` | shown in the footer (optional; defaults to From) |
+| `MAIL_SUPPORT_ADDRESS` | `vfw@veeb.co.ke` | shown in the footer (optional; defaults to the sending From) |
 | `APP_URL` | `https://app.example.com` | base for emailed links (reset, invite) |
 
-The transport is considered **configured** only when host, username, password and
-from-address are all present. `EmailService.send()` throws `503` otherwise — it
-never silently falls back to logging codes.
+Email is considered **configured** when an active mail account exists, or — with
+no accounts at all — when host, username, password and from-address all resolve.
+`EmailService.send()` throws `503` otherwise; it never silently falls back to
+logging codes.
 
-> **Brand-name note.** The brand shown inside every email is `MAIL_FROM_NAME`. It
-> is currently *"Patriotic Payroll"* (the shared SMTP mailbox), not *"VFW Console"*.
-> If emails should read "VFW Console" while still sending from the patriotic@
-> mailbox, split the display brand from the From name (add a dedicated brand env
-> var) rather than changing `MAIL_FROM_NAME`.
+> **Brand name.** Each account's **sender name** is the brand shown at the top of
+> its emails, so switching account switches the brand with it. `MAIL_FROM_NAME` is
+> only the default for accounts that leave it blank. This is what the old note
+> here asked for — a display brand separable from the mailbox — and it no longer
+> needs a dedicated env var.
 
 ### Production (Railway)
 
@@ -252,3 +340,58 @@ model EmailOtp {
   it inherits the header, footer and theming for free.
 - **Rebranding:** change `MAIL_FROM_NAME` (and optionally `MAIL_BRAND_COLOUR` /
   `MAIL_SUPPORT_ADDRESS`); every email updates together.
+
+---
+
+## The Emails module (sent + received)
+
+The console keeps a log of every message it sends, and — where the mailbox
+allows — the mail it receives. It lives at **Work → Emails** and behind
+`backend/src/emails/`.
+
+### Sent
+
+Recording happens at the one choke point, `EmailService.send()`, so **every**
+outbound message is logged automatically: OTP, welcome, reset, invitations,
+invoice sends, and test emails. A row is written `SENT` on success and `FAILED`
+(with the reason) on a transport error, so a bounced invoice is visible rather
+than lost.
+
+Because that choke point sees the secrets too, sensitive kinds are **redacted**
+before storage (`redactForLog` in `email.ts`): OTP/welcome/reset/invitation
+bodies are dropped, and the OTP subject (which carries the code) is replaced.
+Invoice and inbound bodies are kept in full — they hold no secret.
+
+Visibility is row-scoped like submissions: a rep sees only mail they triggered;
+`email.viewAll` roles (ACCT/MGR/ADMIN) see the whole log.
+
+### Send invoice
+
+An already-invoiced submission gains a **Send invoice** button
+(`email.send` → ACCT/ADMIN) beside *Download invoice (PDF)*. It opens an editable
+compose (recipient pre-filled from the contact, subject/message pre-filled from
+the sale), and on send attaches the PDF built from the stored figures — the same
+document the Download button produces. The send is logged (kind `INVOICE`,
+attributed to the sender and sale) and appends an `INVOICE_EMAILED` audit entry
+to the submission.
+
+Attachments ride all three providers (SMTP, Resend, relay). **Relay caveat:** the
+PHP relay in `ops/mail-relay` must be updated to honour the new `attachments`
+field — an older relay silently delivers the message *without* the PDF.
+
+### Received (IMAP poll)
+
+Opt-in, SMTP mailboxes only. Set `inboundEnabled` (and, if IMAP is not on the
+same host, `imapHost`/`imapPort`) on the active `MailAccount`. A cron
+(`emails/inbound.service.ts`, every minute) then connects over IMAP with that
+row's username + decrypted password, pulls recent mail, and stores it as
+`INBOUND`/`RECEIVED`, deduped by `(mailAccountId, messageId)`.
+
+> **Railway blocks the IMAP port** just as it blocks SMTP (see the transport note
+> above). There the poll simply keeps failing to connect and logs a warning;
+> Sent is unaffected. Inbound works where the port is reachable (local, a
+> cPanel-hosted deploy). If inbound is needed on Railway, switch to a provider
+> **inbound webhook** instead of IMAP.
+
+Inbound bodies are rendered as **text only** in the reader — never injected as
+HTML — so a received message cannot script the console.

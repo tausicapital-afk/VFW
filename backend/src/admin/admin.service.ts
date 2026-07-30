@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { Invitation, Prisma, UserStatus } from '@prisma/client';
+import { Invitation, Prisma, Role, UserStatus } from '@prisma/client';
 import { randomInt } from 'crypto';
 import { Decimal } from 'decimal.js';
 import { AuditService } from '../audit/audit.service';
@@ -7,12 +7,17 @@ import { AuthUser } from '../common/auth.guard';
 import { EmailService } from '../common/email';
 import { PrismaService } from '../prisma/prisma.service';
 import {
+  CreateAddonDto,
   CreateInvitationDto,
+  CreatePackageDto,
+  CreateTaxDto,
   RejectUserDto,
   UpdateAddonDto,
+  UpdateInvitationDto,
   UpdatePackageDto,
   UpdateSettingsDto,
   UpdateTaxDto,
+  UpdateUserDto,
 } from './dto';
 
 /** No I, O, 0 or 1 — these codes get read off a screen and typed by hand. */
@@ -43,6 +48,26 @@ function decimal(raw: string, field: string): Decimal {
     throw new BadRequestException(`${field} must be a positive number`);
   }
   return d;
+}
+
+/**
+ * Catalogue ids are read by people — they appear in QuickBooks exports and in
+ * every audit payload that names a package — so a new row gets a derived id
+ * rather than a cuid, spelled the way the seed spells them: VFW + "Bronze
+ * Package" -> VFW-BRONZE. The word "Package" is dropped because every package
+ * has it and an id that repeats its own noun says nothing.
+ *
+ * Admin.tsx previews this id in the new-package modal and applies the same
+ * rules; keep the two in step.
+ */
+export function catalogueId(brand: string, name: string): string {
+  const slug = name
+    .toUpperCase()
+    .replace(/\bPACKAGE\b/g, ' ')
+    .replace(/[^A-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  if (!slug) throw new BadRequestException('That name has no letters or digits to build an id from');
+  return `${brand.toUpperCase()}-${slug}`;
 }
 
 @Injectable()
@@ -124,10 +149,98 @@ export class AdminService {
 
   async listInvitations() {
     const rows = await this.prisma.invitation.findMany({
+      where: { deletedAt: null },
       orderBy: { createdAt: 'desc' },
       include: { createdBy: { select: { name: true } } },
     });
     return { invitations: rows.map((i) => this.shape(i, i.createdBy.name)) };
+  }
+
+  /**
+   * Role, department and email only — see UpdateInvitationDto for why the code
+   * and the expiry are not editable. Changing the email does not re-send the
+   * invitation: the admin is told to pass on the link, the same as at create,
+   * rather than us quietly mailing a stranger.
+   */
+  async updateInvitation(id: string, dto: UpdateInvitationDto, actor: AuthUser) {
+    const invitation = await this.prisma.invitation.findFirst({
+      where: { id, deletedAt: null },
+    });
+    if (!invitation) throw new NotFoundException('Invitation not found');
+
+    // A redeemed invitation is a historical fact — it already produced an
+    // account, and editing the role here would not move that account.
+    if (invitation.usedAt) {
+      throw new BadRequestException('That invitation has been redeemed and can no longer be edited');
+    }
+
+    const email = dto.email === null ? null : dto.email?.trim().toLowerCase();
+    if (email && email !== invitation.email) {
+      const taken = await this.prisma.user.findUnique({ where: { email } });
+      if (taken) throw new BadRequestException('An account already exists for that email');
+    }
+
+    const before: Record<string, Prisma.InputJsonValue | null> = {};
+    const after: Record<string, Prisma.InputJsonValue | null> = {};
+    const data: Prisma.InvitationUpdateInput = {};
+
+    if (dto.role !== undefined && dto.role !== invitation.role) {
+      before.role = invitation.role;
+      after.role = dto.role;
+      data.role = dto.role;
+    }
+    if (dto.department !== undefined && dto.department !== invitation.department) {
+      before.department = invitation.department;
+      after.department = dto.department;
+      data.department = dto.department;
+    }
+    if (email !== undefined && email !== invitation.email) {
+      before.email = invitation.email;
+      after.email = email;
+      data.email = email;
+    }
+
+    if (!Object.keys(data).length) return this.shape(invitation, actor.name);
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.invitation.update({ where: { id }, data });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'INVITE_UPDATED',
+          detail: `Invitation ${invitation.code} edited (${Object.keys(after).join(', ')})`,
+          payload: { invitationId: id, code: invitation.code, before, after },
+        },
+        tx,
+      );
+      return this.shape(updated, actor.name);
+    });
+  }
+
+  /**
+   * Soft delete: the row leaves the admin list but stays on file, because the
+   * audit entries that name this invitation have to keep resolving. It also
+   * stops being redeemable — see the signup path, which checks `deletedAt`.
+   */
+  async deleteInvitation(id: string, actor: AuthUser) {
+    const invitation = await this.prisma.invitation.findFirst({
+      where: { id, deletedAt: null },
+    });
+    if (!invitation) throw new NotFoundException('Invitation not found');
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.invitation.update({ where: { id }, data: { deletedAt: new Date() } });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'INVITE_DELETED',
+          detail: `Invitation ${invitation.code} deleted`,
+          payload: { invitationId: id, code: invitation.code, email: invitation.email },
+        },
+        tx,
+      );
+      return { ok: true };
+    });
   }
 
   async revokeInvitation(id: string, user: AuthUser) {
@@ -178,12 +291,15 @@ export class AdminService {
   private readonly userFields = {
     id: true, name: true, email: true, phone: true, role: true, department: true,
     status: true, employeeId: true, commissionPct: true, target: true, colour: true,
-    createdAt: true,
+    title: true, payType: true, baseRate: true, createdAt: true,
   } satisfies Prisma.UserSelect;
 
   async listUsers() {
     return {
+      // `hidden` accounts (demo / test logins) are deliberately omitted here.
+      // They still authenticate — this filter only keeps them off the Users tab.
       users: await this.prisma.user.findMany({
+        where: { hidden: false, deletedAt: null },
         select: this.userFields,
         orderBy: [{ status: 'asc' }, { name: 'asc' }],
       }),
@@ -193,15 +309,200 @@ export class AdminService {
   async pendingUsers() {
     return {
       users: await this.prisma.user.findMany({
-        where: { status: UserStatus.PENDING },
+        where: { status: UserStatus.PENDING, hidden: false, deletedAt: null },
         select: this.userFields,
         orderBy: { createdAt: 'asc' },
       }),
     };
   }
 
+  /**
+   * How many accounts could still administer this system if `excluding` were
+   * gone. Hidden accounts count: `hidden` only keeps a login off the listings,
+   * it does not stop it authenticating, so a hidden ADMIN really can still get
+   * in. Deleted and non-ACTIVE ones cannot, so they do not count.
+   */
+  private async otherActiveAdmins(excluding: string, tx?: Prisma.TransactionClient) {
+    return (tx ?? this.prisma).user.count({
+      where: {
+        id: { not: excluding },
+        role: Role.ADMIN,
+        status: UserStatus.ACTIVE,
+        deletedAt: null,
+      },
+    });
+  }
+
+  /**
+   * The one way an account is edited, from either screen — the approvals queue
+   * fixing what someone typed before they are let in, and Users & roles keeping
+   * an established account right. See UpdateUserDto for what is deliberately not
+   * editable here.
+   *
+   * Two things it refuses, both of them ways to lock the console:
+   *   - changing your OWN role or status (demote or suspend yourself and the
+   *     next request is the one that logs you out),
+   *   - leaving the system with no-one who can administer it.
+   *
+   * Note what is NOT here: editing commission does not touch a sale that has
+   * already been made. Submission copies commissionPct onto the record at
+   * creation and re-pricing reads it back off the record, exactly as the rate
+   * card does — this rate is what the next sale will use, not the last one.
+   */
+  async updateUser(id: string, dto: UpdateUserDto, actor: AuthUser) {
+    const user = await this.prisma.user.findFirst({ where: { id, deletedAt: null } });
+    if (!user) throw new NotFoundException('User not found');
+
+    const isSelf = user.id === actor.id;
+    const demoting = dto.role !== undefined && dto.role !== user.role && user.role === Role.ADMIN;
+    const suspending = dto.status === UserStatus.DISABLED && user.status !== UserStatus.DISABLED;
+
+    if (isSelf && dto.role !== undefined && dto.role !== user.role) {
+      throw new BadRequestException('You cannot change your own role');
+    }
+    if (isSelf && dto.status !== undefined && dto.status !== user.status) {
+      throw new BadRequestException('You cannot change your own status');
+    }
+
+    // Approval is a decision with a reason attached; it does not happen by way
+    // of a form that edits a phone number.
+    if (
+      dto.status !== undefined &&
+      dto.status !== user.status &&
+      user.status !== UserStatus.ACTIVE &&
+      user.status !== UserStatus.DISABLED
+    ) {
+      throw new BadRequestException(
+        `That account is ${user.status} — use Approve or Reject to decide it`,
+      );
+    }
+
+    if ((demoting || suspending) && !(await this.otherActiveAdmins(user.id))) {
+      throw new BadRequestException(
+        'That is the last administrator — promote someone else first',
+      );
+    }
+
+    const before: Record<string, Prisma.InputJsonValue | null> = {};
+    const after: Record<string, Prisma.InputJsonValue | null> = {};
+    const data: Prisma.UserUpdateInput = {};
+
+    const set = (field: string, from: Prisma.InputJsonValue | null, to: Prisma.InputJsonValue | null) => {
+      before[field] = from;
+      after[field] = to;
+    };
+
+    const name = dto.name?.trim();
+    if (name !== undefined && name !== user.name) {
+      set('name', user.name, name);
+      data.name = name;
+    }
+    if (dto.phone !== undefined && dto.phone !== user.phone) {
+      set('phone', user.phone, dto.phone);
+      data.phone = dto.phone;
+    }
+    if (dto.role !== undefined && dto.role !== user.role) {
+      set('role', user.role, dto.role);
+      data.role = dto.role;
+    }
+    if (dto.department !== undefined && dto.department !== user.department) {
+      set('department', user.department, dto.department);
+      data.department = dto.department;
+    }
+    if (dto.commissionPct !== undefined) {
+      const pct = decimal(dto.commissionPct, 'Commission %');
+      if (pct.greaterThan(100)) throw new BadRequestException('Commission % cannot exceed 100');
+      const next = pct.toFixed(2);
+      if (next !== user.commissionPct.toFixed(2)) {
+        set('commissionPct', user.commissionPct.toFixed(2), next);
+        data.commissionPct = next;
+      }
+    }
+    if (dto.target !== undefined) {
+      const next = decimal(dto.target, 'Target').toFixed(2);
+      if (next !== user.target.toFixed(2)) {
+        set('target', user.target.toFixed(2), next);
+        data.target = next;
+      }
+    }
+    if (dto.payType !== undefined && dto.payType !== user.payType) {
+      set('payType', user.payType, dto.payType);
+      data.payType = dto.payType;
+    }
+    if (dto.baseRate !== undefined) {
+      const next = decimal(dto.baseRate, 'Base rate').toFixed(2);
+      if (next !== user.baseRate.toFixed(2)) {
+        set('baseRate', user.baseRate.toFixed(2), next);
+        data.baseRate = next;
+      }
+    }
+    if (dto.status !== undefined && dto.status !== user.status) {
+      set('status', user.status, dto.status);
+      data.status = dto.status;
+      // A suspended account must stop acting now, not when its token expires.
+      if (dto.status === UserStatus.DISABLED) data.tokenVersion = { increment: 1 };
+    }
+
+    if (!Object.keys(data).length) {
+      return {
+        user: await this.prisma.user.findUniqueOrThrow({ where: { id }, select: this.userFields }),
+      };
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.user.update({ where: { id }, data, select: this.userFields });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'USER_UPDATED',
+          detail: `Edited ${user.name} (${Object.keys(after).join(', ')})`,
+          payload: { userId: id, email: user.email, before, after },
+        },
+        tx,
+      );
+      return { user: updated };
+    });
+  }
+
+  /**
+   * Soft delete. From the approvals queue this is for a signup that should never
+   * have arrived — spam, a duplicate, a typo'd address — and it is distinct from
+   * reject, which is a decision on record about a real request; this says there
+   * was no real request. From Users & roles it retires an account for good,
+   * where DISABLED would be the choice for one that is meant to come back.
+   *
+   * Either way the row stays for the audit trail it is named in, and
+   * tokenVersion is bumped so anything already holding a session for it dies
+   * now rather than at expiry.
+   */
+  async deleteUser(id: string, actor: AuthUser) {
+    const user = await this.prisma.user.findFirst({ where: { id, deletedAt: null } });
+    if (!user) throw new NotFoundException('User not found');
+    if (user.id === actor.id) throw new BadRequestException('You cannot delete your own account');
+    if (user.role === Role.ADMIN && !(await this.otherActiveAdmins(user.id))) {
+      throw new BadRequestException('That is the last administrator — promote someone else first');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id },
+        data: { deletedAt: new Date(), tokenVersion: { increment: 1 } },
+      });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'USER_DELETED',
+          detail: `Deleted account for ${user.name} (${user.email})`,
+          payload: { userId: id, email: user.email, role: user.role, status: user.status },
+        },
+        tx,
+      );
+      return { ok: true };
+    });
+  }
+
   async approveUser(id: string, actor: AuthUser) {
-    const user = await this.prisma.user.findUnique({ where: { id } });
+    const user = await this.prisma.user.findFirst({ where: { id, deletedAt: null } });
     if (!user) throw new NotFoundException('User not found');
     if (user.status !== UserStatus.PENDING) {
       throw new BadRequestException(`That account is ${user.status}, not pending`);
@@ -232,7 +533,7 @@ export class AdminService {
    * never removed.
    */
   async rejectUser(id: string, dto: RejectUserDto, actor: AuthUser) {
-    const user = await this.prisma.user.findUnique({ where: { id } });
+    const user = await this.prisma.user.findFirst({ where: { id, deletedAt: null } });
     if (!user) throw new NotFoundException('User not found');
     if (user.status !== UserStatus.PENDING) {
       throw new BadRequestException(`That account is ${user.status}, not pending`);
@@ -269,6 +570,138 @@ export class AdminService {
   // reads a catalogue price is PricingService, at create/resubmit time.
   // catalog.spec.ts holds this line with a test.
   // -------------------------------------------------------------------------
+
+  private async assertTaxAndGl(taxCode: string, glCode: string) {
+    if (!(await this.prisma.taxProfile.findUnique({ where: { code: taxCode } }))) {
+      throw new BadRequestException(`Unknown tax profile ${taxCode}`);
+    }
+    if (!(await this.prisma.glAccount.findUnique({ where: { code: glCode } }))) {
+      throw new BadRequestException(`Unknown GL account ${glCode}`);
+    }
+  }
+
+  /**
+   * A new package is only ever additive: it appears on the new-submission form
+   * from now on and touches nothing that has already been sold. Created with its
+   * city prices in one transaction, because a package with no price is not
+   * sellable and half of one is not worth leaving behind.
+   */
+  async createPackage(dto: CreatePackageDto, actor: AuthUser) {
+    const brand = dto.brand.trim().toUpperCase();
+    const name = dto.name.trim();
+    const id = catalogueId(brand, name);
+
+    if (await this.prisma.package.findUnique({ where: { id } })) {
+      throw new BadRequestException(
+        `${brand} already has a package with the id ${id} — give this one a different name`,
+      );
+    }
+    await this.assertTaxAndGl(dto.taxCode, dto.glCode);
+
+    // Two prices for one city would otherwise reach the @@unique constraint and
+    // come back as a 500 rather than as something the admin can act on.
+    const cityIds = dto.prices.map((p) => p.cityId);
+    if (new Set(cityIds).size !== cityIds.length) {
+      throw new BadRequestException('A package can only carry one price per city');
+    }
+    const cities = await this.prisma.city.findMany({ where: { id: { in: cityIds } } });
+    for (const cityId of cityIds) {
+      if (!cities.some((c) => c.id === cityId)) {
+        throw new BadRequestException(`Unknown city ${cityId}`);
+      }
+    }
+
+    const prices = dto.prices.map((p) => ({
+      cityId: p.cityId,
+      currency: p.currency,
+      price: decimal(p.price, `Price for ${p.cityId}`).toFixed(2),
+    }));
+
+    return this.prisma.$transaction(async (tx) => {
+      const created = await tx.package.create({
+        data: {
+          id,
+          brand,
+          name,
+          looks: dto.looks,
+          blurb: dto.blurb?.trim() || null,
+          taxCode: dto.taxCode,
+          glCode: dto.glCode,
+          prices: { create: prices },
+        },
+        include: { prices: { include: { city: true } } },
+      });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'CATALOG_PACKAGE_CREATED',
+          detail: `Package added to the rate card: ${brand} ${name}`,
+          payload: {
+            packageId: id,
+            brand,
+            name,
+            looks: dto.looks,
+            taxCode: dto.taxCode,
+            glCode: dto.glCode,
+            prices,
+          },
+        },
+        tx,
+      );
+      return created;
+    });
+  }
+
+  async createAddon(dto: CreateAddonDto, actor: AuthUser) {
+    const brand = dto.brand.trim().toUpperCase();
+    const name = dto.name.trim();
+    const id = catalogueId(brand, name);
+
+    if (await this.prisma.addon.findUnique({ where: { id } })) {
+      throw new BadRequestException(
+        `${brand} already has an add-on with the id ${id} — give this one a different name`,
+      );
+    }
+    if (!(await this.prisma.glAccount.findUnique({ where: { code: dto.glCode } }))) {
+      throw new BadRequestException(`Unknown GL account ${dto.glCode}`);
+    }
+
+    const forBrands = dto.forBrands.map((b) => b.trim().toUpperCase());
+    const price = decimal(dto.price, 'Price').toFixed(2);
+
+    return this.prisma.$transaction(async (tx) => {
+      const created = await tx.addon.create({
+        data: {
+          id,
+          brand,
+          name,
+          price,
+          currency: dto.currency,
+          note: dto.note?.trim() || null,
+          forBrands,
+          glCode: dto.glCode,
+        },
+      });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'CATALOG_ADDON_CREATED',
+          detail: `Add-on added to the catalogue: ${brand} ${name}`,
+          payload: {
+            addonId: id,
+            brand,
+            name,
+            price,
+            currency: dto.currency,
+            forBrands,
+            glCode: dto.glCode,
+          },
+        },
+        tx,
+      );
+      return created;
+    });
+  }
 
   async updatePackage(id: string, dto: UpdatePackageDto, actor: AuthUser) {
     const pkg = await this.prisma.package.findUnique({
@@ -394,6 +827,56 @@ export class AdminService {
     });
   }
 
+  /**
+   * Additive, like the rest of the catalogue: a new profile is available to
+   * price against from now on and reaches nothing already taxed. A submission
+   * stores the rate it was taxed at.
+   */
+  async createTax(dto: CreateTaxDto, actor: AuthUser) {
+    const code = dto.code.trim().toUpperCase();
+    if (await this.prisma.taxProfile.findUnique({ where: { code } })) {
+      throw new BadRequestException(`A tax profile with the code ${code} already exists`);
+    }
+
+    // gst/pst/hst are omittable — the column defaults to 0, which is what a
+    // quoted rate with no statutory breakdown looks like. Only what was sent is
+    // set, so an omitted component takes the default rather than a guess.
+    const figures: Record<string, string> = {};
+    for (const key of ['rate', 'gst', 'pst', 'hst'] as const) {
+      const raw = dto[key];
+      if (raw === undefined) continue;
+      const next = decimal(raw, key.toUpperCase());
+      if (next.greaterThan(100)) {
+        throw new BadRequestException(`${key.toUpperCase()} cannot exceed 100%`);
+      }
+      figures[key] = next.toFixed(3);
+    }
+
+    const label = dto.label.trim();
+
+    return this.prisma.$transaction(async (tx) => {
+      const created = await tx.taxProfile.create({
+        data: {
+          ...figures,
+          code,
+          label,
+          note: dto.note?.trim() || null,
+          rate: figures.rate,
+        },
+      });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'CATALOG_TAX_CREATED',
+          detail: `Tax profile added: ${label} (${code})`,
+          payload: { taxCode: code, label, ...figures },
+        },
+        tx,
+      );
+      return created;
+    });
+  }
+
   async updateTax(code: string, dto: UpdateTaxDto, actor: AuthUser) {
     const tax = await this.prisma.taxProfile.findUnique({ where: { code } });
     if (!tax) throw new NotFoundException('Tax profile not found');
@@ -457,7 +940,7 @@ export class AdminService {
     const after: Record<string, Prisma.InputJsonValue | null> = {};
     const data: Prisma.SettingsUpdateInput = {};
 
-    const scalars = ['company', 'fiscalYear', 'invoicePrefix', 'qbRealmId'] as const;
+    const scalars = ['company', 'fiscalYear', 'invoicePrefix', 'gfcInvoicePrefix', 'qbRealmId'] as const;
     for (const key of scalars) {
       const next = dto[key];
       if (next === undefined || next === current[key]) continue;

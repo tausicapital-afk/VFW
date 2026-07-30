@@ -7,3 +7,7 @@ build/
 *.log
 .DS_Store
 *.tsbuildinfo
+
+# Local-only files that carry credentials (demo accounts, provisioning scripts).
+*.local.md
+*.local.ts

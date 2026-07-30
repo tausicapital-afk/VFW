@@ -4,11 +4,13 @@ import { AuthProvider, useAuth } from './auth/AuthContext';
 import { ThemeProvider } from './theme/ThemeContext';
 import { Account } from './pages/Account';
 import { Admin } from './pages/Admin';
+import { Attendance } from './pages/Attendance';
 import { Audit } from './pages/Audit';
 import { Board } from './pages/Board';
 import { Contacts } from './pages/Contacts';
 import { ContactDetail } from './pages/ContactDetail';
 import { Dashboard } from './pages/Dashboard';
+import { Emails } from './pages/Emails';
 import { Settings } from './pages/Settings';
 import { EditSubmission } from './pages/EditSubmission';
 import { Feedback } from './pages/Feedback';
@@ -17,6 +19,7 @@ import { Login } from './pages/Login';
 import { Logs } from './pages/Logs';
 import { Messages } from './pages/Messages';
 import { NewSubmission } from './pages/NewSubmission';
+import { Payroll } from './pages/Payroll';
 import { Qbo } from './pages/Qbo';
 import { Queue } from './pages/Queue';
 import { Reports } from './pages/Reports';
@@ -78,7 +81,10 @@ function Routed() {
         <Route path="/contacts" element={<Contacts />} />
         <Route path="/contacts/:id" element={<ContactDetail />} />
         <Route path="/messages" element={<Guard permission="messaging.use"><Messages /></Guard>} />
-        <Route path="/queue" element={<Guard permission="submission.approve"><Queue /></Guard>} />
+        <Route path="/emails" element={<Guard permission="email.viewOwn"><Emails /></Guard>} />
+        <Route path="/queue" element={<Guard permission="submission.queueView"><Queue /></Guard>} />
+        <Route path="/attendance" element={<Guard permission="attendance.mark"><Attendance /></Guard>} />
+        <Route path="/payroll" element={<Guard permission="payroll.viewOwn"><Payroll /></Guard>} />
         <Route path="/board" element={<Guard permission="leaderboard.view"><Board /></Guard>} />
         <Route path="/feedback" element={<Guard permission="feedback.view"><Feedback /></Guard>} />
         <Route path="/internal" element={<Guard permission="internal.view"><Internal /></Guard>} />

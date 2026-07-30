@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Module, Param, Patch, Post, Put } from '@nestjs/common';
+import { Body, Controller, Get, Module, Param, Patch, Post, Put, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser, Can, CurrentUser } from '../common/auth.guard';
 import { PricingService } from '../pricing/pricing.service';
@@ -6,11 +7,15 @@ import {
   ApproveDto,
   CreateSubmissionDto,
   ExportDto,
+  InvoiceNoDto,
   PatchSubmissionDto,
   PaymentDto,
   RejectDto,
   ReturnDto,
+  VoidDto,
 } from './dto';
+import { InstallmentsController } from './installments/installments.controller';
+import { InstallmentsService } from './installments/installments.service';
 import { SubmissionsService } from './submissions.service';
 
 @Controller('api/submissions')
@@ -27,9 +32,16 @@ export class SubmissionsController {
 
   // Declared before :id so "queue" is not swallowed as an id.
   @Get('queue')
-  @Can('submission.approve')
+  @Can('submission.queueView')
   queue(@CurrentUser() user: AuthUser) {
     return this.submissions.queue(user);
+  }
+
+  // Also before :id — the soft-deleted sales, for the roles that can restore them.
+  @Get('voided')
+  @Can('submission.void')
+  voided(@CurrentUser() user: AuthUser) {
+    return this.submissions.listVoided(user);
   }
 
   @Get(':id')
@@ -84,6 +96,59 @@ export class SubmissionsController {
     return this.submissions.generateInvoice(id, user);
   }
 
+  /**
+   * Set or change the invoice number by hand.
+   *
+   * Note the missing `@Can()`. It is missing on purpose: who may do this depends
+   * on the sale's *status*, not only on the caller's role — before approval it is
+   * whoever may edit the sale, after approval it is Accounting and Admin. A
+   * route-level grant can only see the role, so it would have to be the looser of
+   * the two, and the check that matters would live in the service anyway. Better
+   * one check in the place that can actually make it than two that disagree.
+   */
+  @Put(':id/invoice-no')
+  setInvoiceNo(
+    @Param('id') id: string,
+    @Body() dto: InvoiceNoDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.submissions.setInvoiceNo(id, dto.invoiceNo, user);
+  }
+
+  // The customer-facing document. Streams a PDF built from the stored figures;
+  // the invoice number must already exist (POST :id/invoice allocates it). We
+  // take the response object directly so the binary is not run through Nest's
+  // JSON serialization. A thrown error still surfaces before anything is written.
+  @Get(':id/invoice.pdf')
+  @Can('invoice.generate')
+  async invoicePdf(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUser,
+    @Res() res: Response,
+  ) {
+    const { buffer, filename } = await this.submissions.invoicePdf(id, user);
+    res
+      .status(200)
+      .set({
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Length': String(buffer.length),
+      })
+      .end(buffer);
+  }
+
+  @Post(':id/void')
+  @Can('submission.void')
+  void(@Param('id') id: string, @Body() dto: VoidDto, @CurrentUser() user: AuthUser) {
+    return this.submissions.void(id, dto.reason, user);
+  }
+
+  @Post(':id/unvoid')
+  @Can('submission.void')
+  unvoid(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.submissions.unvoid(id, user);
+  }
+
   @Post(':id/export')
   @Can('quickbooks.export')
   export(@Param('id') id: string, @Body() dto: ExportDto, @CurrentUser() user: AuthUser) {
@@ -100,8 +165,11 @@ export class SubmissionsController {
 }
 
 @Module({
-  controllers: [SubmissionsController],
-  providers: [SubmissionsService, PricingService],
+  // InstallmentsController is registered after SubmissionsController, but the
+  // two cannot collide: every instalment route carries an extra path segment, so
+  // `:id` never swallows it.
+  controllers: [SubmissionsController, InstallmentsController],
+  providers: [SubmissionsService, InstallmentsService, PricingService],
   // Exported so ContactsService can reuse scopeFor() rather than reinventing it.
   exports: [SubmissionsService],
 })

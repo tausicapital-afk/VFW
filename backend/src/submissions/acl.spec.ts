@@ -28,14 +28,18 @@ type Ep = { name: string; method: 'get' | 'post' | 'patch'; path: string; permis
 const ENDPOINTS: Ep[] = [
   { name: 'GET  /contacts', method: 'get', path: '/api/contacts', permission: 'contacts.view' },
   { name: 'POST /contacts', method: 'post', path: '/api/contacts', permission: 'contacts.create', body: { brand: '' } },
-  { name: 'GET  /queue', method: 'get', path: '/api/submissions/queue', permission: 'submission.approve' },
+  { name: 'GET  /queue', method: 'get', path: '/api/submissions/queue', permission: 'submission.queueView' },
   { name: 'POST /approve', method: 'post', path: '/api/submissions/no-such-id/approve', permission: 'submission.approve' },
   { name: 'POST /reject', method: 'post', path: '/api/submissions/no-such-id/reject', permission: 'submission.reject', body: { reason: 'x' } },
   { name: 'POST /return', method: 'post', path: '/api/submissions/no-such-id/return', permission: 'submission.return', body: { note: 'x' } },
   { name: 'POST /payments', method: 'post', path: '/api/submissions/no-such-id/payments', permission: 'accounting.fields', body: { date: '2026-01-01', amount: 1, method: 'Cash' } },
   { name: 'PATCH /:id', method: 'patch', path: '/api/submissions/no-such-id', permission: 'accounting.fields', body: { glAccount: '4010' } },
   { name: 'POST /invoice', method: 'post', path: '/api/submissions/no-such-id/invoice', permission: 'invoice.generate' },
+  { name: 'GET  /invoice.pdf', method: 'get', path: '/api/submissions/no-such-id/invoice.pdf', permission: 'invoice.generate' },
   { name: 'POST /export', method: 'post', path: '/api/submissions/no-such-id/export', permission: 'quickbooks.export' },
+  { name: 'GET  /voided', method: 'get', path: '/api/submissions/voided', permission: 'submission.void' },
+  { name: 'POST /void', method: 'post', path: '/api/submissions/no-such-id/void', permission: 'submission.void' },
+  { name: 'POST /unvoid', method: 'post', path: '/api/submissions/no-such-id/unvoid', permission: 'submission.void' },
 ];
 
 describe('ACL boundary (server-side authorization)', () => {
@@ -91,9 +95,21 @@ describe('ACL boundary (server-side authorization)', () => {
       expect(res.status).toBe(403);
     });
 
-    it('SALES -> GET /queue -> 403', async () => {
+    it('SALES -> GET /queue -> 200, but only their own rows (reading is not deciding)', async () => {
+      const me = await http(app).get('/api/auth/me').set('Cookie', cookies.SALES).expect(200);
+      const myId = me.body.user.id as string;
+
       const res = await http(app).get('/api/submissions/queue').set('Cookie', cookies.SALES);
-      expect(res.status).toBe(403);
+      expect(res.status).toBe(200);
+      const rows = res.body as { repId: string }[];
+      // The queue is the one submission read with a second audience. If the
+      // scope ever comes off, a rep reads every rep's brand, discount and total.
+      expect(rows.every((s) => s.repId === myId)).toBe(true);
+
+      // Accounting sees the same queue unscoped, so this is a real restriction
+      // and not just an empty-table pass.
+      const acct = await http(app).get('/api/submissions/queue').set('Cookie', cookies.ACCT).expect(200);
+      expect((acct.body as unknown[]).length).toBeGreaterThanOrEqual(rows.length);
     });
 
     it("rep A -> GET rep B's submission -> 404, NOT 403 (no existence probing)", async () => {
@@ -138,9 +154,33 @@ describe('ACL boundary (server-side authorization)', () => {
       expect(can('feedback.record', 'INTERN')).toBe(false);
     });
 
-    it('never gets anything an ADMIN-only permission guards', () => {
+    it('never gets administration or the logs', () => {
       expect(can('admin.manage', 'INTERN')).toBe(false);
       expect(can('activity.view', 'INTERN')).toBe(false);
+    });
+  });
+
+  // ---- ACCT and ADMIN are equals: both hold every permission ----
+  describe('Accounting and Admin have identical, full permissions', () => {
+    it('can manage users and roles', () => {
+      expect(can('admin.manage', 'ACCT')).toBe(true);
+    });
+
+    it('reads the activity log, like an admin', () => {
+      expect(can('activity.view', 'ACCT')).toBe(true);
+    });
+
+    it('holds every permission the admin holds, and nothing less', () => {
+      for (const perm of Object.keys(ACL) as Permission[]) {
+        expect(can(perm, 'ACCT')).toBe(can(perm, 'ADMIN'));
+        expect(can(perm, 'ACCT')).toBe(true);
+      }
+    });
+
+    it('MGR and the rep roles are unaffected', () => {
+      for (const role of ['SALES', 'INTERN', 'MGR'] as const) {
+        expect(can('admin.manage', role)).toBe(false);
+      }
     });
   });
 
@@ -172,13 +212,14 @@ describe('ACL boundary (server-side authorization)', () => {
 
     it('a role change takes effect on the next request, not in 30 days', async () => {
       const cookie = await loginCookie(app, 'aiko@vanfashionweek.com');
-      // As SALES, the approval queue is off limits.
-      expect((await http(app).get('/api/submissions/queue').set('Cookie', cookie)).status).toBe(403);
+      // As SALES, reports are off limits. (Not the approval queue — a rep may
+      // now read that one, so it no longer separates the two roles.)
+      expect((await http(app).get('/api/reports/types').set('Cookie', cookie)).status).toBe(403);
 
       await prisma.user.update({ where: { email: 'aiko@vanfashionweek.com' }, data: { role: 'ACCT' } });
       try {
         // Same cookie, minted while they were SALES — the guard re-reads the role.
-        const res = await http(app).get('/api/submissions/queue').set('Cookie', cookie);
+        const res = await http(app).get('/api/reports/types').set('Cookie', cookie);
         expect(res.status).toBe(200);
       } finally {
         await prisma.user.update({ where: { email: 'aiko@vanfashionweek.com' }, data: { role: 'SALES' } });

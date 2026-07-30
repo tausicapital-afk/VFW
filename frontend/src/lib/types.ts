@@ -1,6 +1,6 @@
 export type Role = 'SALES' | 'INTERN' | 'ACCT' | 'MGR' | 'ADMIN';
 export type SubmissionStatus =
-  | 'DRAFT' | 'PENDING' | 'RETURNED' | 'APPROVED' | 'REJECTED' | 'EXPORTED';
+  | 'DRAFT' | 'PENDING' | 'RETURNED' | 'APPROVED' | 'REJECTED' | 'EXPORTED' | 'VOIDED';
 export type PayStatus = 'UNPAID' | 'PARTIAL' | 'PAID';
 export type Currency = 'USD' | 'CAD' | 'GBP' | 'EUR' | 'JPY';
 
@@ -9,8 +9,81 @@ export interface User {
   name: string;
   email: string;
   role: Role;
+  phone?: string | null;
   department?: string | null;
+  title?: string | null;
   colour?: string;
+  /**
+   * A presigned link to the uploaded picture, or null for the initials avatar.
+   * Signed for an hour by the API; the session query refetches well inside that,
+   * so a page left open never ends up rendering a dead link.
+   */
+  avatarUrl?: string | null;
+}
+
+/** The Account screen's model: everything above, plus what it shows read-only. */
+export interface Profile extends User {
+  employeeId?: string | null;
+  status?: UserStatus;
+  hasAvatar: boolean;
+  createdAt: string;
+  lastLoginAt?: string | null;
+}
+
+// --- Attendance ------------------------------------------------------------
+
+export type AttendanceStatus =
+  | 'PRESENT' | 'REMOTE' | 'LEAVE' | 'SICK' | 'HOLIDAY' | 'ABSENT';
+
+export interface AttendanceEntry {
+  id: string;
+  userId: string;
+  /** A calendar day, "YYYY-MM-DD". Never parse this as an instant. */
+  date: string;
+  status: AttendanceStatus;
+  /** Decimal string, like money — total it with care, display it freely. */
+  hours: string;
+  checkIn: string | null;
+  checkOut: string | null;
+  note: string | null;
+  /** Set when somebody other than the subject last wrote the row. */
+  correctedBy: { id: string; name: string } | null;
+  updatedAt: string;
+}
+
+export interface AttendanceSummary {
+  days: number;
+  daysWorked: number;
+  hours: string;
+  avgHours: string;
+  byStatus: Record<AttendanceStatus, number>;
+}
+
+export interface AttendancePerson {
+  id: string;
+  name: string;
+  role: Role;
+  department: string | null;
+  colour: string;
+  avatarUrl: string | null;
+}
+
+export interface AttendanceSheet {
+  month: string;
+  user: AttendancePerson | null;
+  /** Whether this is the caller's own sheet — decides clock-in vs correction. */
+  self: boolean;
+  entries: AttendanceEntry[];
+  summary: AttendanceSummary;
+}
+
+export interface AttendanceTeam {
+  month: string;
+  rows: {
+    user: AttendancePerson;
+    entries: AttendanceEntry[];
+    summary: AttendanceSummary;
+  }[];
 }
 
 /**
@@ -92,6 +165,30 @@ export interface Payment {
   createdAt: string;
 }
 
+export type InstallmentStatus = 'PENDING' | 'PAID';
+
+/**
+ * One line of a payment plan. A plan is just the ordered set of these on a
+ * submission — there is no separate plan object to fetch.
+ *
+ * Note there is no "paid amount" here: marking one done posts a real Payment
+ * for `amount`, so the sale's paidAmount/balance are the only figures that ever
+ * say how much has been received.
+ */
+export interface Installment {
+  id: string;
+  seq: number;
+  label: string | null;
+  dueDate: string;
+  amount: Money;
+  currency: Currency;
+  method: string | null;
+  status: InstallmentStatus;
+  paidAt: string | null;
+  paidBy: { id: string; name: string } | null;
+  paymentId: string | null;
+}
+
 export interface Submission {
   id: string;
   ref: string;
@@ -122,6 +219,8 @@ export interface Submission {
   department: string | null;
   invoiceNo: string | null;
   qbDocNumber: string | null;
+  voidedFrom: SubmissionStatus | null;
+  voidedAt: string | null;
   rejectReason: string | null;
   returnNote: string | null;
   submittedAt: string | null;
@@ -133,6 +232,7 @@ export interface Submission {
   package: PackageRow;
   addons: { addonId: string; qty: number; amount: Money; addon: AddonRow }[];
   payments: Payment[];
+  installments: Installment[];
   tax: TaxProfile;
 }
 
@@ -142,6 +242,48 @@ export interface AuditEntry {
   detail: string | null;
   createdAt: string;
   actor: { id: string; name: string; role: Role } | null;
+}
+
+// --- Emails: the sent/received log (backend/src/emails) -----------------------
+
+export type EmailDirection = 'OUTBOUND' | 'INBOUND';
+export type EmailStatus = 'SENT' | 'FAILED' | 'RECEIVED';
+export type EmailKind =
+  | 'OTP' | 'WELCOME' | 'PASSWORD_RESET' | 'PASSWORD_CHANGED'
+  | 'INVITATION' | 'INVOICE' | 'TEST' | 'INBOUND' | 'OTHER';
+
+/** A row in the Emails list — the summary shape, without the full body. */
+export interface EmailRow {
+  id: string;
+  direction: EmailDirection;
+  status: EmailStatus;
+  kind: EmailKind;
+  fromAddress: string;
+  fromName: string | null;
+  toAddress: string;
+  subject: string;
+  /** A safe snippet — shown even when the body itself is withheld. */
+  preview: string | null;
+  provider: string | null;
+  error: string | null;
+  sentAt: string | null;
+  receivedAt: string | null;
+  createdAt: string;
+  triggeredBy: { id: string; name: string } | null;
+  submission: { id: string; ref: string; invoiceNo: string | null } | null;
+}
+
+/** The detail shape — the row plus the stored body (null when redacted). */
+export interface EmailDetail extends EmailRow {
+  bodyText: string | null;
+  bodyHtml: string | null;
+}
+
+/** The result of POST /api/emails/invoice. */
+export interface SendInvoiceResult {
+  ok: boolean;
+  invoiceNo: string;
+  to: string;
 }
 
 // --- Insight: reports, leaderboard, audit trail ------------------------------
@@ -291,7 +433,66 @@ export interface AdminUser extends User {
   employeeId: string | null;
   commissionPct: Money;
   target: Money;
+  payType: PayType;
+  /** Monthly under SALARY, hourly under HOURLY, ignored when commission-only. */
+  baseRate: Money;
   createdAt: string;
+}
+
+// --- Payroll ---------------------------------------------------------------
+
+export type PayType = 'SALARY' | 'HOURLY' | 'COMMISSION_ONLY';
+
+export interface PayrollStatement {
+  user: {
+    id: string;
+    name: string;
+    email: string;
+    phone: string | null;
+    role: Role;
+    title: string | null;
+    department: string | null;
+    employeeId: string | null;
+    colour: string;
+    status: UserStatus;
+    createdAt: string;
+    avatarUrl: string | null;
+    commissionPct: Money;
+    target: Money;
+    baseRate: Money;
+  };
+  attendance: { days: number; daysWorked: number; hours: string; avgHours: string };
+  sales: { count: number; revenue: Money; invoiced: Money };
+  pay: {
+    payType: PayType;
+    baseRate: Money;
+    /** The hours the base was multiplied by, or null when it was not hourly. */
+    baseHours: string | null;
+    base: Money;
+    commission: Money;
+    /** Of the commission above, how much sits against invoices not yet settled. */
+    commissionUnpaid: Money;
+    gross: Money;
+  };
+}
+
+/** One person's month. `self` decides whether the screen says "you" or a name. */
+export interface PayrollSheet extends PayrollStatement {
+  month: string;
+  self: boolean;
+}
+
+export interface PayrollRun {
+  month: string;
+  rows: PayrollStatement[];
+  totals: {
+    people: number;
+    base: Money;
+    commission: Money;
+    commissionUnpaid: Money;
+    gross: Money;
+    hours: string;
+  };
 }
 
 export interface Invitation {
@@ -315,6 +516,8 @@ export interface Settings {
   fiscalYear: number;
   invoicePrefix: string;
   nextInvoiceSeq: number;
+  gfcInvoicePrefix: string;
+  nextGfcInvoiceSeq: number;
   discountApprovalPct: Money;
   qbRealmId: string | null;
   fxRates: Record<string, number>;
@@ -371,4 +574,114 @@ export interface InternalComment {
     rep: { id: string; name: string };
     contact: { brand: string };
   };
+}
+
+// ---------------------------------------------------------------------------
+// System configuration (Administration → Configuration)
+//
+// Data-driven: the backend registry describes the fields, and the UI renders
+// from it. A secret's plaintext is never sent here — only whether it is set.
+// See backend/src/config/config.registry.ts.
+// ---------------------------------------------------------------------------
+export type ConfigSource = 'db' | 'env' | 'default';
+export type ConfigFieldType = 'text' | 'number' | 'email' | 'color' | 'secret' | 'select';
+
+export interface ConfigFieldState {
+  key: string;
+  source: ConfigSource;
+  value?: string; // non-secret effective value; absent for secrets
+  isSet: boolean;
+  hasEnv: boolean;
+  decryptError?: boolean;
+}
+
+export interface ConfigField {
+  key: string;
+  label: string;
+  type: ConfigFieldType;
+  help?: string;
+  placeholder?: string;
+  options?: string[];
+  required?: boolean;
+  state: ConfigFieldState;
+}
+
+export interface ConfigGroup {
+  id: 'email' | 'storage';
+  title: string;
+  blurb: string;
+  /** null when the group requires nothing — draw no status pill. */
+  configured: boolean | null;
+  fields: ConfigField[];
+}
+
+export interface EnvPanelRow {
+  key: string;
+  label: string;
+  secret: boolean;
+  help: string;
+  isSet: boolean;
+  value?: string;
+}
+
+export interface ConfigState {
+  groups: ConfigGroup[];
+  env: EnvPanelRow[];
+}
+
+export interface ConfigTestResult {
+  ok: boolean;
+  error?: string;
+  sentTo?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Mail accounts — the SMTP mailboxes the app can send from. Exactly one is
+// active; switching is one click. The password is never sent here, in either
+// direction, except when the admin is setting a new one.
+// See backend/src/config/mail-account.service.ts.
+// ---------------------------------------------------------------------------
+export interface MailAccount {
+  id: string;
+  /** smtp = a mailbox dialled directly; resend = an HTTP API over 443. */
+  provider: string;
+  label: string;
+  host: string;
+  port: number;
+  encryption: string;
+  username: string;
+  fromAddress: string;
+  fromName?: string;
+  isActive: boolean;
+  /** Stored secret can no longer be decrypted — it must be re-entered. */
+  decryptError?: boolean;
+  updatedAt: string;
+}
+
+export interface MailStatus {
+  /** account = a row is sending; legacy = the old MAIL_* settings are; none = nothing can. */
+  source: 'account' | 'legacy' | 'none';
+  legacyReady: boolean;
+}
+
+export interface MailAccountsState {
+  accounts: MailAccount[];
+  status: MailStatus;
+}
+
+/**
+ * The editable shape. `password` blank on an edit means "keep the stored one" —
+ * except when the provider changes, where the server demands the new credential
+ * rather than carrying an SMTP password over as an API key.
+ */
+export interface MailAccountInput {
+  label: string;
+  provider: string;
+  host: string;
+  port: number;
+  encryption: string;
+  username: string;
+  password: string;
+  fromAddress: string;
+  fromName: string;
 }

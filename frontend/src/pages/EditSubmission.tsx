@@ -5,7 +5,9 @@ import { useAuth } from '../auth/AuthContext';
 import { can } from '../lib/acl';
 import { api } from '../lib/api';
 import { money } from '../lib/format';
-import type { Catalog, Currency, Submission } from '../lib/types';
+import { discountPctOfPackage, discountPreview } from '../lib/pricing';
+import { SEASON_TABS, seasonLabel, seasonTab, type SeasonTab } from '../lib/season';
+import type { Catalog, Currency, DiscountType, Submission } from '../lib/types';
 import { Page } from '../shell/Shell';
 
 const PAYMENT_METHODS = [
@@ -23,7 +25,8 @@ function Row({ label, value, cls }: { label: string; value: string; cls?: string
 }
 
 /**
- * Edit and resubmit a DRAFT or RETURNED submission. The form mirrors New
+ * Edit a submission that has not been decided yet (draft, returned, pending), or
+ * amend one that has (approved, exported) if you are Accounting. The form mirrors New
  * submission: the client sends what was *sold*, and the server re-prices it from
  * the catalogue on save — the preview here is indicative only.
  */
@@ -49,9 +52,11 @@ export function EditSubmission() {
   const [company, setCompany] = useState('');
   const [email, setEmail] = useState('');
   const [country, setCountry] = useState('');
+  const [season, setSeason] = useState<SeasonTab>('FW');
   const [eventId, setEventId] = useState('');
   const [packageId, setPackageId] = useState('');
   const [addonIds, setAddonIds] = useState<string[]>([]);
+  const [discountType, setDiscountType] = useState<DiscountType>('PCT');
   const [discountValue, setDiscountValue] = useState(0);
   const [deposit, setDeposit] = useState(0);
   const [paymentMethod, setPaymentMethod] = useState(PAYMENT_METHODS[0]);
@@ -68,9 +73,11 @@ export function EditSubmission() {
     setCompany(sub.contact.company ?? '');
     setEmail(sub.contact.email ?? '');
     setCountry(sub.contact.country ?? '');
+    setSeason(seasonTab(sub.event.season));
     setEventId(sub.event.id);
     setPackageId(sub.package.id);
     setAddonIds(sub.addons.map((a) => a.addonId));
+    setDiscountType(sub.discountType);
     setDiscountValue(Number(sub.discountValue));
     setDeposit(Number(sub.deposit));
     setPaymentMethod(sub.paymentMethod ?? PAYMENT_METHODS[0]);
@@ -80,6 +87,23 @@ export function EditSubmission() {
   }, [sub, seeded]);
 
   const event = catalog?.events.find((e) => e.id === eventId);
+
+  // The Show list is narrowed to the chosen season tab.
+  const shows = useMemo(
+    () => catalog?.events.filter((ev) => seasonTab(ev.season) === season) ?? [],
+    [catalog, season],
+  );
+
+  // Switching seasons drops a show that no longer belongs — and with it the
+  // package and add-ons that were keyed off that show.
+  function chooseSeason(next: SeasonTab) {
+    setSeason(next);
+    if (event && seasonTab(event.season) !== next) {
+      setEventId('');
+      setPackageId('');
+      setAddonIds([]);
+    }
+  }
 
   const packages = useMemo(() => {
     if (!catalog || !event) return [];
@@ -106,13 +130,13 @@ export function EditSubmission() {
       .filter((a) => addonIds.includes(a.id))
       .reduce((t, a) => t + Number(a.price), 0);
     const subtotal = base + addonTotal;
-    const discount = Math.round(subtotal * (discountValue / 100) * 100) / 100;
+    const discount = discountPreview(base, discountType, discountValue);
     const taxable = Math.max(0, subtotal - discount);
     const rate = Number(catalog.taxes.find((t) => t.code === pkg.taxCode)?.rate ?? 0);
     const tax = Math.round(taxable * (rate / 100) * 100) / 100;
     const total = Math.round((taxable + tax) * 100) / 100;
     return { base, addonTotal, subtotal, discount, taxable, rate, tax, total, balance: total - deposit };
-  }, [pkg, price, catalog, sellable, addonIds, discountValue, deposit]);
+  }, [pkg, price, catalog, sellable, addonIds, discountType, discountValue, deposit]);
 
   const resubmit = useMutation({
     mutationFn: () =>
@@ -122,7 +146,7 @@ export function EditSubmission() {
         email: email || undefined,
         country: country || undefined,
         eventId, packageId, addonIds,
-        discountType: 'PCT',
+        discountType,
         discountValue,
         deposit,
         paymentMethod,
@@ -152,17 +176,28 @@ export function EditSubmission() {
     );
   }
 
-  const editable =
-    sub.rep.id === user?.id &&
-    ['DRAFT', 'RETURNED'].includes(sub.status) &&
-    can('submission.editOwn', user?.role);
+  // The same rule the server enforces in update(). Undecided sales — draft,
+  // returned, and now pending — are correctable by whoever owns them; an approved
+  // or exported one is an amendment, and only Accounting/Admin may make it.
+  const decided = ['APPROVED', 'EXPORTED'].includes(sub.status);
+  const mine = sub.rep.id === user?.id && can('submission.editOwn', user?.role);
+  const editable = decided
+    ? can('submission.editAny', user?.role)
+    : ['DRAFT', 'RETURNED', 'PENDING'].includes(sub.status) &&
+      (mine || can('submission.editAny', user?.role));
 
   if (!editable) {
     return (
       <Page crumb="Work" title="Cannot edit">
         <div className="empty">
           <h3>This submission cannot be edited</h3>
-          <p>Only your own draft or returned submissions can be corrected and resubmitted.</p>
+          <p>
+            {decided
+              ? 'This sale is approved. Only Accounting or an administrator can amend it now.'
+              : sub.status === 'VOIDED'
+                ? 'This sale is voided. Restore it before editing.'
+                : 'This sale was rejected. It has to be returned to sales before it can be edited.'}
+          </p>
         </div>
       </Page>
     );
@@ -171,10 +206,29 @@ export function EditSubmission() {
   const ready = designer && brand && eventId && packageId;
 
   return (
-    <Page crumb="Work / Submissions" title={`Edit ${sub.ref}`}>
+    <Page crumb="Work / Submissions" title={`${decided ? 'Amend' : 'Edit'} ${sub.ref}`}>
       {sub.status === 'RETURNED' && sub.returnNote && (
         <div className="note warn" style={{ marginBottom: 16 }}>
           <b>Returned by Accounting:</b> {sub.returnNote}
+        </div>
+      )}
+      {sub.status === 'PENDING' && (
+        <div className="note" style={{ marginBottom: 16 }}>
+          This sale is queued for approval. Saving keeps it in the queue in its current
+          place — it is a correction, not a resubmission.
+        </div>
+      )}
+      {decided && (
+        <div className="note warn" style={{ marginBottom: 16 }}>
+          <b>This sale is already approved.</b> Saving re-prices it and keeps the approval —
+          it does not go back through the queue.
+          {sub.status === 'EXPORTED' && (
+            <>
+              {' '}It has also been exported to QuickBooks
+              {sub.qbDocNumber ? ` as ${sub.qbDocNumber}` : ''}, and those figures will
+              <b> not</b> change. Re-sync them by hand.
+            </>
+          )}
         </div>
       )}
       <div className="split">
@@ -213,6 +267,18 @@ export function EditSubmission() {
 
           <div className="sect">
             <div className="hd"><h3>Event</h3><span className="n">02</span></div>
+            <div className="tabs" style={{ marginBottom: 14 }}>
+              {SEASON_TABS.map((t) => (
+                <button
+                  key={t.key}
+                  type="button"
+                  className={'tab' + (season === t.key ? ' on' : '')}
+                  onClick={() => chooseSeason(t.key)}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
             <div className="fields">
               <div className="f wide">
                 <label>Show <span className="req">*</span></label>
@@ -226,9 +292,9 @@ export function EditSubmission() {
                   required
                 >
                   <option value="">Select a show…</option>
-                  {catalog?.events.map((ev) => (
+                  {shows.map((ev) => (
                     <option key={ev.id} value={ev.id}>
-                      {ev.name} — {ev.city.name} · {ev.season}
+                      {ev.name} — {ev.city.name} · {seasonLabel(ev.season)}
                     </option>
                   ))}
                 </select>
@@ -310,14 +376,25 @@ export function EditSubmission() {
             <div className="hd"><h3>Pricing &amp; payment</h3><span className="n">05</span></div>
             <div className="fields">
               <div className="f">
-                <label>Discount (%)</label>
-                <input
-                  type="number" min={0} max={100} step="0.01"
-                  value={discountValue}
-                  onChange={(e) => setDiscountValue(Number(e.target.value))}
-                />
-                {discountValue > 15 && (
-                  <div className="help">Above 15% — Accounting must sign this off explicitly.</div>
+                <label>Discount</label>
+                <div className="rowflex" style={{ gap: 8 }}>
+                  <select
+                    value={discountType}
+                    onChange={(e) => setDiscountType(e.target.value as DiscountType)}
+                    style={{ maxWidth: 150 }}
+                  >
+                    <option value="PCT">Percentage (%)</option>
+                    <option value="AMT">Amount ({currency})</option>
+                  </select>
+                  <input
+                    type="number" min={0} max={discountType === 'PCT' ? 100 : undefined} step="0.01"
+                    value={discountValue}
+                    onChange={(e) => setDiscountValue(Number(e.target.value))}
+                  />
+                </div>
+                <div className="help">Applies to the package price only — add-ons are never discounted.</div>
+                {discountPctOfPackage(preview?.base ?? 0, discountType, discountValue) > 15 && (
+                  <div className="help">Above 15% of the package — Accounting must sign this off explicitly.</div>
                 )}
               </div>
               <div className="f">
@@ -348,7 +425,13 @@ export function EditSubmission() {
 
           <div className="rowflex">
             <button className="btn primary" disabled={!ready || resubmit.isPending}>
-              {resubmit.isPending ? 'Resubmitting…' : 'Resubmit to Accounting'}
+              {resubmit.isPending
+                ? 'Saving…'
+                : decided
+                  ? 'Save amendment'
+                  : sub.status === 'PENDING'
+                    ? 'Save correction'
+                    : 'Resubmit to Accounting'}
             </button>
             <button type="button" className="btn" onClick={() => nav(`/submissions/${id}`)}>
               Cancel
@@ -371,7 +454,10 @@ export function EditSubmission() {
                 <Row label="Add-ons" value={money(preview.addonTotal, currency)} />
                 <Row label="Subtotal" value={money(preview.subtotal, currency)} />
                 {preview.discount > 0 && (
-                  <Row label={`Discount (${discountValue}%)`} value={'− ' + money(preview.discount, currency)} />
+                  <Row
+                    label={discountType === 'PCT' ? `Discount (${discountValue}% of package)` : 'Discount (package)'}
+                    value={'− ' + money(preview.discount, currency)}
+                  />
                 )}
                 <Row label="Net revenue" value={money(preview.taxable, currency)} />
                 <Row label={`Tax (${preview.rate}%)`} value={money(preview.tax, currency)} />
@@ -385,7 +471,7 @@ export function EditSubmission() {
               </div>
             )}
             <div className="note lock" style={{ marginTop: 14 }}>
-              Indicative only. Accounting's figure is recomputed from the rate card on resubmit.
+              Indicative only. Accounting's figure is recomputed from the rate card on save.
             </div>
           </div>
         </div>

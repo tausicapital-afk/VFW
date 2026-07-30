@@ -28,6 +28,18 @@ enum Role {
   ADMIN
 }
 
+// How someone's base pay is worked out, before commission.
+//
+// The third case is not "no pay" — it is the commission-only rep, whose entire
+// earnings are the percentage of sales below. Keeping it as an explicit pay type
+// rather than a zero salary is the difference between "we know this person is on
+// commission" and "somebody forgot to fill in the rate".
+enum PayType {
+  SALARY
+  HOURLY
+  COMMISSION_ONLY
+}
+
 // Signup is invitation-only and still requires an admin to approve the account,
 // so a user exists in PENDING before they can authenticate.
 enum UserStatus {
@@ -47,14 +59,49 @@ model User {
   role          Role
   department    String?
   status        UserStatus @default(PENDING)
+  // Operational-only accounts (demo / test logins) that must keep working but
+  // stay off the admin Users tab. Hidden is orthogonal to status: a hidden user
+  // is still ACTIVE and authenticates normally — it is only filtered out of the
+  // admin people listings, never out of auth.
+  hidden        Boolean    @default(false)
+  // Soft delete. Distinct from `hidden`, which keeps a working account off the
+  // listings: a deleted account is gone as far as the app is concerned — it is
+  // filtered from every admin listing AND refused at login and by the guard.
+  // The row survives only so the audit trail it is named in stays readable.
+  // Note this does not free the email: the unique constraint still holds it.
+  deletedAt     DateTime?
   // Bumped to invalidate every session this user currently holds. The session
   // JWT carries the value it was minted with; the guard refuses a token whose
   // value has fallen behind. A password reset bumps it, so a stolen session
   // dies with the password that leaked it.
   tokenVersion  Int        @default(0)
+  // The percentage of net revenue this person earns on a sale they close. Copied
+  // onto each Submission at creation — see the note on Submission.commissionPct —
+  // so changing it here moves the NEXT sale's commission, never one already on
+  // the books.
   commissionPct Decimal    @default(0) @db.Decimal(5, 2)
   target        Decimal    @default(0) @db.Decimal(14, 2)
+  // --- Payroll -------------------------------------------------------------
+  // Base pay, before commission. A monthly figure when SALARY, an hourly one
+  // when HOURLY (multiplied by the hours in Attendance), and ignored entirely
+  // when COMMISSION_ONLY.
+  //
+  // Held in CAD, the reporting currency, with no per-user currency to disagree
+  // with — the same choice `target` makes above.
+  payType       PayType    @default(COMMISSION_ONLY)
+  baseRate      Decimal    @default(0) @db.Decimal(14, 2)
   colour        String     @default("#0E0E11")
+  // Job title, as the person writes it ("Senior Sales Representative"). Free
+  // text and self-edited, unlike `role`, which is the permission grant and stays
+  // an administrator's to give. The two are deliberately not the same field: a
+  // title people can rewrite about themselves must never be able to move them
+  // between roles.
+  title         String?
+  // R2 object key for an uploaded profile picture, under avatars/<userId>/.
+  // Null is the normal state, and not a missing image: the initials-on-colour
+  // avatar is a first-class rendering, not a placeholder, so nothing breaks when
+  // object storage is unconfigured.
+  avatarKey     String?
   // Presence: when this user's last socket disconnected. Powers "last seen".
   lastSeenAt    DateTime?
   // When this user most recently authenticated. Null = has never logged in.
@@ -62,15 +109,17 @@ model User {
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
-  submissions       Submission[]     @relation("SubmissionRep")
-  approvals         Submission[]     @relation("SubmissionApprover")
+  submissions       Submission[]       @relation("SubmissionRep")
+  approvals         Submission[]       @relation("SubmissionApprover")
+  voided            Submission[]       @relation("SubmissionVoider")
   contactsCreated   Contact[]
   paymentsRecorded  Payment[]
+  installmentsPaid  Installment[]      @relation("InstallmentPayer")
   documentsUploaded Document[]
   comments          InternalComment[]
   feedbackRecorded  DesignerFeedback[]
   auditEntries      AuditEntry[]
-  invitationsIssued Invitation[]     @relation("InvitationIssuer")
+  invitationsIssued Invitation[]       @relation("InvitationIssuer")
   passwordResets    PasswordReset[]
   emailOtps         EmailOtp[]
 
@@ -78,8 +127,13 @@ model User {
   participations       ConversationParticipant[]
   messagesSent         Message[]                 @relation("MsgSender")
 
-  activityLogs         ActivityLog[]
-  sessions             UserSession[]
+  emailsTriggered EmailMessage[] @relation("EmailTriggeredBy")
+
+  activityLogs ActivityLog[]
+  sessions     UserSession[]
+
+  attendance       AttendanceEntry[] @relation("AttendanceSubject")
+  attendanceEdited AttendanceEntry[] @relation("AttendanceEditor")
 
   @@index([role, status])
 }
@@ -94,6 +148,12 @@ model Invitation {
   usedAt     DateTime?
   usedById   String?
   revokedAt  DateTime?
+  // Soft delete, and not the same thing as `revokedAt`: revoking is a decision
+  // about the invitation that admins are meant to keep seeing afterwards,
+  // deleting is a decision about the list. Both stop the code being redeemed —
+  // a "deleted" invitation that still let someone sign up would be a trap.
+  // The row survives for the audit entries that name it.
+  deletedAt  DateTime?
   createdAt  DateTime  @default(now())
 
   createdById String
@@ -212,11 +272,11 @@ model GlAccount {
 }
 
 model Package {
-  id    String  @id
-  brand String
-  name  String
-  looks Int
-  blurb String?
+  id        String   @id
+  brand     String
+  name      String
+  looks     Int
+  blurb     String?
   // Sponsored packages are billed at a nominal fee; listValue records the
   // revenue that was forgone so reporting can show it.
   listValue Decimal? @db.Decimal(14, 2)
@@ -249,12 +309,12 @@ model PackagePrice {
 }
 
 model Addon {
-  id       String   @id
-  brand    String
-  name     String
-  price    Decimal  @db.Decimal(14, 2)
-  currency Currency
-  note     String?
+  id        String   @id
+  brand     String
+  name      String
+  price     Decimal  @db.Decimal(14, 2)
+  currency  Currency
+  note      String?
   // Which brands may buy this add-on.
   forBrands String[]
 
@@ -271,14 +331,14 @@ model Addon {
 // ---------------------------------------------------------------------------
 
 model Contact {
-  id       String  @id @default(cuid())
-  brand    String
-  designer String
-  company  String?
-  email    String?
-  phone    String?
-  country  String?
-  type     String  @default("Designer")
+  id        String   @id @default(cuid())
+  brand     String
+  designer  String
+  company   String?
+  email     String?
+  phone     String?
+  country   String?
+  type      String   @default("Designer")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -305,6 +365,10 @@ enum SubmissionStatus {
   APPROVED
   REJECTED
   EXPORTED
+  // Soft-deleted by Admin/Accounting: hidden from normal lists and reports, but
+  // retained for audit and reversible. A voided sale never reuses its ref or
+  // invoice number. See SubmissionsService.void / unvoid.
+  VOIDED
 }
 
 enum PayStatus {
@@ -316,6 +380,11 @@ enum PayStatus {
 enum DiscountType {
   PCT
   AMT
+}
+
+enum InstallmentStatus {
+  PENDING
+  PAID
 }
 
 model Submission {
@@ -342,21 +411,21 @@ model Submission {
 
   // --- Money. All of it is computed server-side by PricingService; the client
   // --- sends inputs (package, addons, discount) and never sends a total.
-  currency     Currency
-  packagePrice Decimal      @db.Decimal(14, 2)
-  addonTotal   Decimal      @default(0) @db.Decimal(14, 2)
-  subtotal     Decimal      @db.Decimal(14, 2)
-  discountType DiscountType @default(PCT)
-  discountValue Decimal     @default(0) @db.Decimal(14, 2)
-  discountAmount Decimal    @default(0) @db.Decimal(14, 2)
-  taxable      Decimal      @db.Decimal(14, 2)
-  taxRate      Decimal      @db.Decimal(6, 3)
-  taxAmount    Decimal      @db.Decimal(14, 2)
-  total        Decimal      @db.Decimal(14, 2)
-  deposit      Decimal      @default(0) @db.Decimal(14, 2)
-  paidAmount   Decimal      @default(0) @db.Decimal(14, 2)
-  balance      Decimal      @db.Decimal(14, 2)
-  payStatus    PayStatus    @default(UNPAID)
+  currency       Currency
+  packagePrice   Decimal      @db.Decimal(14, 2)
+  addonTotal     Decimal      @default(0) @db.Decimal(14, 2)
+  subtotal       Decimal      @db.Decimal(14, 2)
+  discountType   DiscountType @default(PCT)
+  discountValue  Decimal      @default(0) @db.Decimal(14, 2)
+  discountAmount Decimal      @default(0) @db.Decimal(14, 2)
+  taxable        Decimal      @db.Decimal(14, 2)
+  taxRate        Decimal      @db.Decimal(6, 3)
+  taxAmount      Decimal      @db.Decimal(14, 2)
+  total          Decimal      @db.Decimal(14, 2)
+  deposit        Decimal      @default(0) @db.Decimal(14, 2)
+  paidAmount     Decimal      @default(0) @db.Decimal(14, 2)
+  balance        Decimal      @db.Decimal(14, 2)
+  payStatus      PayStatus    @default(UNPAID)
 
   // Commission is struck on net revenue (taxable), never on tax.
   commissionPct    Decimal @default(0) @db.Decimal(5, 2)
@@ -374,25 +443,40 @@ model Submission {
   costCentre String?
   department String?
 
-  submittedAt DateTime?
-  approvedAt  DateTime?
+  submittedAt  DateTime?
+  approvedAt   DateTime?
   approvedById String?
   approvedBy   User?     @relation("SubmissionApprover", fields: [approvedById], references: [id])
-  rejectedAt  DateTime?
+  rejectedAt   DateTime?
   rejectReason String?
-  returnNote  String?
-  exportedAt  DateTime?
-  qbDocNumber String?
-  invoiceNo   String?
+  returnNote   String?
+  exportedAt   DateTime?
+  qbDocNumber  String?
+  // Unique, because it is now hand-editable as well as allocated. While the only
+  // way to get one was `allocateInvoice` — a row-locked increment — uniqueness was
+  // a property of how it was produced. Once a person can type it, the database has
+  // to be the thing that says no: two sales billed under one invoice number is a
+  // reconciliation someone does by hand, months later, with the money already
+  // moved. Multiple NULLs are fine in Postgres, so an uninvoiced sale is unaffected.
+  invoiceNo    String?   @unique
+
+  // Set when a sale is voided (soft-deleted): the status it held just before, so
+  // an unvoid restores it exactly rather than guessing DRAFT. Null unless VOIDED.
+  voidedFrom SubmissionStatus?
+  voidedAt   DateTime?
+  voidedById String?
+  voidedBy   User?             @relation("SubmissionVoider", fields: [voidedById], references: [id])
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  addons   SubmissionAddon[]
-  payments Payment[]
-  documents Document[]
-  comments InternalComment[]
-  audit    AuditEntry[]
+  addons       SubmissionAddon[]
+  payments     Payment[]
+  installments Installment[]
+  documents    Document[]
+  comments     InternalComment[]
+  audit        AuditEntry[]
+  emails       EmailMessage[]    @relation("EmailSubmission")
 
   @@index([status])
   @@index([repId, status])
@@ -429,7 +513,59 @@ model Payment {
   recordedById String
   recordedBy   User   @relation(fields: [recordedById], references: [id])
 
+  // Set when this payment was posted by marking an installment done, so the
+  // ledger row and the schedule row point at each other.
+  installment Installment?
+
   @@index([submissionId])
+}
+
+// A payment plan is just the ordered set of Installment rows on a submission.
+// There is no separate "plan" record: the plan IS its instalments, which keeps
+// "what is still owed" a single question with a single answer.
+//
+// The invariant every write here defends: the PENDING instalments must sum to
+// the sale's balance. Marking one done posts a real Payment for its amount, so
+// the balance falls by exactly the amount that just left the PENDING set and the
+// invariant survives without anyone maintaining it. See InstallmentsService.
+model Installment {
+  id           String     @id @default(cuid())
+  submissionId String
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  // 1-based position in the plan — "instalment 2 of 3". Unique per submission so
+  // two concurrent plan writes cannot interleave into one renumbered schedule.
+  seq      Int
+  label    String?
+  dueDate  DateTime @db.Date
+  amount   Decimal  @db.Decimal(14, 2)
+  // Copied from the submission at plan time. A sale's currency never changes, so
+  // this is a convenience, not a second source of truth.
+  currency Currency
+  // How this instalment is expected to arrive. Pre-fills the payment when the
+  // instalment is marked done; the person marking it can still override.
+  method   String?
+
+  status   InstallmentStatus @default(PENDING)
+  paidAt   DateTime?
+  // Who marked it done — not who received the money. The Payment row carries
+  // the ledger's own recordedBy.
+  paidById String?
+  paidBy   User?             @relation("InstallmentPayer", fields: [paidById], references: [id])
+
+  // The ledger entry this instalment posted. Cleared (not deleted) when the mark
+  // is undone: the Payment stays, and a reversing negative entry joins it, so
+  // the ledger remains append-only.
+  paymentId String?  @unique
+  payment   Payment? @relation(fields: [paymentId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([submissionId, seq])
+  @@index([submissionId])
+  // Powers "what is due, oldest first" across every sale.
+  @@index([status, dueDate])
 }
 
 model Document {
@@ -483,14 +619,14 @@ model DesignerFeedback {
 // Append-only. Nothing in this table is ever updated or deleted — the UI
 // advertises that guarantee and Accounting relies on it.
 model AuditEntry {
-  id           String     @id @default(cuid())
+  id           String      @id @default(cuid())
   submissionId String?
   submission   Submission? @relation(fields: [submissionId], references: [id])
   action       String
   detail       String?
   // Before/after payloads for money-affecting changes.
   payload      Json?
-  createdAt    DateTime   @default(now())
+  createdAt    DateTime    @default(now())
 
   actorId String?
   actor   User?   @relation(fields: [actorId], references: [id])
@@ -501,23 +637,214 @@ model AuditEntry {
 
 // Single-row table (id is pinned to 1).
 model Settings {
-  id                  Int     @id @default(1)
-  company             String  @default("VFW Management Inc.")
-  fiscalYear          Int     @default(2026)
-  invoicePrefix       String  @default("VFW-")
-  nextInvoiceSeq      Int     @default(2041)
+  id                  Int      @id @default(1)
+  company             String   @default("VFW Management Inc.")
+  fiscalYear          Int      @default(2026)
+  // Invoicing is split by brand. A Vancouver show bills under VFW (this prefix
+  // + sequence); every other city bills under GFC (the gfc* pair below). Two
+  // independent, gapless sequences — see SubmissionsService.allocateInvoice.
+  invoicePrefix       String   @default("VFW-")
+  nextInvoiceSeq      Int      @default(2041)
+  gfcInvoicePrefix    String   @default("GFC-")
+  nextGfcInvoiceSeq   Int      @default(1001)
   // Allocated the same way as nextInvoiceSeq — by incrementing this row inside
   // the creating transaction, which takes a row lock. Counting submissions
   // instead would hand the same ref to two concurrent creates.
-  nextSubmissionSeq   Int     @default(1001)
+  nextSubmissionSeq   Int      @default(1001)
   // Discounts above this percentage need explicit accounting sign-off.
-  discountApprovalPct Decimal @default(15) @db.Decimal(5, 2)
+  discountApprovalPct Decimal  @default(15) @db.Decimal(5, 2)
   qbRealmId           String?
   // FX rates to CAD, the reporting currency. Held here so Accounting can
   // update them without a deploy.
-  fxRates             Json    @default("{\"CAD\":1,\"USD\":1.37,\"GBP\":1.74,\"EUR\":1.49,\"JPY\":0.0092}")
-  scoreWeights        Json    @default("{\"revenue\":30,\"approved\":20,\"collection\":30,\"retention\":20}")
+  fxRates             Json     @default("{\"CAD\":1,\"USD\":1.37,\"GBP\":1.74,\"EUR\":1.49,\"JPY\":0.0092}")
+  scoreWeights        Json     @default("{\"revenue\":30,\"approved\":20,\"collection\":30,\"retention\":20}")
   updatedAt           DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// System configuration — the operational credentials (SMTP, object storage)
+// that used to live only in .env / Railway variables, moved into the database
+// so a non-technical administrator can set them from the console.
+//
+// One row per setting, keyed by the SAME name as the environment variable it
+// shadows (MAIL_HOST, R2_BUCKET, …). Resolution order in ConfigService is
+// DB row -> process.env -> built-in default, so an existing env-only deployment
+// keeps working untouched and the DB simply overrides it when a value is set.
+//
+// `encrypted` marks a secret (SMTP password, R2 secret key): its `value` is
+// AES-256-GCM ciphertext, never plaintext, and is never returned to the browser.
+// See src/config/config.crypto.ts and config.registry.ts.
+// ---------------------------------------------------------------------------
+model ConfigSetting {
+  key         String   @id
+  value       String
+  encrypted   Boolean  @default(false)
+  // Who last changed it. A plain column, not an FK: the audit trail is the
+  // system of record for "who changed what", so a relation here is redundant.
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Mail accounts — the SMTP mailboxes the app can send from.
+//
+// The credentials for sending live HERE rather than in ConfigSetting, because
+// one key/value row per setting can only ever describe one mailbox: a second
+// account has nowhere to go, and switching means retyping four fields and
+// losing the old ones. One row per mailbox, exactly one marked `isActive`, and
+// switching sender is a single click.
+//
+// `password` is AES-256-GCM ciphertext (see config.crypto.ts) — never
+// plaintext, and never returned to the browser.
+//
+// The MAIL_* environment variables still work: when this table is EMPTY,
+// EmailService falls back to resolving MAIL_HOST/MAIL_USERNAME/… through
+// ConfigService, so an env-only deployment keeps sending untouched. The first
+// account created takes over.
+//
+// "Exactly one active" is enforced in MailAccountService.activate() inside a
+// transaction, not by a partial unique index: Prisma cannot express
+// `UNIQUE (isActive) WHERE isActive` in schema, so an index added by raw SQL
+// would read as drift on the next migrate.
+// ---------------------------------------------------------------------------
+model MailAccount {
+  id          String  @id @default(cuid())
+  // What an admin calls it in the picker — "VFW (cPanel)", "Tausi (Gmail)".
+  label       String
+  // smtp | resend. How the message leaves the building.
+  //
+  // This exists because the host decides what is possible: Railway silently
+  // drops every outbound SMTP port (measured — see docs/email-and-otp.md), so on
+  // that platform `smtp` can never deliver no matter how correct the mailbox is,
+  // while `resend` goes over 443 like any other API call. Keeping both means the
+  // cPanel mailbox stays configured and usable the moment the app runs somewhere
+  // that permits SMTP.
+  provider    String  @default("smtp")
+  // SMTP-only. Ignored (and left blank) for HTTP providers.
+  host        String  @default("")
+  port        Int     @default(465)
+  // ssl | tls | none. A string, not an enum: adding a mode should not need a
+  // migration, and the value is validated on write.
+  encryption  String  @default("ssl")
+  // SMTP: the login. HTTP providers: unused.
+  username    String  @default("")
+  // The one secret, AES-256-GCM ciphertext either way: the SMTP password, or the
+  // provider API key. One encrypted column rather than two, because it is the
+  // same thing — the credential that proves we may send.
+  password    String
+  fromAddress String
+  // Overrides MAIL_FROM_NAME as the brand shown at the top of every email, so
+  // switching account can also switch the brand. Blank = fall back to config.
+  fromName    String?
+  isActive    Boolean @default(false)
+
+  // Inbound (Received) — opt-in, SMTP mailboxes only. The poller (see
+  // emails/inbound.service.ts) connects over IMAP with THIS row's username +
+  // decrypted password. `imapHost` blank falls back to `host` (a cPanel mailbox
+  // answers IMAP on the same domain it answers SMTP). Off by default, so an
+  // existing deployment gains nothing to configure and keeps sending untouched.
+  // Note: many hosts (Railway) block the IMAP port outright — where they do, the
+  // poll simply keeps failing to connect and Sent is unaffected.
+  imapHost       String  @default("")
+  imapPort       Int     @default(993)
+  inboundEnabled Boolean @default(false)
+
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // The same mailbox on the same server twice is always a mistake. Scoped by
+  // provider so an SMTP and an HTTP account may share a from-address (they will:
+  // the same mailbox, reached two different ways).
+  @@unique([provider, host, username, fromAddress])
+  @@index([isActive])
+}
+
+// ---------------------------------------------------------------------------
+// Emails — the log of mail the system has sent and (where the mailbox allows)
+// received. This is the record behind the Emails module.
+//
+// It is NOT financial evidence and stays out of AuditEntry: an invoice send DOES
+// append an audit entry (the money-relevant fact), but the message body itself
+// lives here. Additive — touches nothing in the money loop.
+//
+// Recording happens at the one send choke point, EmailService.send(), so it
+// captures every outbound message including OTP and reset. Precisely because it
+// does, the code / token / link in a sensitive message is NEVER stored — see the
+// redaction in EmailService. Bodies are kept only for kinds that carry no secret
+// (INVOICE, TEST, and inbound mail).
+// ---------------------------------------------------------------------------
+
+enum EmailDirection {
+  OUTBOUND
+  INBOUND
+}
+
+enum EmailStatus {
+  SENT
+  FAILED
+  RECEIVED
+}
+
+// What produced the message. Drives both the redaction rule and the module's
+// kind filter. OTHER is the catch-all so a new send site logs without a schema
+// change; give it a real kind when it earns one.
+enum EmailKind {
+  OTP
+  WELCOME
+  PASSWORD_RESET
+  PASSWORD_CHANGED
+  INVITATION
+  INVOICE
+  TEST
+  INBOUND
+  OTHER
+}
+
+model EmailMessage {
+  id        String         @id @default(cuid())
+  direction EmailDirection
+  status    EmailStatus
+  kind      EmailKind      @default(OTHER)
+
+  fromAddress String
+  fromName    String?
+  toAddress   String
+  subject     String
+  // Redacted (null) for sensitive kinds. Kept for INVOICE / TEST / inbound.
+  bodyText    String? @db.Text
+  bodyHtml    String? @db.Text
+  // A short snippet for the list row — safe to show even when the body is not.
+  preview     String?
+
+  provider      String? // smtp | resend | relay | imap
+  mailAccountId String?
+  // The failure reason when status = FAILED. Never a credential — just the "why".
+  error         String?
+
+  // The app user who caused the send. Null for system mail (OTP, reset) and for
+  // everything inbound. Drives the module's row-scoping: a rep sees their own.
+  triggeredById String?
+  triggeredBy   User?   @relation("EmailTriggeredBy", fields: [triggeredById], references: [id])
+
+  // The submission an invoice send belongs to, so the module can link back.
+  submissionId String?
+  submission   Submission? @relation("EmailSubmission", fields: [submissionId], references: [id])
+
+  // RFC Message-ID header. For inbound, the dedupe key across poll ticks.
+  messageId String?
+
+  sentAt     DateTime?
+  receivedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  // Idempotent inbound: the same message pulled twice by the poller upserts onto
+  // one row. Scoped by mailbox so two accounts can each hold a copy of a message
+  // sent to both. (Outbound rows leave messageId null and are never deduped.)
+  @@unique([mailAccountId, messageId])
+  @@index([direction, createdAt])
+  @@index([triggeredById])
+  @@index([submissionId])
 }
 
 // ---------------------------------------------------------------------------
@@ -625,15 +952,15 @@ model MessageAttachment {
 // ---------------------------------------------------------------------------
 
 model ActivityLog {
-  id     String @id @default(cuid())
+  id     String  @id @default(cuid())
   // Null-able and SetNull on delete: a log line outlives the account it names.
   userId String?
   user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   // LOGIN, LOGOUT, CONNECT, DISCONNECT, MODULE_VIEW, MESSAGE_SENT.
-  action String
+  action    String
   // Human one-liner for the feed: "Entered Messages", "Messaged Jane Doe".
-  detail String?
+  detail    String?
   // Structured context: { module, conversationId, recipientId, durationSec }.
   // Never message content.
   meta      Json?
@@ -662,4 +989,102 @@ model UserSession {
 
   @@index([userId, startedAt])
   @@index([startedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Attendance — the timesheet: which days someone worked and for how long.
+//
+// Deliberately NOT derived from UserSession above. A session records that a
+// browser was connected, which is a different claim from "I worked today": it
+// misses the day spent at a venue with the laptop shut and counts the evening a
+// tab was left open. So attendance is asserted by a person and, when it is
+// wrong, corrected by their manager — `updatedById` names whoever last wrote the
+// row, which is the only reason a correction is distinguishable from a claim.
+//
+// One row per person per day. That uniqueness is the model: a day is a thing you
+// either worked or did not, so a second row for the same date would be two
+// answers to one question, and the totals would have no way to choose.
+// ---------------------------------------------------------------------------
+
+enum AttendanceStatus {
+  PRESENT
+  REMOTE
+  LEAVE
+  SICK
+  HOLIDAY
+  ABSENT
+}
+
+model AttendanceEntry {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation("AttendanceSubject", fields: [userId], references: [id], onDelete: Cascade)
+
+  // A calendar day, not an instant. @db.Date on purpose: a timestamp would make
+  // "the 3rd" depend on the reader's timezone, and a timesheet that shifts by a
+  // day when read from another city is not a timesheet.
+  date     DateTime         @db.Date
+  status   AttendanceStatus @default(PRESENT)
+  // Hours worked, to the quarter. Stored rather than computed from the times
+  // below because the times are optional — plenty of people know they did six
+  // hours without knowing when they started.
+  hours    Decimal          @default(0) @db.Decimal(4, 2)
+  // Wall-clock "HH:MM" in the worker's own day. Strings, for the same reason
+  // `date` is a Date: there is no instant here to be right about, only what the
+  // clock on the wall said.
+  checkIn  String?
+  checkOut String?
+  note     String?
+
+  // Who last wrote this row. Equal to userId for a self-report; someone else
+  // means a correction, and the screen says so.
+  updatedById String?
+  updatedBy   User?   @relation("AttendanceEditor", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, date])
+  // The team view reads a month across everyone.
+  @@index([date])
+}
+
+// ---------------------------------------------------------------------------
+// Health — the record behind the public status page (GET /api/health in a
+// browser). One row per component per probe, written by the background prober
+// in backend/src/health/.
+//
+// This exists because uptime cannot be computed from the present tense. A live
+// check can only ever say "up right now"; the 90-day bars on the status page
+// need a history, and this is it. Nothing reads back over a row — a probe is a
+// dated observation, so it is written once and later aged out.
+//
+// Not financial evidence and deliberately not in AuditEntry, same reasoning as
+// ActivityLog above. Rows expire after 90 days (see RETENTION_DAYS), which is
+// exactly the window the page draws.
+// ---------------------------------------------------------------------------
+
+model HealthProbe {
+  id String @id @default(cuid())
+
+  // "api" | "database" | "storage" | "email" — see COMPONENTS in health.service.ts.
+  component String
+  // OPERATIONAL | DEGRADED | DOWN | UNCONFIGURED.
+  //
+  // UNCONFIGURED is not an outage: it means the credentials were never set, so
+  // there is nothing to be down. Uptime maths excludes those rows entirely
+  // rather than counting them against the service.
+  status    String
+  // Round-trip of the probe itself. Null when there was nothing to time.
+  latencyMs Int?
+  // Why it failed, for an operator reading the table directly. Never rendered
+  // on the public page and never returned by the API — a connection error
+  // names hosts and ports.
+  error     String?
+  checkedAt DateTime @default(now())
+
+  // The page's query: one component, last 90 days, bucketed by day.
+  @@index([component, checkedAt])
+  // Retention sweeps by age across every component.
+  @@index([checkedAt])
 }

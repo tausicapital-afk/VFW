@@ -1,15 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { money } from '../lib/format';
-import type { Catalog, Currency, Submission } from '../lib/types';
+import {
+  generateSchedule, INTERVALS, PAYMENT_METHODS, toCents, today, type Cadence,
+} from '../lib/installments';
+import { discountPctOfPackage, discountPreview } from '../lib/pricing';
+import { SEASON_TABS, seasonLabel, seasonTab, type SeasonTab } from '../lib/season';
+import type { Catalog, Currency, DiscountType, DocumentType, Submission } from '../lib/types';
+import { fmtSize, TYPE_LABEL, uploadDocument } from '../lib/uploads';
 import { Page } from '../shell/Shell';
 
-const PAYMENT_METHODS = [
-  'Bank Transfer / Wire', 'Credit Card', 'Stripe', 'PayPal',
-  'Cheque', 'Cash', 'Sponsored — No Charge',
-];
+/** A file chosen before the submission exists, held until we have its id. */
+type StagedFile = { file: File; type: DocumentType };
 
 function Row({ label, value, cls }: { label: string; value: string; cls?: string }) {
   return (
@@ -35,16 +39,49 @@ export function NewSubmission() {
   const [company, setCompany] = useState('');
   const [email, setEmail] = useState('');
   const [country, setCountry] = useState('');
+  const [season, setSeason] = useState<SeasonTab>('FW');
   const [eventId, setEventId] = useState('');
   const [packageId, setPackageId] = useState('');
   const [addonIds, setAddonIds] = useState<string[]>([]);
+  const [discountType, setDiscountType] = useState<DiscountType>('PCT');
   const [discountValue, setDiscountValue] = useState(0);
   const [deposit, setDeposit] = useState(0);
-  const [paymentMethod, setPaymentMethod] = useState(PAYMENT_METHODS[0]);
+  const [paymentMethod, setPaymentMethod] = useState<string>(PAYMENT_METHODS[0]);
   const [notes, setNotes] = useState('');
   const [error, setError] = useState<string | null>(null);
 
+  // Payment arrangement. Off by default — most sales are paid in one go. When on,
+  // the rep chooses the shape (how many, from when, how often) and the actual
+  // schedule is generated against the *server's* balance once the sale exists, so
+  // the plan always ties out to the penny even though the total here is a preview.
+  const [planOn, setPlanOn] = useState(false);
+  const [planCount, setPlanCount] = useState(3);
+  const [planStart, setPlanStart] = useState(today());
+  const [planCadence, setPlanCadence] = useState<Cadence>('monthly');
+
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [attachType, setAttachType] = useState<DocumentType>('contract');
+  const [staged, setStaged] = useState<StagedFile[]>([]);
+  const [uploading, setUploading] = useState(false);
+
   const event = catalog?.events.find((e) => e.id === eventId);
+
+  // The Show list is narrowed to the chosen season tab.
+  const shows = useMemo(
+    () => catalog?.events.filter((ev) => seasonTab(ev.season) === season) ?? [],
+    [catalog, season],
+  );
+
+  // Switching seasons drops a show that no longer belongs — and with it the
+  // package and add-ons that were keyed off that show.
+  function chooseSeason(next: SeasonTab) {
+    setSeason(next);
+    if (event && seasonTab(event.season) !== next) {
+      setEventId('');
+      setPackageId('');
+      setAddonIds([]);
+    }
+  }
 
   // A package is only offered if it belongs to this event's brand AND carries a
   // price for the city the event runs in — the same two rules the server
@@ -81,35 +118,114 @@ export function NewSubmission() {
       .filter((a) => addonIds.includes(a.id))
       .reduce((t, a) => t + Number(a.price), 0);
     const subtotal = base + addonTotal;
-    const discount = Math.round(subtotal * (discountValue / 100) * 100) / 100;
+    const discount = discountPreview(base, discountType, discountValue);
     const taxable = Math.max(0, subtotal - discount);
     const rate = Number(catalog.taxes.find((t) => t.code === pkg.taxCode)?.rate ?? 0);
     const tax = Math.round(taxable * (rate / 100) * 100) / 100;
     const total = Math.round((taxable + tax) * 100) / 100;
     return { base, addonTotal, subtotal, discount, taxable, rate, tax, total, balance: total - deposit };
-  }, [pkg, price, catalog, sellable, addonIds, discountValue, deposit]);
+  }, [pkg, price, catalog, sellable, addonIds, discountType, discountValue, deposit]);
+
+  // An indicative schedule shown while the rep builds the plan. Like the total, it
+  // is recomputed on the server at submit — this only shows the shape of the terms
+  // against the preview balance so the numbers are visible while they are chosen.
+  const planPreview = useMemo(() => {
+    if (!planOn || !preview || preview.balance <= 0) return null;
+    return generateSchedule(
+      planCount, planStart, planCadence, toCents(preview.balance), paymentMethod,
+    );
+  }, [planOn, preview, planCount, planStart, planCadence, paymentMethod]);
+
+  // Holds the submission once created so that a retry after a failed attachment
+  // upload flushes the remaining files instead of creating a duplicate sale.
+  const createdRef = useRef<Submission | null>(null);
 
   const create = useMutation({
-    mutationFn: () =>
-      api.post<Submission>('/api/submissions', {
-        designer, brand,
-        company: company || undefined,
-        email: email || undefined,
-        country: country || undefined,
-        eventId, packageId, addonIds,
-        discountType: 'PCT',
-        discountValue,
-        deposit,
-        paymentMethod,
-        notes: notes || undefined,
-      }),
+    mutationFn: async () => {
+      let sub = createdRef.current;
+      if (!sub) {
+        sub = await api.post<Submission>('/api/submissions', {
+          designer, brand,
+          company: company || undefined,
+          email: email || undefined,
+          country: country || undefined,
+          eventId, packageId, addonIds,
+          discountType,
+          discountValue,
+          deposit,
+          paymentMethod,
+          notes: notes || undefined,
+        });
+        createdRef.current = sub;
+        // The sale is saved the moment this returns — reflect it in the lists
+        // right away, even if attachments below fail.
+        void qc.invalidateQueries({ queryKey: ['submissions'] });
+        void qc.invalidateQueries({ queryKey: ['queue'] });
+      }
+
+      // Now that we have an id, flush the staged attachments to it. A file that
+      // fails stays staged so the rep can retry without re-sending the sale.
+      if (staged.length) {
+        setUploading(true);
+        const remaining: StagedFile[] = [];
+        const failed: string[] = [];
+        for (const s of staged) {
+          try {
+            await uploadDocument(sub.id, s.file, s.type);
+          } catch {
+            remaining.push(s);
+            failed.push(s.file.name);
+          }
+        }
+        setStaged(remaining);
+        setUploading(false);
+        if (failed.length) {
+          throw new Error(
+            `Submission saved, but these files did not upload: ${failed.join(', ')}. Retry to attach them.`,
+          );
+        }
+      }
+
+      // Seed the payment plan, if the rep set one up. The schedule is generated
+      // against the balance the *server* computed (not the preview total), so it
+      // ties out to the penny. A deposit that clears the sale leaves nothing to
+      // schedule — quietly skip rather than send a plan the server would reject.
+      if (planOn && toCents(sub.balance) > 0) {
+        const lines = generateSchedule(
+          planCount, planStart, planCadence, toCents(sub.balance), paymentMethod,
+        );
+        try {
+          await api.put(`/api/submissions/${sub.id}/installments`, {
+            installments: lines.map((l) => ({
+              label: l.label,
+              dueDate: l.dueDate,
+              amount: Number(l.amount),
+              method: l.method,
+            })),
+          });
+        } catch (e) {
+          throw new Error(
+            `Submission saved, but the payment plan did not: ${(e as Error).message}. Retry to set it up.`,
+          );
+        }
+      }
+
+      return sub;
+    },
     onSuccess: (sub) => {
-      void qc.invalidateQueries({ queryKey: ['submissions'] });
-      void qc.invalidateQueries({ queryKey: ['queue'] });
       nav(`/submissions?created=${sub.ref}`);
     },
     onError: (e: Error) => setError(e.message),
   });
+
+  function onPickFiles(files: FileList | null) {
+    if (!files?.length) return;
+    setStaged((prev) => [
+      ...prev,
+      ...Array.from(files).map((file) => ({ file, type: attachType })),
+    ]);
+    if (fileRef.current) fileRef.current.value = '';
+  }
 
   if (isLoading) {
     return (
@@ -159,6 +275,18 @@ export function NewSubmission() {
 
           <div className="sect">
             <div className="hd"><h3>Event</h3><span className="n">02</span></div>
+            <div className="tabs" style={{ marginBottom: 14 }}>
+              {SEASON_TABS.map((t) => (
+                <button
+                  key={t.key}
+                  type="button"
+                  className={'tab' + (season === t.key ? ' on' : '')}
+                  onClick={() => chooseSeason(t.key)}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
             <div className="fields">
               <div className="f wide">
                 <label>Show <span className="req">*</span></label>
@@ -174,9 +302,9 @@ export function NewSubmission() {
                   required
                 >
                   <option value="">Select a show…</option>
-                  {catalog?.events.map((ev) => (
+                  {shows.map((ev) => (
                     <option key={ev.id} value={ev.id}>
-                      {ev.name} — {ev.city.name} · {ev.season}
+                      {ev.name} — {ev.city.name} · {seasonLabel(ev.season)}
                     </option>
                   ))}
                 </select>
@@ -255,14 +383,25 @@ export function NewSubmission() {
             <div className="hd"><h3>Pricing &amp; payment</h3><span className="n">05</span></div>
             <div className="fields">
               <div className="f">
-                <label>Discount (%)</label>
-                <input
-                  type="number" min={0} max={100} step="0.01"
-                  value={discountValue}
-                  onChange={(e) => setDiscountValue(Number(e.target.value))}
-                />
-                {discountValue > 15 && (
-                  <div className="help">Above 15% — Accounting must sign this off explicitly.</div>
+                <label>Discount</label>
+                <div className="rowflex" style={{ gap: 8 }}>
+                  <select
+                    value={discountType}
+                    onChange={(e) => setDiscountType(e.target.value as DiscountType)}
+                    style={{ maxWidth: 150 }}
+                  >
+                    <option value="PCT">Percentage (%)</option>
+                    <option value="AMT">Amount ({currency})</option>
+                  </select>
+                  <input
+                    type="number" min={0} max={discountType === 'PCT' ? 100 : undefined} step="0.01"
+                    value={discountValue}
+                    onChange={(e) => setDiscountValue(Number(e.target.value))}
+                  />
+                </div>
+                <div className="help">Applies to the package price only — add-ons are never discounted.</div>
+                {discountPctOfPackage(preview?.base ?? 0, discountType, discountValue) > 15 && (
+                  <div className="help">Above 15% of the package — Accounting must sign this off explicitly.</div>
                 )}
               </div>
               <div className="f">
@@ -283,17 +422,158 @@ export function NewSubmission() {
           </div>
 
           <div className="sect">
-            <div className="hd"><h3>Sales notes</h3><span className="n">06</span></div>
+            <div className="hd"><h3>Payment arrangement</h3><span className="n">06</span></div>
+            <label className="chk" style={{ marginBottom: planOn ? 14 : 0 }}>
+              <input
+                type="checkbox"
+                checked={planOn}
+                onChange={(e) => setPlanOn(e.target.checked)}
+              />
+              <span className="t">
+                <b>Split the balance into instalments</b>
+                <div className="sm mut">
+                  Leave off if the client pays in one go. The deposit above is out of the plan —
+                  only the outstanding balance is scheduled.
+                </div>
+              </span>
+            </label>
+            {planOn && (
+              <>
+                <div className="fields">
+                  <div className="f">
+                    <label>Instalments</label>
+                    <input
+                      type="number" min={1} max={24}
+                      value={planCount}
+                      onChange={(e) =>
+                        setPlanCount(Math.max(1, Math.min(24, Number(e.target.value) || 1)))
+                      }
+                    />
+                  </div>
+                  <div className="f">
+                    <label>First due</label>
+                    <input
+                      type="date"
+                      value={planStart}
+                      onChange={(e) => setPlanStart(e.target.value)}
+                    />
+                  </div>
+                  <div className="f">
+                    <label>Then</label>
+                    <select
+                      value={planCadence}
+                      onChange={(e) => setPlanCadence(e.target.value as Cadence)}
+                    >
+                      {INTERVALS.map((i) => <option key={i.key} value={i.key}>{i.label}</option>)}
+                    </select>
+                  </div>
+                </div>
+                {planPreview && planPreview.length > 0 ? (
+                  <>
+                    <div className="tbl-wrap" style={{ marginTop: 12 }}>
+                      <table>
+                        <thead>
+                          <tr><th>#</th><th>Due</th><th className="num">Amount ({currency})</th></tr>
+                        </thead>
+                        <tbody>
+                          {planPreview.map((l, i) => (
+                            <tr key={i}>
+                              <td className="mono sm mut">{i + 1}</td>
+                              <td className="sm">{l.dueDate}</td>
+                              <td className="num">{money(l.amount, currency)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="help">
+                      Indicative. The final schedule is generated from Accounting's balance when the
+                      sale is sent, and stays editable on the sale afterwards.
+                    </div>
+                  </>
+                ) : (
+                  <p className="sm mut" style={{ marginTop: 8 }}>
+                    Pick a package to see the schedule — there is nothing to split yet.
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="sect">
+            <div className="hd"><h3>Sales notes</h3><span className="n">07</span></div>
             <div className="f">
               <textarea rows={4} value={notes} onChange={(e) => setNotes(e.target.value)} />
             </div>
+          </div>
+
+          <div className="sect">
+            <div className="hd"><h3>Attachments</h3><span className="n">08</span></div>
+            <p className="sm mut" style={{ marginTop: 0 }}>
+              Optional. Attach the signed contract, PO, receipt or any supporting
+              media — they upload once the submission is sent.
+            </p>
+            <div className="rowflex upload" style={{ gap: 8, marginBottom: 12 }}>
+              <select
+                value={attachType}
+                onChange={(e) => setAttachType(e.target.value as DocumentType)}
+                disabled={create.isPending}
+              >
+                {(Object.keys(TYPE_LABEL) as DocumentType[]).map((t) => (
+                  <option key={t} value={t}>{TYPE_LABEL[t]}</option>
+                ))}
+              </select>
+              <input
+                ref={fileRef}
+                type="file"
+                multiple
+                disabled={create.isPending}
+                onChange={(e) => onPickFiles(e.target.files)}
+              />
+            </div>
+            {staged.length > 0 && (
+              <div className="tbl-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Type</th><th>File</th><th /></tr>
+                  </thead>
+                  <tbody>
+                    {staged.map((s, i) => (
+                      <tr key={`${s.file.name}-${i}`}>
+                        <td className="sm">{TYPE_LABEL[s.type]}</td>
+                        <td className="sm">
+                          {s.file.name}
+                          {s.file.size ? <span className="mut"> · {fmtSize(s.file.size)}</span> : null}
+                        </td>
+                        <td>
+                          <button
+                            type="button"
+                            className="btn sm"
+                            disabled={create.isPending}
+                            onClick={() => setStaged((prev) => prev.filter((_, j) => j !== i))}
+                          >
+                            Remove
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
           {error && <div className="note bad" style={{ marginBottom: 14 }}>{error}</div>}
 
           <div className="rowflex">
             <button className="btn primary" disabled={!ready || create.isPending}>
-              {create.isPending ? 'Sending…' : 'Send to Accounting'}
+              {uploading
+                ? 'Uploading attachments…'
+                : create.isPending
+                  ? 'Sending…'
+                  : createdRef.current
+                    ? 'Retry attachments'
+                    : 'Send to Accounting'}
             </button>
             <button type="button" className="btn" onClick={() => nav('/submissions')}>
               Cancel
@@ -317,7 +597,7 @@ export function NewSubmission() {
                 <Row label="Subtotal" value={money(preview.subtotal, currency)} />
                 {preview.discount > 0 && (
                   <Row
-                    label={`Discount (${discountValue}%)`}
+                    label={discountType === 'PCT' ? `Discount (${discountValue}% of package)` : 'Discount (package)'}
                     value={'− ' + money(preview.discount, currency)}
                   />
                 )}

@@ -39,5 +39,8 @@ export class ContactsController {
   imports: [SubmissionsModule],
   controllers: [ContactsController],
   providers: [ContactsService],
+  // ExportModule reads the customer book through the same scoped `list` this
+  // controller serves, so the file cannot hold rows the screen would not.
+  exports: [ContactsService],
 })
 export class ContactsModule {}

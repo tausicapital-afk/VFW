@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { can } from '../lib/acl';
@@ -73,6 +74,16 @@ export function Submissions() {
     queryFn: () => api.get<Submission[]>('/api/submissions'),
   });
 
+  // Voided sales are hidden from the main list; the roles that can restore them
+  // get a toggle to review them and open one to restore.
+  const canVoid = can('submission.void', user?.role);
+  const [showVoided, setShowVoided] = useState(false);
+  const { data: voided, isLoading: voidedLoading } = useQuery({
+    queryKey: ['submissions', 'voided'],
+    queryFn: () => api.get<Submission[]>('/api/submissions/voided'),
+    enabled: canVoid && showVoided,
+  });
+
   const scope = can('submission.viewAll', user?.role)
     ? 'Every submission across all shows.'
     : 'Your own customers only.';
@@ -86,14 +97,29 @@ export function Submissions() {
       )}
       <div className="card">
         <div className="hd">
-          <h3>Submissions</h3>
+          <h3>{showVoided ? 'Voided submissions' : 'Submissions'}</h3>
           <div className="sp" />
+          {canVoid && (
+            <button className="btn sm" onClick={() => setShowVoided((v) => !v)}>
+              {showVoided ? 'Back to active' : 'Show voided'}
+            </button>
+          )}
           {/* Exports what this table shows — the server re-applies the same
               scope, so a rep's file holds only their own customers. */}
-          <ExportMenu dataset="submissions" disabled={isLoading || !data?.length} />
-          <span className="sm mut">{scope}</span>
+          {!showVoided && (
+            <ExportMenu dataset="submissions" disabled={isLoading || !data?.length} />
+          )}
+          <span className="sm mut">{showVoided ? 'Soft-deleted — open one to restore.' : scope}</span>
         </div>
-        {isLoading ? (
+        {showVoided ? (
+          voidedLoading ? (
+            <div className="empty"><h3>Loading…</h3></div>
+          ) : voided?.length ? (
+            <SubmissionsTable rows={voided} />
+          ) : (
+            <div className="empty"><h3>Nothing voided</h3><p>No submissions have been voided.</p></div>
+          )
+        ) : isLoading ? (
           <div className="empty"><h3>Loading…</h3></div>
         ) : (
           <SubmissionsTable rows={data ?? []} />

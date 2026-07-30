@@ -72,10 +72,10 @@ permission matrix (`can()` / the `ACL`).
 
 ### Navigation
 
-**Work** — Dashboard · New submission · Submissions · Contacts · Approval queue · QuickBooks
-**People** — Leaderboard · Designer feedback · Internal notes
+**Work** — Dashboard · New submission · Submissions · Contacts · Messages · Emails · Approval queue · QuickBooks
+**People** — Attendance · Payroll · Leaderboard · Designer feedback · Internal notes
 **Insight** — Reports · Audit trail
-**System** — Administration
+**System** — Administration · Logs
 
 The leaderboard ranks reps by a 100-point performance score. Contacts are
 auto-created the first time a sale is submitted for a brand not seen before.
@@ -149,6 +149,28 @@ npm run dev               # start with watch mode
 
 Other scripts: `npm run build`, `npm run start:prod`, `npm run prisma:deploy`
 (migrate deploy for production), and `npm run release` (deploy + start).
+
+### The whole stack in one command (Docker)
+
+The steps above are the fast inner loop: Postgres in Docker, backend and
+frontend on the host with hot reload. When you instead want the **entire stack
+running in containers** — the same images CI and Railway build — bring up the
+`full` profile:
+
+```bash
+docker compose --profile full up --build
+```
+
+That starts three containers: Postgres, the backend (which applies migrations
+and seeds the catalog + demo users on boot), and nginx serving the built SPA and
+reverse-proxying `/api` to the backend. When the backend health check goes
+green, open **http://localhost:8080** and log in with a seeded demo account
+(password `Vfw@2026!` — allowed because the DB is localhost).
+
+Because both app services build from the very same `Dockerfile`s that ship to
+Railway, this is the closest local mirror of production, and a good smoke test
+before a deploy. A plain `docker compose up` (no `--profile full`) still starts
+**only** Postgres, so the inner loop above is unaffected.
 
 ### Data model
 

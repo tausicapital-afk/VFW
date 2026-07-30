@@ -69,6 +69,7 @@ export const STATUS_LABEL: Record<SubmissionStatus, string> = {
   APPROVED: 'Approved',
   REJECTED: 'Rejected',
   EXPORTED: 'Exported to QuickBooks',
+  VOIDED: 'Voided',
 };
 
 export const PAY_LABEL: Record<PayStatus, string> = {

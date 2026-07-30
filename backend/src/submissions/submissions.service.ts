@@ -11,6 +11,7 @@ import { AuthUser } from '../common/auth.guard';
 import { can } from '../common/acl';
 import { PrismaService } from '../prisma/prisma.service';
 import { PricingService } from '../pricing/pricing.service';
+import { buildInvoicePdf, type InvoicePdfData } from './invoice-pdf';
 import {
   ApproveDto,
   CreateSubmissionDto,
@@ -20,13 +21,31 @@ import {
   RejectDto,
 } from './dto';
 
+/**
+ * The largest value the invoice counters can hold, leaving room to add one.
+ * Settings.nextInvoiceSeq is a Postgres `integer`, and a hand-typed number is not
+ * obliged to be a sensible size.
+ */
+const MAX_SEQUENCE = 2_147_483_646;
+
 const DETAIL = {
   rep: { select: { id: true, name: true, colour: true, role: true } },
   contact: true,
   event: { include: { city: true } },
   package: true,
   addons: { include: { addon: true } },
-  payments: { orderBy: { date: 'asc' } },
+  // Date first, then insertion order. `date` is date-only, so a payment and the
+  // negative entry that reverses it usually share one — sorting on date alone
+  // leaves their order to the planner, and the ledger reads as a reversal that
+  // precedes the payment it reverses.
+  payments: { orderBy: [{ date: 'asc' }, { createdAt: 'asc' }] },
+  // The payment plan rides on every submission read: it is not confidential, and
+  // a rep opening their own sale should see where the designer is in the
+  // schedule without a second request.
+  installments: {
+    orderBy: { seq: 'asc' },
+    include: { paidBy: { select: { id: true, name: true } } },
+  },
   tax: true,
 } satisfies Prisma.SubmissionInclude;
 
@@ -49,9 +68,21 @@ export class SubmissionsService {
 
   async list(user: AuthUser) {
     return this.prisma.submission.findMany({
-      where: this.scopeFor(user),
+      // Voided sales are soft-deleted: kept for audit, but absent from every
+      // normal list. Restore them from the voided view (listVoided).
+      where: { ...this.scopeFor(user), status: { not: SubmissionStatus.VOIDED } },
       include: DETAIL,
       orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /** The soft-deleted sales, for the roles that can restore them. */
+  async listVoided(user: AuthUser) {
+    if (!can('submission.void', user.role)) throw new ForbiddenException();
+    return this.prisma.submission.findMany({
+      where: { status: SubmissionStatus.VOIDED },
+      include: DETAIL,
+      orderBy: { voidedAt: 'desc' },
     });
   }
 
@@ -69,12 +100,37 @@ export class SubmissionsService {
     return submission;
   }
 
+  /**
+   * The review pipeline. Accounting works it; a rep reads it to see where their
+   * own submission sits. The row scope is what makes that second audience safe —
+   * without it this returns every rep's brand, discount and total, which is
+   * exactly what `scopeFor` exists to prevent.
+   */
   async queue(user: AuthUser) {
-    if (!can('submission.approve', user.role)) throw new ForbiddenException();
+    if (!can('submission.queueView', user.role)) throw new ForbiddenException();
     return this.prisma.submission.findMany({
-      where: { status: { in: [SubmissionStatus.PENDING, SubmissionStatus.RETURNED] } },
+      where: {
+        ...this.scopeFor(user),
+        status: { in: [SubmissionStatus.PENDING, SubmissionStatus.RETURNED] },
+      },
       include: DETAIL,
       orderBy: { submittedAt: 'asc' },
+    });
+  }
+
+  /**
+   * What has already crossed into QuickBooks — the Export ledger card, and the
+   * file accounting reconciles against.
+   *
+   * Newest first, by the moment it was posted rather than the moment it was
+   * created: the ledger is read as a record of postings, and the two orders
+   * disagree the first time an old approval is exported late.
+   */
+  async ledger(user: AuthUser) {
+    return this.prisma.submission.findMany({
+      where: { ...this.scopeFor(user), status: SubmissionStatus.EXPORTED },
+      include: DETAIL,
+      orderBy: { exportedAt: 'desc' },
     });
   }
 
@@ -295,7 +351,10 @@ export class SubmissionsService {
 
     const settings = await this.prisma.settings.findUniqueOrThrow({ where: { id: 1 } });
     const discount = this.pricing.discountApproval(
-      submission.subtotal,
+      // Measured against the package price, because that is the base a discount
+      // now applies to — a deep discount on the package must still trip the
+      // threshold even when add-ons pad the subtotal.
+      submission.packagePrice,
       submission.discountAmount,
       settings.discountApprovalPct,
     );
@@ -437,6 +496,35 @@ export class SubmissionsService {
   }
 
   /**
+   * Re-derive paidAmount, balance and payStatus from whatever is on the ledger
+   * right now, and write them back. Called inside the transaction that just
+   * changed the ledger, so the recompute sees the new row.
+   *
+   * Public because the installment plan posts payments too (see
+   * InstallmentsService): there must be exactly one way for a payment to move a
+   * balance, or the two paths drift and only one of them stays right.
+   */
+  async recomputeMoney(tx: Prisma.TransactionClient, id: string) {
+    const withLines = await tx.submission.findUniqueOrThrow({
+      where: { id },
+      include: { addons: true, payments: true },
+    });
+    const priced = this.priceExisting(withLines);
+
+    const submission = await tx.submission.update({
+      where: { id },
+      data: {
+        paidAmount: priced.paidAmount.toFixed(2),
+        balance: priced.balance.toFixed(2),
+        payStatus: priced.payStatus,
+      },
+      include: DETAIL,
+    });
+
+    return { submission, priced };
+  }
+
+  /**
    * Record a payment and let the balance follow from it. paidAmount, balance and
    * payStatus are never set by hand — they come back out of PricingService once
    * the new payment is on the ledger. A payment is never deleted: a mistake is
@@ -463,22 +551,7 @@ export class SubmissionsService {
         },
       });
 
-      // Re-read with the freshly-inserted payment so the recompute sees it.
-      const withLines = await tx.submission.findUniqueOrThrow({
-        where: { id },
-        include: { addons: true, payments: true },
-      });
-      const priced = this.priceExisting(withLines);
-
-      const updated = await tx.submission.update({
-        where: { id },
-        data: {
-          paidAmount: priced.paidAmount.toFixed(2),
-          balance: priced.balance.toFixed(2),
-          payStatus: priced.payStatus,
-        },
-        include: DETAIL,
-      });
+      const { submission: updated, priced } = await this.recomputeMoney(tx, id);
 
       await this.audit.log(
         {
@@ -587,21 +660,171 @@ export class SubmissionsService {
   }
 
   /**
+   * Which invoicing brand a sale bills under. A Vancouver show bills as VFW;
+   * every other city bills as GFC. Centralised so the rule — and the "Vancouver"
+   * it keys on — lives in exactly one place.
+   */
+  private invoiceBrand(cityName: string): 'VFW' | 'GFC' {
+    return /vancouver/i.test(cityName) ? 'VFW' : 'GFC';
+  }
+
+  /**
    * Allocate the next invoice number inside a transaction. Incrementing the
    * pinned Settings row takes a row lock, so two concurrent approvals cannot be
    * handed the same number — the sequence is gapless and human-facing.
+   *
+   * There are two independent sequences: VFW (Vancouver) and GFC (everywhere
+   * else). The submission's city decides which one it draws from, so a Vancouver
+   * sale reads VFW-2041 and a Toronto sale reads GFC-1001.
    */
-  private async allocateInvoice(tx: Prisma.TransactionClient): Promise<string> {
+  private async allocateInvoice(
+    tx: Prisma.TransactionClient,
+    cityName: string,
+  ): Promise<string> {
+    if (this.invoiceBrand(cityName) === 'VFW') {
+      const settings = await tx.settings.update({
+        where: { id: 1 },
+        data: { nextInvoiceSeq: { increment: 1 } },
+      });
+      return `${settings.invoicePrefix}${settings.nextInvoiceSeq - 1}`;
+    }
     const settings = await tx.settings.update({
       where: { id: 1 },
-      data: { nextInvoiceSeq: { increment: 1 } },
+      data: { nextGfcInvoiceSeq: { increment: 1 } },
     });
-    return `${settings.invoicePrefix}${settings.nextInvoiceSeq - 1}`;
+    return `${settings.gfcInvoicePrefix}${settings.nextGfcInvoiceSeq - 1}`;
+  }
+
+  /**
+   * Keep the automatic sequence ahead of a number somebody typed.
+   *
+   * Without this, hand-setting `VFW-2041` while the counter also sits at 2041
+   * means the next approval allocates the same number and dies on the unique
+   * index — an error at the worst possible moment, on somebody else's sale, with
+   * nothing on screen to explain it. Nudging the counter past a manual number
+   * turns that collision into a gap in the sequence, which is the far cheaper of
+   * the two: a missing number is a question, a duplicated one is a liability.
+   *
+   * Only numbers that actually look like they came from one of our two sequences
+   * move it. A client's own reference ("2026/03/017") is none of our business.
+   */
+  private async advanceSequencePast(tx: Prisma.TransactionClient, invoiceNo: string) {
+    const settings = await tx.settings.findUniqueOrThrow({ where: { id: 1 } });
+
+    for (const [prefix, field] of [
+      [settings.invoicePrefix, 'nextInvoiceSeq'],
+      [settings.gfcInvoicePrefix, 'nextGfcInvoiceSeq'],
+    ] as const) {
+      if (!prefix || !invoiceNo.startsWith(prefix)) continue;
+
+      const seq = Number(invoiceNo.slice(prefix.length));
+      if (!Number.isInteger(seq) || seq < settings[field]) continue;
+      // A number too large for the column to hold. `VFW-1774472300992` is a
+      // plausible thing to paste in (it is a timestamp), and writing it into an
+      // int4 counter is a 500 on a request that had nothing wrong with it. There
+      // is nothing to protect against anyway: the sequence counts up from ~2000
+      // and will not reach a number this size, so it cannot collide.
+      if (seq >= MAX_SEQUENCE) continue;
+
+      await tx.settings.update({ where: { id: 1 }, data: { [field]: seq + 1 } });
+      return;
+    }
+  }
+
+  /**
+   * Set or change the invoice number by hand.
+   *
+   * Who may do it changes at approval, which is the whole point of this endpoint:
+   *
+   * - **Before approval** (draft, pending, returned) it is whoever may edit the
+   *   sale — the rep who owns it, or Accounting under `submission.editAny`. The
+   *   number is not yet on a document anyone has seen, so correcting it is
+   *   ordinary data entry.
+   * - **After approval** (approved, exported) it is `invoice.generate` only —
+   *   Accounting and Admin. By then the number is on a PDF that may already be in
+   *   a client's inbox and in their ledger, so changing it is an accounting act
+   *   with consequences outside this system, not a typo fix.
+   *
+   * A rejected or voided sale is refused outright: neither is a live document, and
+   * numbering one would put a gap in the sequence for a sale that is not billed.
+   */
+  async setInvoiceNo(id: string, invoiceNo: string, user: AuthUser) {
+    const trimmed = invoiceNo.trim();
+
+    return this.prisma.$transaction(async (tx) => {
+      const submission = await tx.submission.findUnique({ where: { id } });
+      // 404, not 403, for a sale this caller could not see anyway — the same
+      // "cannot even probe for it" boundary findOne draws.
+      if (!submission) throw new NotFoundException('Submission not found');
+
+      const approved =
+        submission.status === SubmissionStatus.APPROVED ||
+        submission.status === SubmissionStatus.EXPORTED;
+
+      if (approved) {
+        if (!can('invoice.generate', user.role)) {
+          throw new ForbiddenException(
+            'This sale is approved — only Accounting or an administrator can change its invoice number now',
+          );
+        }
+      } else if (
+        submission.status === SubmissionStatus.REJECTED ||
+        submission.status === SubmissionStatus.VOIDED
+      ) {
+        throw new BadRequestException(
+          `A ${submission.status.toLowerCase()} sale cannot be invoiced`,
+        );
+      } else {
+        const mayEdit =
+          can('submission.editAny', user.role) ||
+          (can('submission.editOwn', user.role) && submission.repId === user.id);
+        if (!mayEdit) throw new NotFoundException('Submission not found');
+      }
+
+      if (submission.invoiceNo === trimmed) return submission;
+
+      // Checked here rather than left to the unique index, so the answer names
+      // the sale already holding the number instead of surfacing a raw
+      // constraint violation. The index is still what makes it true under a race.
+      const clash = await tx.submission.findUnique({
+        where: { invoiceNo: trimmed },
+        select: { ref: true },
+      });
+      if (clash) {
+        throw new BadRequestException(`Invoice ${trimmed} is already used by ${clash.ref}`);
+      }
+
+      await this.advanceSequencePast(tx, trimmed);
+
+      const updated = await tx.submission.update({
+        where: { id },
+        data: { invoiceNo: trimmed },
+        include: DETAIL,
+      });
+
+      await this.audit.log(
+        {
+          submissionId: id,
+          actorId: user.id,
+          action: submission.invoiceNo ? 'INVOICE_RENUMBERED' : 'INVOICE',
+          detail: submission.invoiceNo
+            ? `Invoice number changed from ${submission.invoiceNo} to ${trimmed}`
+            : `Invoice ${trimmed} set by hand`,
+          payload: { invoiceNo: trimmed, previous: submission.invoiceNo },
+        },
+        tx,
+      );
+
+      return updated;
+    });
   }
 
   async generateInvoice(id: string, user: AuthUser) {
     return this.prisma.$transaction(async (tx) => {
-      const submission = await tx.submission.findUnique({ where: { id } });
+      const submission = await tx.submission.findUnique({
+        where: { id },
+        include: { city: true },
+      });
       if (!submission) throw new NotFoundException('Submission not found');
       if (
         submission.status !== SubmissionStatus.APPROVED &&
@@ -613,7 +836,7 @@ export class SubmissionsService {
         throw new BadRequestException(`Already invoiced as ${submission.invoiceNo}`);
       }
 
-      const invoiceNo = await this.allocateInvoice(tx);
+      const invoiceNo = await this.allocateInvoice(tx, submission.city.name);
       const updated = await tx.submission.update({
         where: { id },
         data: { invoiceNo },
@@ -634,6 +857,133 @@ export class SubmissionsService {
   }
 
   /**
+   * Void (soft-delete) a sale. It leaves normal lists and reports but is kept
+   * in full for audit, and the status it held is remembered so an unvoid can put
+   * it back exactly. Held by Admin/Accounting via `submission.void`.
+   */
+  async void(id: string, reason: string | undefined, user: AuthUser) {
+    return this.prisma.$transaction(async (tx) => {
+      const submission = await tx.submission.findUnique({ where: { id } });
+      if (!submission) throw new NotFoundException('Submission not found');
+      if (submission.status === SubmissionStatus.VOIDED) {
+        throw new BadRequestException('This submission is already voided');
+      }
+      const updated = await tx.submission.update({
+        where: { id },
+        data: {
+          status: SubmissionStatus.VOIDED,
+          voidedFrom: submission.status,
+          voidedAt: new Date(),
+          voidedById: user.id,
+        },
+        include: DETAIL,
+      });
+      await this.audit.log(
+        {
+          submissionId: id,
+          actorId: user.id,
+          action: 'VOIDED',
+          detail: reason ? `Voided (soft delete) — ${reason}` : 'Voided (soft delete)',
+          payload: { from: submission.status, reason: reason ?? null },
+        },
+        tx,
+      );
+      return updated;
+    });
+  }
+
+  /** Reverse a void, restoring the sale to the exact status it held before. */
+  async unvoid(id: string, user: AuthUser) {
+    return this.prisma.$transaction(async (tx) => {
+      const submission = await tx.submission.findUnique({ where: { id } });
+      if (!submission) throw new NotFoundException('Submission not found');
+      if (submission.status !== SubmissionStatus.VOIDED) {
+        throw new BadRequestException('Only a voided submission can be restored');
+      }
+      const restoreTo = submission.voidedFrom ?? SubmissionStatus.DRAFT;
+      const updated = await tx.submission.update({
+        where: { id },
+        data: { status: restoreTo, voidedFrom: null, voidedAt: null, voidedById: null },
+        include: DETAIL,
+      });
+      await this.audit.log(
+        {
+          submissionId: id,
+          actorId: user.id,
+          action: 'RESTORED',
+          detail: `Restored from void to ${restoreTo}`,
+          payload: { to: restoreTo },
+        },
+        tx,
+      );
+      return updated;
+    });
+  }
+
+  /**
+   * Render an already-invoiced sale to a PDF the customer can be sent. The
+   * invoice number must exist first (Generate invoice allocates it), so this
+   * never mutates anything — it is a pure read that streams a document. Figures
+   * come from the stored, server-computed columns, never a re-derivation, so the
+   * PDF and the screen can never disagree.
+   */
+  async invoicePdf(id: string, user: AuthUser): Promise<{ buffer: Buffer; filename: string }> {
+    const s = await this.prisma.submission.findUnique({
+      where: { id },
+      include: { ...DETAIL, city: true },
+    });
+    if (!s) throw new NotFoundException('Submission not found');
+    // Same row scope as findOne: a rep can pull their own invoice, no one else's.
+    if (!can('submission.viewAll', user.role) && s.repId !== user.id) {
+      throw new NotFoundException('Submission not found');
+    }
+    if (!s.invoiceNo) {
+      throw new BadRequestException('Generate the invoice number first, then download the PDF.');
+    }
+
+    const settings = await this.prisma.settings.findUniqueOrThrow({ where: { id: 1 } });
+    const discountLabel =
+      Number(s.discountAmount) > 0
+        ? s.discountType === DiscountType.PCT
+          ? `Discount (${Number(s.discountValue)}% of package)`
+          : 'Discount (package)'
+        : null;
+
+    const data: InvoicePdfData = {
+      brand: this.invoiceBrand(s.city.name),
+      companyName: settings.company,
+      invoiceNo: s.invoiceNo,
+      docType: s.payStatus === 'PAID' ? 'Sales Receipt' : 'Invoice',
+      issuedAt: new Date(),
+      currency: s.currency,
+      customer: {
+        designer: s.contact.designer,
+        brand: s.contact.brand,
+        company: s.contact.company,
+        email: s.contact.email,
+        country: s.contact.country,
+      },
+      event: { name: s.event.name, city: `${s.city.name}, ${s.city.country}`, showDate: s.showDate },
+      packageName: s.package.name,
+      packagePrice: s.packagePrice.toFixed(2),
+      addons: s.addons.map((l) => ({ name: l.addon.name, qty: l.qty, amount: l.amount.toFixed(2) })),
+      subtotal: s.subtotal.toFixed(2),
+      discountLabel,
+      discountAmount: s.discountAmount.toFixed(2),
+      taxable: s.taxable.toFixed(2),
+      taxRatePct: s.taxRate.toFixed(2),
+      taxAmount: s.taxAmount.toFixed(2),
+      total: s.total.toFixed(2),
+      paidAmount: s.paidAmount.toFixed(2),
+      balance: s.balance.toFixed(2),
+      paymentMethod: s.paymentMethod,
+      paymentTerms: s.paymentTerms,
+    };
+
+    return { buffer: await buildInvoicePdf(data), filename: `${s.invoiceNo}.pdf` };
+  }
+
+  /**
    * QuickBooks export. Synchronous by design — no Redis, no job queue until
    * retries are actually needed. The QBO OAuth transport is out of scope and
    * stubbed: this moves the record APPROVED -> EXPORTED, allocates an invoice
@@ -641,7 +991,10 @@ export class SubmissionsService {
    */
   async export(id: string, dto: ExportDto, user: AuthUser) {
     return this.prisma.$transaction(async (tx) => {
-      const submission = await tx.submission.findUnique({ where: { id } });
+      const submission = await tx.submission.findUnique({
+        where: { id },
+        include: { city: true },
+      });
       if (!submission) throw new NotFoundException('Submission not found');
       if (submission.status !== SubmissionStatus.APPROVED) {
         throw new BadRequestException(
@@ -649,7 +1002,8 @@ export class SubmissionsService {
         );
       }
 
-      const invoiceNo = submission.invoiceNo ?? (await this.allocateInvoice(tx));
+      const invoiceNo =
+        submission.invoiceNo ?? (await this.allocateInvoice(tx, submission.city.name));
       const docType =
         dto.docType ?? (submission.payStatus === 'PAID' ? 'Sales Receipt' : 'Invoice');
       const settings = await tx.settings.findUniqueOrThrow({ where: { id: 1 } });
@@ -681,15 +1035,36 @@ export class SubmissionsService {
   }
 
   /**
-   * Edit and resubmit. A RETURNED (or DRAFT) submission is a dead end until the
-   * rep can fix it: this re-prices the sale server-side from the catalogue and
-   * sends it back to PENDING.
+   * Edit and resubmit. This re-prices the sale server-side from the catalogue,
+   * so an edit can never carry a total the client chose.
    *
    * Two ways to be allowed in. A rep may edit their OWN record
    * (`submission.editOwn`); ACCT/ADMIN hold `submission.editAny` and may fix
    * anyone's, which is what lets Accounting correct a rep's mistake rather than
    * bouncing it back and waiting. Anyone else gets the same 404 as a record that
    * does not exist, so this cannot be used to probe for other reps' deals.
+   *
+   * **Which statuses are editable, and by whom, is where the real rule lives.**
+   *
+   * - `DRAFT`, `RETURNED`, `PENDING` — editable by whoever may edit it at all.
+   *   Nothing has been decided yet, so a correction is just a correction. Note
+   *   what happens to `submittedAt`: a draft or returned sale is *entering* the
+   *   queue and gets a fresh one, while a pending sale is already in it and keeps
+   *   the one it has. The queue is ordered by that column, so re-stamping it
+   *   would send a rep to the back of the line for fixing their own typo — and
+   *   give anyone who noticed a way to jump it by editing something trivial.
+   * - `APPROVED`, `EXPORTED` — editable **only** under `submission.editAny`, so
+   *   Accounting and Admin. Approval is a decision someone made about these
+   *   figures; changing them afterwards is an amendment to a decided record, and
+   *   the sale keeps its approval rather than quietly reverting to pending. The
+   *   audit line says AMENDED, not UPDATED, because the two are not the same
+   *   event when a reviewer reads the trail back.
+   * - `REJECTED`, `VOIDED` — refused. Neither is a live sale; the way back is to
+   *   return or unvoid it, which are decisions with their own audit entries.
+   *
+   * Amending an EXPORTED sale is allowed but is genuinely lossy: those figures
+   * are already in QuickBooks, and this system cannot reach in and change them.
+   * The audit entry says so, and so does the screen.
    */
   async update(id: string, dto: CreateSubmissionDto, user: AuthUser) {
     const existing = await this.prisma.submission.findUnique({ where: { id } });
@@ -700,12 +1075,28 @@ export class SubmissionsService {
       (can('submission.editOwn', user.role) && existing.repId === user.id);
     if (!mayEdit) throw new NotFoundException('Submission not found');
 
+    const decided =
+      existing.status === SubmissionStatus.APPROVED ||
+      existing.status === SubmissionStatus.EXPORTED;
+    // Arriving in the review queue for the first time, or after a return.
+    const entering =
+      existing.status === SubmissionStatus.DRAFT ||
+      existing.status === SubmissionStatus.RETURNED;
+
+    if (decided && !can('submission.editAny', user.role)) {
+      throw new ForbiddenException(
+        'This sale is approved — only Accounting or an administrator can amend it now',
+      );
+    }
+
     if (
-      existing.status !== SubmissionStatus.DRAFT &&
-      existing.status !== SubmissionStatus.RETURNED
+      existing.status === SubmissionStatus.REJECTED ||
+      existing.status === SubmissionStatus.VOIDED
     ) {
       throw new BadRequestException(
-        `Only a draft or returned submission can be edited — this one is ${existing.status}`,
+        existing.status === SubmissionStatus.VOIDED
+          ? 'This sale is voided — restore it before editing'
+          : 'This sale was rejected — return it to sales before editing',
       );
     }
 
@@ -720,8 +1111,11 @@ export class SubmissionsService {
       const updated = await tx.submission.update({
         where: { id },
         data: {
-          status: SubmissionStatus.PENDING,
-          submittedAt: new Date(),
+          // An amendment keeps the approval it already carries; everything else
+          // lands in (or stays in) the review queue.
+          status: decided ? existing.status : SubmissionStatus.PENDING,
+          // Only a sale arriving in the queue is stamped. See the note above.
+          submittedAt: entering ? new Date() : existing.submittedAt,
           returnNote: null,
           contactId: contact.id,
           eventId: event.id,
@@ -761,13 +1155,40 @@ export class SubmissionsService {
         include: DETAIL,
       });
 
+      // An amendment to a decided sale is not a resubmission, and the trail has
+      // to be able to tell them apart months later. Exported is called out by
+      // name: the figures QuickBooks holds are now stale, and nothing in this
+      // system can go and fix them.
+      const amendment = {
+        action: 'AMENDED',
+        detail:
+          existing.status === SubmissionStatus.EXPORTED
+            ? `Approved sale amended after export — the figures in QuickBooks (${existing.qbDocNumber ?? 'exported'}) no longer match and must be re-synced`
+            : 'Approved sale amended by Accounting',
+      };
+      const resubmission = {
+        action: 'RESUBMITTED',
+        detail:
+          existing.status === SubmissionStatus.PENDING
+            ? 'Corrected while awaiting approval'
+            : 'Corrected and resubmitted for approval',
+      };
+      const { action, detail } = decided ? amendment : resubmission;
+
       await this.audit.log(
         {
           submissionId: id,
           actorId: user.id,
-          action: 'RESUBMITTED',
-          detail: 'Corrected and resubmitted for approval',
-          payload: { total: updated.total.toString(), currency: updated.currency },
+          action,
+          detail,
+          payload: {
+            total: updated.total.toString(),
+            currency: updated.currency,
+            // What it was worth before, so the trail shows the movement rather
+            // than only the landing point.
+            previousTotal: existing.total.toString(),
+            previousStatus: existing.status,
+          },
         },
         tx,
       );

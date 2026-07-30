@@ -34,7 +34,7 @@ export interface PricedLine extends AddonLine {
 }
 
 export interface DiscountApproval {
-  /** The discount as a percentage of the subtotal, whatever type it was entered as. */
+  /** The discount as a percentage of the package price, whatever type it was entered as. */
   discountPct: Decimal;
   /** Settings.discountApprovalPct as it stood when the question was asked. */
   thresholdPct: Decimal;
@@ -73,18 +73,19 @@ export class PricingService {
    * the verdict on the next approval — a persisted flag would still be carrying
    * the answer to the old threshold, and would need a backfill to correct.
    *
-   * The comparison is on the discount's share of the subtotal, not on
-   * `discountValue`, so an AMT discount is measured against the same threshold a
-   * PCT one is: 9,000 off a 10,000 deal is a 90% discount however it was keyed.
+   * The comparison is on the discount's share of the package price (the base a
+   * discount now applies to — never the add-ons), not on `discountValue`, so an
+   * AMT discount is measured against the same threshold a PCT one is: 9,000 off
+   * a 10,000 package is a 90% discount however it was keyed.
    */
   discountApproval(
-    subtotal: Decimal.Value,
+    packageBase: Decimal.Value,
     discountAmount: Decimal.Value,
     thresholdPct: Decimal.Value,
   ): DiscountApproval {
-    const sub = new Decimal(subtotal || 0);
-    const exact = sub.gt(0)
-      ? new Decimal(discountAmount || 0).dividedBy(sub).times(100)
+    const base = new Decimal(packageBase || 0);
+    const exact = base.gt(0)
+      ? new Decimal(discountAmount || 0).dividedBy(base).times(100)
       : new Decimal(0);
     const threshold = new Decimal(thresholdPct || 0);
 
@@ -111,13 +112,24 @@ export class PricingService {
 
     const subtotal = r2(packagePrice.plus(addonTotal));
 
+    // A discount is struck against the PACKAGE PRICE only, never the add-ons.
+    // A percentage is taken off the package; a fixed (AMT) amount is the
+    // accountant's explicit figure. This is what keeps an add-on line at full
+    // price no matter how the package is discounted.
     const discountAmount =
       input.discountType === DiscountType.PCT
-        ? r2(subtotal.times(new Decimal(input.discountValue || 0)).dividedBy(100))
+        ? r2(packagePrice.times(new Decimal(input.discountValue || 0)).dividedBy(100))
         : r2(input.discountValue || 0);
 
+    // The discount reduces the PACKAGE only, so however it was keyed its *effect*
+    // is capped at the package price — a fixed amount larger than the package can
+    // never spill over and discount an add-on line. (A PCT discount is already
+    // ≤ package since the percentage is taken off the package.) The full figure
+    // the rep entered is still recorded in `discountAmount`.
+    const appliedDiscount = Decimal.min(discountAmount, packagePrice);
+
     // A discount can never push a sale negative.
-    const taxable = r2(Decimal.max(0, subtotal.minus(discountAmount)));
+    const taxable = r2(Decimal.max(0, subtotal.minus(appliedDiscount)));
 
     const taxRate = new Decimal(input.taxRate || 0);
     const taxAmount = r2(taxable.times(taxRate).dividedBy(100));
@@ -146,7 +158,7 @@ export class PricingService {
       addonTotal,
       subtotal,
       discountAmount,
-      discountPct: subtotal.gt(0) ? r2(discountAmount.dividedBy(subtotal).times(100)) : new Decimal(0),
+      discountPct: packagePrice.gt(0) ? r2(discountAmount.dividedBy(packagePrice).times(100)) : new Decimal(0),
       taxable,
       taxRate,
       taxAmount,

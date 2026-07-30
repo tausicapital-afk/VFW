@@ -56,3 +56,126 @@
   margin: 6px 4px 2px; padding: 7px 9px; border-radius: var(--r);
   background: var(--red-soft); color: var(--red); font-size: 11.5px;
 }
+
+/* ---------- EMAILS ----------
+   A list (left) with an optional reading pane (right on wide screens, stacked
+   below otherwise). Reuses .card / .tbl-wrap / .pill / .tag so it matches every
+   other module; only the split layout and the reader are new. */
+.email-split { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start; }
+@media (min-width: 1100px) {
+  .email-split:has(.email-detail) { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
+}
+
+/* An active tab in the Sent/Received switch. */
+.btn.on { background: var(--text); color: var(--card); border-color: var(--text); }
+
+/* The kind filter — matches .f select without needing a .f wrapper in the bar. */
+.email-select {
+  border: 1px solid var(--line); border-radius: var(--r); padding: 5px 9px;
+  background: var(--card); color: var(--text); font-size: 12px;
+}
+
+/* A neutral tag for email kinds. Brand tags (.tag.VFW) keep their colour — they
+   are more specific, so this base fill never overrides them. */
+.tag { background: var(--line-soft); color: var(--muted); }
+
+.email-row { cursor: pointer; }
+.email-row:hover { background: var(--paper); }
+.email-row.on { background: var(--blue-soft); }
+.email-preview { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.email-detail { position: sticky; top: 16px; }
+.email-reader .email-meta {
+  padding: 14px 16px; display: flex; flex-direction: column; gap: 6px;
+  border-bottom: 1px solid var(--line-soft); font-size: 13px;
+}
+.email-reader .email-meta .mut {
+  display: inline-block; min-width: 44px; color: var(--muted);
+  font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+}
+.email-body {
+  padding: 16px; margin: 0; white-space: pre-wrap; word-break: break-word;
+  font: inherit; font-size: 13px; line-height: 1.6; color: var(--text);
+}
+
+/* ---------- PAYMENT PLANS ----------
+   The plan builder is an editable grid, which the mockup's 720px modal crops.
+   Everything else about the box is unchanged. */
+.modal .box.wide { max-width: 940px; }
+
+/* Inputs inside a table cell: the modal's grid rows are edited in place, so the
+   controls have to sit flush in the cell rather than carry .f's block layout. */
+.plan-grid td input,
+.plan-grid td select { width: 100%; min-width: 96px; }
+.plan-grid td input[type='number'] { min-width: 88px; }
+
+/* An instalment whose due date has passed and is still unpaid. Reuses the
+   totals row's overdue colour so "late" reads the same everywhere. */
+.plan-late { color: var(--red); font-weight: 600; }
+
+/* ---------- PROFILE ----------
+   The avatar colour swatches. Same shape and interaction as .theme-choice on
+   the Settings screen, minus the label — the colour is the whole option. */
+.colour-choices { display: flex; gap: 8px; flex-wrap: wrap; }
+.colour-choice {
+  width: 30px; height: 30px; border-radius: 50%; cursor: pointer;
+  border: 2px solid transparent; box-shadow: 0 0 0 1px var(--line);
+  transition: box-shadow .15s, transform .1s;
+}
+.colour-choice:hover { transform: translateY(-1px); }
+.colour-choice.on { box-shadow: 0 0 0 2px var(--blue); }
+
+/* ---------- ATTENDANCE ----------
+   A month is a grid of seven columns, so it is one here too. The cells carry the
+   status colour as a wash rather than a pill: at a glance the shape of a month
+   is what you are reading, and twenty-odd pills would be twenty-odd things to
+   read one at a time. */
+.cal-head, .cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.cal-head {
+  margin-bottom: 6px; font-size: 10.5px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .1em; text-align: center;
+}
+.cal-day {
+  min-height: 74px; padding: 7px 8px; border: 1px solid var(--line);
+  border-radius: var(--r); background: var(--card); color: var(--text);
+  display: flex; flex-direction: column; gap: 2px; align-items: flex-start;
+  cursor: pointer; text-align: left; font: inherit;
+  transition: border-color .15s, background .15s;
+}
+.cal-day:hover { border-color: var(--blue); }
+.cal-day.empty-cell { border: 0; background: none; cursor: default; min-height: 0; }
+.cal-day.weekend { background: var(--paper); }
+.cal-day.today { border-color: var(--ink); border-width: 2px; padding: 6px 7px; }
+.cal-day .n { font-family: "IBM Plex Mono"; font-size: 12.5px; color: var(--muted); }
+.cal-day.on .n { color: var(--text); font-weight: 600; }
+.cal-day .h { font-family: "IBM Plex Mono"; font-size: 15px; font-weight: 600; margin-top: auto; }
+.cal-day .s {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .07em;
+  font-weight: 600; color: var(--muted);
+}
+
+/* Status washes, borrowed from the pill palette so a day and its pill in the
+   editor are unmistakably the same thing. */
+.cal-day.PRESENT { background: var(--green-soft); border-color: var(--green); }
+.cal-day.REMOTE  { background: var(--blue-soft);  border-color: var(--blue); }
+.cal-day.LEAVE   { background: var(--amber-soft); border-color: var(--amber); }
+.cal-day.SICK    { background: var(--violet-soft); border-color: var(--violet); }
+.cal-day.HOLIDAY { background: var(--line-soft);  border-color: var(--line); }
+.cal-day.ABSENT  { background: var(--red-soft);   border-color: var(--red); }
+
+@media (max-width: 720px) {
+  .cal-day { min-height: 58px; padding: 5px 6px; }
+  .cal-day .h { font-size: 13px; }
+  .cal-day .s { display: none; }
+}
+
+/* The status picker: pills you can press. The pill keeps its own colours, so
+   the button underneath contributes only the pressed state. */
+.status-choices { display: flex; gap: 8px; flex-wrap: wrap; }
+.status-choice {
+  border: 1px solid var(--line); background: var(--card); border-radius: 100px;
+  padding: 4px; cursor: pointer; line-height: 0;
+  transition: border-color .15s, box-shadow .15s;
+}
+.status-choice:hover { border-color: var(--blue); }
+.status-choice.on { border-color: var(--blue); box-shadow: 0 0 0 2px var(--blue-soft); }

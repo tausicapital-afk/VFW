@@ -8,16 +8,20 @@ import type { Role } from './types';
  * If the two ever disagree, the server wins.
  */
 export const ACL = {
-  'submission.create': ['SALES', 'INTERN', 'ADMIN'],
-  'submission.editOwn': ['SALES', 'INTERN', 'ADMIN'],
+  'submission.create': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
+  'submission.editOwn': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
   'submission.editAny': ['ACCT', 'ADMIN'],
   'submission.viewAll': ['ACCT', 'MGR', 'ADMIN'],
+  'submission.queueView': ['SALES', 'ACCT', 'ADMIN'],
   'submission.approve': ['ACCT', 'ADMIN'],
   'submission.reject': ['ACCT', 'ADMIN'],
   'submission.return': ['ACCT', 'ADMIN'],
+  'submission.void': ['ACCT', 'ADMIN'],
   'accounting.fields': ['ACCT', 'ADMIN'],
   'quickbooks.export': ['ACCT', 'ADMIN'],
   'invoice.generate': ['ACCT', 'ADMIN'],
+  'installment.plan': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
+  'installment.mark': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
   'reports.view': ['ACCT', 'MGR', 'ADMIN'],
   'leaderboard.view': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
   'contacts.view': ['SALES', 'ACCT', 'MGR', 'ADMIN'],
@@ -27,8 +31,15 @@ export const ACL = {
   'internal.comment': ['ACCT', 'MGR', 'ADMIN'],
   'internal.view': ['ACCT', 'MGR', 'ADMIN'],
   'messaging.use': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
-  'admin.manage': ['ADMIN'],
-  'activity.view': ['ADMIN'],
+  'email.viewOwn': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
+  'email.viewAll': ['ACCT', 'MGR', 'ADMIN'],
+  'email.send': ['ACCT', 'ADMIN'],
+  'attendance.mark': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
+  'attendance.viewTeam': ['ACCT', 'MGR', 'ADMIN'],
+  'payroll.viewOwn': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
+  'payroll.viewAll': ['ACCT', 'ADMIN'],
+  'admin.manage': ['ACCT', 'ADMIN'],
+  'activity.view': ['ACCT', 'ADMIN'],
 } as const satisfies Record<string, readonly Role[]>;
 
 export type Permission = keyof typeof ACL;

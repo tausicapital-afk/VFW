@@ -8,6 +8,8 @@ import { AuditService } from '../audit/audit.service';
 import { AuthUser, SessionClaims } from '../common/auth.guard';
 import { EmailNotConfiguredError, EmailService } from '../common/email';
 import { PrismaService } from '../prisma/prisma.service';
+import { avatarUrl } from '../profile/avatar';
+import { StorageService } from '../storage/storage.service';
 import { ForgotDto, ResetDto, SignupDto, VerifyOtpDto } from './dto';
 
 const MAX_ATTEMPTS = 5;
@@ -42,6 +44,7 @@ export class AuthService {
     private readonly email: EmailService,
     private readonly audit: AuditService,
     private readonly activity: ActivityService,
+    private readonly storage: StorageService,
   ) {}
 
   async login(
@@ -68,6 +71,11 @@ export class AuthService {
       await this.recordFailure(email);
       throw new UnauthorizedException('Email or password is incorrect');
     }
+
+    // A deleted account keeps its row (and may still read ACTIVE) purely so the
+    // audit trail resolves. It is not a login. Checked before status so a
+    // deleted PENDING account is never told to go and verify its email.
+    if (user.deletedAt) throw new UnauthorizedException('This account is not active');
 
     // A valid password is still not a login if the account has not been let in.
     if (user.status !== UserStatus.ACTIVE) {
@@ -114,14 +122,24 @@ export class AuthService {
     });
   }
 
+  /**
+   * The signed-in user, as every screen renders them. `avatarUrl` is signed here
+   * rather than left to the client so the shell can draw a picture from the
+   * session check alone, with no second request on every page load.
+   */
   async me(userId: string) {
-    return this.prisma.user.findUnique({
+    const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: {
-        id: true, name: true, email: true, role: true, department: true,
-        employeeId: true, commissionPct: true, target: true, colour: true,
+        id: true, name: true, email: true, phone: true, role: true, department: true,
+        title: true, employeeId: true, commissionPct: true, target: true, colour: true,
+        avatarKey: true,
       },
     });
+    if (!user) return null;
+
+    const { avatarKey, ...rest } = user;
+    return { ...rest, avatarUrl: await avatarUrl(this.storage, avatarKey) };
   }
 
   // -------------------------------------------------------------------------
@@ -166,7 +184,7 @@ export class AuthService {
       'That invitation code is not recognised, has expired, or has already been used',
     );
     if (!invitation) throw invalid;
-    if (invitation.usedAt || invitation.revokedAt) throw invalid;
+    if (invitation.usedAt || invitation.revokedAt || invitation.deletedAt) throw invalid;
     if (invitation.expiresAt <= new Date()) throw invalid;
 
     // An invitation addressed to someone is not a bearer token for anyone.
@@ -180,7 +198,13 @@ export class AuthService {
 
     const user = await this.prisma.$transaction(async (tx) => {
       const claimed = await tx.invitation.updateMany({
-        where: { id: invitation.id, usedAt: null, revokedAt: null, expiresAt: { gt: new Date() } },
+        where: {
+          id: invitation.id,
+          usedAt: null,
+          revokedAt: null,
+          deletedAt: null,
+          expiresAt: { gt: new Date() },
+        },
         data: { usedAt: new Date() },
       });
       if (claimed.count !== 1) throw invalid;

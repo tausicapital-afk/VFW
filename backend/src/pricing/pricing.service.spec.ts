@@ -21,7 +21,7 @@ describe('PricingService', () => {
   };
 
   describe('discounts', () => {
-    it('applies a percentage discount off the subtotal', () => {
+    it('applies a percentage discount off the package price', () => {
       const r = svc.compute({ ...base, discountType: DiscountType.PCT, discountValue: 15 });
       expect(r.subtotal.toFixed(2)).toBe('10000.00');
       expect(r.discountAmount.toFixed(2)).toBe('1500.00');
@@ -30,11 +30,42 @@ describe('PricingService', () => {
       expect(r.total.toFixed(2)).toBe('8925.00');
     });
 
+    it('discounts the PACKAGE only — a percentage never touches the add-ons', () => {
+      // 10,000 package + 2,000 of add-ons. A 10% discount is 1,000 (10% of the
+      // package), NOT 1,200 (10% of the subtotal): the add-ons stay full price.
+      const r = svc.compute({
+        ...base,
+        addons: [{ addonId: 'a1', qty: 1, unitPrice: 2000, currency: Currency.USD }],
+        discountType: DiscountType.PCT,
+        discountValue: 10,
+      });
+      expect(r.subtotal.toFixed(2)).toBe('12000.00');
+      expect(r.discountAmount.toFixed(2)).toBe('1000.00');
+      expect(r.discountPct.toFixed(2)).toBe('10.00'); // of the package, not the subtotal
+      expect(r.taxable.toFixed(2)).toBe('11000.00');
+    });
+
     it('applies a fixed (AMT) discount as an absolute amount', () => {
       const r = svc.compute({ ...base, discountType: DiscountType.AMT, discountValue: 2500 });
       expect(r.discountAmount.toFixed(2)).toBe('2500.00');
       expect(r.taxable.toFixed(2)).toBe('7500.00');
       expect(r.total.toFixed(2)).toBe('7875.00');
+    });
+
+    it('an AMT discount larger than the package never spills into the add-ons', () => {
+      // 1,000 package + 500 add-on. A flat 1,200 discount can only take the
+      // 1,000 package to zero — the 500 add-on line stays billed in full.
+      const r = svc.compute({
+        packagePrice: 1000,
+        addons: [{ addonId: 'a1', qty: 1, unitPrice: 500, currency: Currency.USD }],
+        discountType: DiscountType.AMT,
+        discountValue: 1200,
+        taxRate: 0,
+        commissionPct: 0,
+      });
+      expect(r.subtotal.toFixed(2)).toBe('1500.00');
+      expect(r.taxable.toFixed(2)).toBe('500.00'); // the add-on only; package floored at zero, not beyond
+      expect(r.total.toFixed(2)).toBe('500.00');
     });
 
     it('clamps a discount that would push the sale negative to zero — it never inverts', () => {
@@ -67,8 +98,8 @@ describe('PricingService', () => {
       expect(r.exceedsThreshold).toBe(true);
     });
 
-    it('measures an AMT discount as a percentage of the subtotal, like a PCT one', () => {
-      // 9,000 off a 10,000 deal is a 90% discount however it was keyed — a
+    it('measures an AMT discount as a percentage of the package price, like a PCT one', () => {
+      // 9,000 off a 10,000 package is a 90% discount however it was keyed — a
       // threshold in percent must catch it, or AMT is a way around the rule.
       const r = svc.discountApproval(10000, 9000, 15);
       expect(r.discountPct.toFixed(2)).toBe('90.00');
