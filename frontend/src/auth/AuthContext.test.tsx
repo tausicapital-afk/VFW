@@ -111,6 +111,9 @@ describe('useAuth', () => {
     expect(mockedApi.post).toHaveBeenCalledWith('/api/auth/logout');
     expect(qc.getQueryData(['me'])).toBeNull();
     expect(qc.getQueryData(['submissions'])).toBeUndefined();
-    expect(result.current.user).toBeNull();
+    // The cache is updated synchronously above, but the hook's own re-render
+    // from that cache change is not guaranteed to have flushed yet — the
+    // login() test above hits the same thing and already waits for it.
+    await waitFor(() => expect(result.current.user).toBeNull());
   });
 });
