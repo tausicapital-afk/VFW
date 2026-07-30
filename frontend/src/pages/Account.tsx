@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import { api, ApiError } from '../lib/api';
-import { fmtDate, fmtDateTime } from '../lib/format';
+import { fmtDate, fmtDateTime, money } from '../lib/format';
 import type { Profile } from '../lib/types';
 import { Avatar } from '../shell/Avatar';
 import { Page, ROLE_LABEL } from '../shell/Shell';
@@ -294,6 +294,7 @@ function ProfileCard({ profile }: { profile: Profile }) {
           <ReadOnly label="Role" value={ROLE_LABEL[profile.role]} />
           <ReadOnly label="Employee ID" value={profile.employeeId ?? '—'} />
           <ReadOnly label="Joined" value={fmtDate(profile.createdAt)} />
+          <ReadOnly label="Total earned since joining" value={money(profile.lifetimeEarned, 'CAD')} />
           <ReadOnly
             label="Last sign-in"
             value={profile.lastLoginAt ? fmtDateTime(profile.lastLoginAt) : 'Never'}

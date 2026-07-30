@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { can } from '../lib/acl';
 import { api } from '../lib/api';
 import { fmtDate, money } from '../lib/format';
+import { effectivePackage } from '../lib/pricing';
 import type { Catalog, Submission } from '../lib/types';
 import { Page } from '../shell/Shell';
 
@@ -25,6 +27,7 @@ type Action = { kind: 'approve' | 'reject' | 'return'; sub: Submission };
 
 export function Queue() {
   const qc = useQueryClient();
+  const nav = useNavigate();
   const { user } = useAuth();
   const [action, setAction] = useState<Action | null>(null);
 
@@ -97,7 +100,12 @@ export function Queue() {
                     : 0;
                   return (
                     <tr key={s.id}>
-                      <td className="mono">{s.ref}</td>
+                      <td className="mono">
+                        {s.ref}
+                        {s.packageCustomized && (
+                          <div><span className="pill RETURNED" style={{ marginTop: 4 }}>Custom package</span></div>
+                        )}
+                      </td>
                       <td>
                         <b>{s.contact.brand}</b>
                         <div className="sm mut">{s.contact.designer}</div>
@@ -119,6 +127,9 @@ export function Queue() {
                       {canDecide && (
                         <td>
                           <div className="rowflex" style={{ justifyContent: 'flex-end' }}>
+                            <button className="btn sm" onClick={() => nav(`/submissions/${s.id}/edit`)}>
+                              Edit
+                            </button>
                             <button className="btn sm primary" onClick={() => setAction({ kind: 'approve', sub: s })}>
                               Approve
                             </button>
@@ -189,12 +200,17 @@ function ActionModal({
   const [costCentre, setCostCentre] = useState(COST_CENTRES[0]);
   const [reason, setReason] = useState(REJECT_REASONS[0]);
   const [note, setNote] = useState('');
+  const [ackCustomPackage, setAckCustomPackage] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const run = useMutation({
     mutationFn: () => {
       if (kind === 'approve') {
-        return api.post(`/api/submissions/${sub.id}/approve`, { glAccount: gl, costCentre });
+        return api.post(`/api/submissions/${sub.id}/approve`, {
+          glAccount: gl,
+          costCentre,
+          ...(sub.packageCustomized ? { acknowledgeCustomPackage: ackCustomPackage } : {}),
+        });
       }
       if (kind === 'reject') {
         return api.post(`/api/submissions/${sub.id}/reject`, { reason, note: note || undefined });
@@ -226,6 +242,33 @@ function ActionModal({
             <div className="r"><span>Tax ({sub.taxRate}%)</span><span>{money(sub.taxAmount, sub.currency)}</span></div>
             <div className="r big"><span>Total</span><span>{money(sub.total, sub.currency)}</span></div>
           </div>
+
+          {kind === 'approve' && sub.packageCustomized && (
+            <div className="note warn" style={{ marginBottom: 16 }}>
+              <b>This sale uses a customized/non-catalogue package.</b>
+              <div className="sm" style={{ marginTop: 6 }}>
+                Rate card: <b>{sub.package.name}</b> · {sub.package.looks} looks ·{' '}
+                {money(
+                  sub.package.prices.find((p) => p.cityId === sub.event.cityId)?.price ?? sub.packagePrice,
+                  sub.currency,
+                )}
+              </div>
+              <div className="sm">
+                Actually charged: <b>{effectivePackage(sub).name}</b> · {effectivePackage(sub).looks} looks ·{' '}
+                {money(sub.packagePrice, sub.currency)}
+              </div>
+              <label className="chk" style={{ marginTop: 10 }}>
+                <input
+                  type="checkbox"
+                  checked={ackCustomPackage}
+                  onChange={(e) => setAckCustomPackage(e.target.checked)}
+                />
+                <span className="t">
+                  I acknowledge this customized/non-catalogue package and approve it as priced.
+                </span>
+              </label>
+            </div>
+          )}
 
           {kind === 'approve' && (
             <div className="fields">
@@ -280,7 +323,11 @@ function ActionModal({
           <button className="btn" onClick={onClose}>Cancel</button>
           <button
             className={'btn ' + (kind === 'reject' ? 'dgr' : 'primary')}
-            disabled={run.isPending || (kind === 'return' && !note.trim())}
+            disabled={
+              run.isPending ||
+              (kind === 'return' && !note.trim()) ||
+              (kind === 'approve' && sub.packageCustomized && !ackCustomPackage)
+            }
             onClick={() => { setError(null); run.mutate(); }}
           >
             {run.isPending ? 'Working…' : title}

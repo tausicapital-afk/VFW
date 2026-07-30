@@ -28,6 +28,8 @@ export interface Profile extends User {
   hasAvatar: boolean;
   createdAt: string;
   lastLoginAt?: string | null;
+  /** Every APPROVED payroll invoice's gross, summed — since joining, in effect. */
+  lifetimeEarned: Money;
 }
 
 // --- Attendance ------------------------------------------------------------
@@ -194,6 +196,11 @@ export interface Submission {
   ref: string;
   status: SubmissionStatus;
   currency: Currency;
+  packageNameOverride: string | null;
+  packageLooksOverride: number | null;
+  packageBlurbOverride: string | null;
+  packagePriceOverride: Money | null;
+  packageCustomized: boolean;
   packagePrice: Money;
   addonTotal: Money;
   subtotal: Money;
@@ -460,6 +467,8 @@ export interface PayrollStatement {
     commissionPct: Money;
     target: Money;
     baseRate: Money;
+    /** Every APPROVED payroll invoice's gross, summed — since joining, in effect. */
+    lifetimeEarned: Money;
   };
   attendance: { days: number; daysWorked: number; hours: string; avgHours: string };
   sales: { count: number; revenue: Money; invoiced: Money };
@@ -476,10 +485,34 @@ export interface PayrollStatement {
   };
 }
 
+export type PayrollInvoiceStatus = 'SUBMITTED' | 'APPROVED' | 'REJECTED';
+
+/** One person's submitted month — a frozen snapshot, not the live statement. */
+export interface PayrollInvoiceRow {
+  id: string;
+  userId: string;
+  month: string;
+  status: PayrollInvoiceStatus;
+  payType: PayType;
+  baseRate: Money;
+  hours: Money;
+  base: Money;
+  commissionPct: Money;
+  commission: Money;
+  gross: Money;
+  note: string | null;
+  submittedAt: string;
+  reviewedAt: string | null;
+  reviewedById: string | null;
+  user?: { id: string; name: string; colour: string; role: Role; avatarUrl: string | null };
+}
+
 /** One person's month. `self` decides whether the screen says "you" or a name. */
 export interface PayrollSheet extends PayrollStatement {
   month: string;
   self: boolean;
+  /** This month's submitted invoice, or null if nothing has been submitted yet. */
+  invoice: PayrollInvoiceRow | null;
 }
 
 export interface PayrollRun {

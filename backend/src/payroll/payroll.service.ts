@@ -1,13 +1,16 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { AttendanceStatus, Currency, PayType, Prisma, UserStatus } from '@prisma/client';
+import {
+  AttendanceStatus, Currency, PayrollInvoiceStatus, PayType, Prisma, UserStatus,
+} from '@prisma/client';
 import { Decimal } from 'decimal.js';
+import { AuditService } from '../audit/audit.service';
 import { can } from '../common/acl';
 import { AuthUser } from '../common/auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { avatarUrl } from '../profile/avatar';
 import { currentMonth, monthRange, summarise } from '../attendance/attendance.service';
-import { PayrollQueryDto } from './dto';
+import { EditPayrollInvoiceDto, PayrollQueryDto, RejectPayrollInvoiceDto, SubmitPayrollDto } from './dto';
 
 /**
  * The whole person, which is what a payroll statement needs. Every other screen
@@ -78,6 +81,7 @@ export class PayrollService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
+    private readonly audit: AuditService,
   ) {}
 
   /**
@@ -229,6 +233,7 @@ export class PayrollService {
     person: Person,
     sales: RepSales | undefined,
     attendance: AttendanceDay[] | undefined,
+    lifetimeEarned: Decimal | undefined,
   ) {
     const summary = summarise(attendance ?? []);
     const hours = new Decimal(summary.hours);
@@ -252,6 +257,10 @@ export class PayrollService {
         target: person.target.toFixed(2),
         baseRate: person.baseRate.toFixed(2),
         avatarUrl: await avatarUrl(this.storage, avatarKey),
+        // Every APPROVED payroll invoice's gross, summed — "since starting" in
+        // effect, since nothing here reaches back further than the account
+        // itself.
+        lifetimeEarned: (lifetimeEarned ?? new Decimal(0)).toFixed(2),
       },
       attendance: {
         days: summary.days,
@@ -293,11 +302,18 @@ export class PayrollService {
     const fx = await this.fxRates();
     const sales = (await this.salesByRep(range, fx)).get(userId);
     const attendance = (await this.attendanceByUser(range, [userId])).get(userId);
+    const lifetime = (await this.lifetimeEarnedByUser([userId])).get(userId);
+    // This month's payroll invoice, if one has been submitted — lets the screen
+    // show a status pill and compare the frozen snapshot against the live figure.
+    const invoice = await this.prisma.payrollInvoice.findUnique({
+      where: { userId_month: { userId, month } },
+    });
 
     return {
       month,
       self: userId === actor.id,
-      ...(await this.statement(person, sales, attendance)),
+      invoice,
+      ...(await this.statement(person, sales, attendance, lifetime)),
     };
   }
 
@@ -325,10 +341,11 @@ export class PayrollService {
     const fx = await this.fxRates();
     const sales = await this.salesByRep(range, fx);
     const attendance = await this.attendanceByUser(range, people.map((p) => p.id));
+    const lifetime = await this.lifetimeEarnedByUser(people.map((p) => p.id));
 
     const rows = await Promise.all(
       people.map((person) =>
-        this.statement(person, sales.get(person.id), attendance.get(person.id)),
+        this.statement(person, sales.get(person.id), attendance.get(person.id), lifetime.get(person.id)),
       ),
     );
 
@@ -347,5 +364,216 @@ export class PayrollService {
         hours: total((r) => r.attendance.hours),
       },
     };
+  }
+
+  /** Every APPROVED invoice's gross, summed per person, in one query. */
+  private async lifetimeEarnedByUser(userIds: string[]): Promise<Map<string, Decimal>> {
+    const rows = await this.prisma.payrollInvoice.groupBy({
+      by: ['userId'],
+      where: { userId: { in: userIds }, status: PayrollInvoiceStatus.APPROVED },
+      _sum: { gross: true },
+    });
+    return new Map(rows.map((r) => [r.userId, new Decimal(r._sum.gross ?? 0)]));
+  }
+
+  /** Single-person convenience — used by the Profile screen. */
+  async lifetimeEarned(userId: string): Promise<string> {
+    const total = (await this.lifetimeEarnedByUser([userId])).get(userId) ?? new Decimal(0);
+    return total.toFixed(2);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Payroll invoices — the submit/approve lifecycle on top of the statement
+  // above. See the schema comment on PayrollInvoice for why the figures are a
+  // frozen snapshot rather than a live re-derivation.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Submitting your own month as a payroll invoice. Idempotent: resubmitting a
+   * SUBMITTED or REJECTED month upserts the same row with a fresh snapshot and
+   * clears any previous review; an already-APPROVED month is a decided, frozen
+   * record and refuses a second submission the same way an approved Submission
+   * refuses a plain resubmit — an admin edits it directly instead.
+   */
+  async submitMine(dto: SubmitPayrollDto, actor: AuthUser) {
+    if (dto.month > currentMonth()) {
+      throw new BadRequestException('You cannot submit payroll for a month that has not happened yet');
+    }
+
+    const existing = await this.prisma.payrollInvoice.findUnique({
+      where: { userId_month: { userId: actor.id, month: dto.month } },
+    });
+    if (existing?.status === PayrollInvoiceStatus.APPROVED) {
+      throw new BadRequestException(
+        `${dto.month} has already been approved — an admin can edit it directly if it needs to change`,
+      );
+    }
+
+    const sheet = await this.statementFor({ month: dto.month }, actor);
+
+    return this.prisma.$transaction(async (tx) => {
+      const snapshot = {
+        payType: sheet.pay.payType,
+        baseRate: sheet.pay.baseRate,
+        hours: sheet.attendance.hours,
+        base: sheet.pay.base,
+        commissionPct: sheet.user.commissionPct,
+        commission: sheet.pay.commission,
+        gross: sheet.pay.gross,
+      };
+      const invoice = await tx.payrollInvoice.upsert({
+        where: { userId_month: { userId: actor.id, month: dto.month } },
+        create: { userId: actor.id, month: dto.month, status: PayrollInvoiceStatus.SUBMITTED, ...snapshot },
+        update: {
+          ...snapshot,
+          status: PayrollInvoiceStatus.SUBMITTED,
+          submittedAt: new Date(),
+          reviewedAt: null,
+          reviewedById: null,
+          note: null,
+        },
+      });
+
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'PAYROLL_SUBMITTED',
+          detail: `Payroll submitted for ${dto.month}`,
+          payload: { month: dto.month, gross: invoice.gross.toString() },
+        },
+        tx,
+      );
+      return invoice;
+    });
+  }
+
+  /** Your own submission history, newest month first. */
+  async mine(actor: AuthUser) {
+    return this.prisma.payrollInvoice.findMany({
+      where: { userId: actor.id },
+      orderBy: { month: 'desc' },
+    });
+  }
+
+  /** Everyone's invoices awaiting review, oldest first — the payroll Queue. */
+  async pending(actor: AuthUser) {
+    if (!can('payroll.approve', actor.role)) {
+      throw new ForbiddenException('Your role cannot review payroll submissions');
+    }
+    const invoices = await this.prisma.payrollInvoice.findMany({
+      where: { status: PayrollInvoiceStatus.SUBMITTED },
+      include: { user: { select: { id: true, name: true, colour: true, avatarKey: true, role: true } } },
+      orderBy: { submittedAt: 'asc' },
+    });
+    return Promise.all(
+      invoices.map(async ({ user, ...invoice }) => {
+        const { avatarKey, ...profile } = user;
+        return { ...invoice, user: { ...profile, avatarUrl: await avatarUrl(this.storage, avatarKey) } };
+      }),
+    );
+  }
+
+  /**
+   * An admin correcting the frozen figures before sign-off — e.g. a manual
+   * bonus, or a correction the person's own statement could not have known
+   * about. Refused once approved: that is an amendment, not a pre-approval
+   * edit, and this system does not yet have a lifecycle for amending a paid
+   * month.
+   */
+  async editInvoice(id: string, dto: EditPayrollInvoiceDto, actor: AuthUser) {
+    if (!can('payroll.approve', actor.role)) {
+      throw new ForbiddenException('Your role cannot edit a payroll submission');
+    }
+    const invoice = await this.prisma.payrollInvoice.findUnique({ where: { id } });
+    if (!invoice) throw new NotFoundException('Payroll invoice not found');
+    if (invoice.status === PayrollInvoiceStatus.APPROVED) {
+      throw new BadRequestException('This invoice is already approved and cannot be edited');
+    }
+
+    const base = dto.base != null ? new Decimal(dto.base).toDecimalPlaces(2) : invoice.base;
+    const commission = dto.commission != null ? new Decimal(dto.commission).toDecimalPlaces(2) : invoice.commission;
+    const gross = base.plus(commission);
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.payrollInvoice.update({
+        where: { id },
+        data: { base: base.toFixed(2), commission: commission.toFixed(2), gross: gross.toFixed(2), note: dto.note },
+      });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'PAYROLL_INVOICE_EDITED',
+          detail: `Payroll figures edited for ${invoice.month}: ${dto.note}`,
+          payload: {
+            month: invoice.month,
+            userId: invoice.userId,
+            before: {
+              base: invoice.base.toString(),
+              commission: invoice.commission.toString(),
+              gross: invoice.gross.toString(),
+            },
+            after: { base: updated.base.toString(), commission: updated.commission.toString(), gross: updated.gross.toString() },
+          },
+        },
+        tx,
+      );
+      return updated;
+    });
+  }
+
+  async approveInvoice(id: string, actor: AuthUser) {
+    if (!can('payroll.approve', actor.role)) {
+      throw new ForbiddenException('Your role cannot approve payroll');
+    }
+    const invoice = await this.prisma.payrollInvoice.findUnique({ where: { id } });
+    if (!invoice) throw new NotFoundException('Payroll invoice not found');
+    if (invoice.status !== PayrollInvoiceStatus.SUBMITTED) {
+      throw new BadRequestException(`Only a submitted invoice can be approved — this one is ${invoice.status}`);
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.payrollInvoice.update({
+        where: { id },
+        data: { status: PayrollInvoiceStatus.APPROVED, reviewedAt: new Date(), reviewedById: actor.id },
+      });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'PAYROLL_APPROVED',
+          detail: `Payroll approved for ${invoice.month}`,
+          payload: { month: invoice.month, userId: invoice.userId, gross: invoice.gross.toString() },
+        },
+        tx,
+      );
+      return updated;
+    });
+  }
+
+  async rejectInvoice(id: string, dto: RejectPayrollInvoiceDto, actor: AuthUser) {
+    if (!can('payroll.approve', actor.role)) {
+      throw new ForbiddenException('Your role cannot reject payroll');
+    }
+    const invoice = await this.prisma.payrollInvoice.findUnique({ where: { id } });
+    if (!invoice) throw new NotFoundException('Payroll invoice not found');
+    if (invoice.status !== PayrollInvoiceStatus.SUBMITTED) {
+      throw new BadRequestException(`Only a submitted invoice can be rejected — this one is ${invoice.status}`);
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.payrollInvoice.update({
+        where: { id },
+        data: { status: PayrollInvoiceStatus.REJECTED, reviewedAt: new Date(), reviewedById: actor.id, note: dto.reason },
+      });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'PAYROLL_REJECTED',
+          detail: `Payroll rejected for ${invoice.month}: ${dto.reason}`,
+          payload: { month: invoice.month, userId: invoice.userId },
+        },
+        tx,
+      );
+      return updated;
+    });
   }
 }

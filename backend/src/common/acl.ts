@@ -98,6 +98,14 @@ export const ACL = {
   // hours and their numbers, not their salaries.
   'payroll.viewOwn': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
   'payroll.viewAll': ['ACCT', 'ADMIN'],
+  // Submitting your monthly figure for approval. Mirrors payroll.viewOwn — the
+  // same "yours to see" reasoning applies to "yours to submit" — and, like
+  // viewOwn, can only ever resolve to the caller.
+  'payroll.submit': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
+  // Reviewing everyone's submitted invoices: editing figures before sign-off,
+  // approving, rejecting. Mirrors submission.approve — the maker (submit) and
+  // the checker (approve) must not be the same permission.
+  'payroll.approve': ['ACCT', 'ADMIN'],
   // The activity/logs screen is user-monitoring — who signed in, what they
   // opened, who they messaged. HR/security-sensitive, and long held by ADMIN
   // alone; ACCT now holds it too, so Accounting and Admin carry an identical,

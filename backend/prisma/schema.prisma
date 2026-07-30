@@ -135,6 +135,9 @@ model User {
   attendance       AttendanceEntry[] @relation("AttendanceSubject")
   attendanceEdited AttendanceEntry[] @relation("AttendanceEditor")
 
+  payrollInvoicesSubmitted PayrollInvoice[] @relation("PayrollInvoiceSubject")
+  payrollInvoicesReviewed  PayrollInvoice[] @relation("PayrollInvoiceReviewer")
+
   @@index([role, status])
 }
 
@@ -405,6 +408,19 @@ model Submission {
 
   packageId String
   package   Package @relation(fields: [packageId], references: [id])
+
+  // A rep may override any of the catalogue package's visible attributes for
+  // this one sale — a negotiated price, a renamed/rebadged package, or (all
+  // four set) a fully ad-hoc package that shares nothing with the anchor
+  // Package beyond its brand, tax profile and GL account. `packageId` stays a
+  // real catalogue row on purpose: tax/GL classification and city/currency are
+  // never freeform, only what the client sees is. `packageCustomized` is
+  // stored (not derived) so the Queue and reports can filter on it in SQL.
+  packageNameOverride  String?
+  packageLooksOverride Int?
+  packageBlurbOverride String?
+  packagePriceOverride Decimal? @db.Decimal(14, 2)
+  packageCustomized    Boolean  @default(false)
 
   showDate DateTime? @db.Date
   notes    String?
@@ -1047,6 +1063,65 @@ model AttendanceEntry {
   @@unique([userId, date])
   // The team view reads a month across everyone.
   @@index([date])
+}
+
+// ---------------------------------------------------------------------------
+// Payroll invoices — the submit/approve lifecycle on top of PayrollService's
+// derived monthly statement.
+//
+// Everything on the statement (base, commission, hours) is computed fresh on
+// every read from Attendance and Submission — nothing about it is stored. This
+// is the table where a MONTH gets frozen: submitting one snapshots that
+// month's figures at that instant, exactly the way Submission.packagePrice
+// freezes a catalogue price at the moment a sale is made. Correcting a
+// timesheet or amending a sale afterwards must not silently move an
+// already-submitted invoice — if the two disagree, the screen says so and the
+// person resubmits.
+// ---------------------------------------------------------------------------
+
+enum PayrollInvoiceStatus {
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+model PayrollInvoice {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation("PayrollInvoiceSubject", fields: [userId], references: [id])
+  // 'YYYY-MM' — the same shape PayrollQueryDto/AttendanceQueryDto already use.
+  month  String
+
+  status PayrollInvoiceStatus @default(SUBMITTED)
+
+  // The frozen snapshot, copied from PayrollService.statement()'s `pay` block
+  // at submit time.
+  payType       PayType
+  baseRate      Decimal @db.Decimal(14, 2)
+  hours         Decimal @db.Decimal(6, 2)
+  base          Decimal @db.Decimal(14, 2)
+  commissionPct Decimal @db.Decimal(5, 2)
+  commission    Decimal @db.Decimal(14, 2)
+  gross         Decimal @db.Decimal(14, 2)
+
+  // An admin's reason for editing the figures before approval, or the
+  // rejection reason. Not required at submit time — only when someone
+  // overrides what the person themselves submitted.
+  note String?
+
+  submittedAt  DateTime  @default(now())
+  reviewedAt   DateTime?
+  reviewedById String?
+  reviewedBy   User?     @relation("PayrollInvoiceReviewer", fields: [reviewedById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // One invoice per person per month — resubmitting upserts this row rather
+  // than creating a second one.
+  @@unique([userId, month])
+  @@index([status])
+  @@index([userId])
 }
 
 // ---------------------------------------------------------------------------

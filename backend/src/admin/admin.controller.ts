@@ -3,11 +3,13 @@ import { AuthUser, Can, CurrentUser } from '../common/auth.guard';
 import { AdminService } from './admin.service';
 import {
   CreateAddonDto,
+  CreateEventDto,
   CreateInvitationDto,
   CreatePackageDto,
   CreateTaxDto,
   RejectUserDto,
   UpdateAddonDto,
+  UpdateEventDto,
   UpdateInvitationDto,
   UpdatePackageDto,
   UpdateSettingsDto,
@@ -134,6 +136,22 @@ export class AdminController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.admin.updatePackage(id, dto, user);
+  }
+
+  @Post('admin/events')
+  @Can('admin.manage')
+  createEvent(@Body() dto: CreateEventDto, @CurrentUser() user: AuthUser) {
+    return this.admin.createEvent(dto, user);
+  }
+
+  @Patch('admin/events/:id')
+  @Can('admin.manage')
+  updateEvent(
+    @Param('id') id: string,
+    @Body() dto: UpdateEventDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.admin.updateEvent(id, dto, user);
   }
 
   @Post('admin/addons')

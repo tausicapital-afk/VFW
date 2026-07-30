@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, Module, Patch, Post, Put, Res } from '@n
 import type { Response } from 'express';
 import { AuthUser, CurrentUser } from '../common/auth.guard';
 import { SESSION_COOKIE, sessionCookie } from '../common/cookie';
+import { PayrollModule } from '../payroll/payroll.controller';
 import { ProfileService } from './profile.service';
 import { AvatarCommitDto, AvatarPresignDto, ChangePasswordDto, UpdateProfileDto } from './dto';
 
@@ -71,6 +72,7 @@ export class ProfileController {
 }
 
 @Module({
+  imports: [PayrollModule],
   controllers: [ProfileController],
   providers: [ProfileService],
   exports: [ProfileService],

@@ -8,11 +8,13 @@ import { EmailService } from '../common/email';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CreateAddonDto,
+  CreateEventDto,
   CreateInvitationDto,
   CreatePackageDto,
   CreateTaxDto,
   RejectUserDto,
   UpdateAddonDto,
+  UpdateEventDto,
   UpdateInvitationDto,
   UpdatePackageDto,
   UpdateSettingsDto,
@@ -60,6 +62,28 @@ function decimal(raw: string, field: string): Decimal {
  * Admin.tsx previews this id in the new-package modal and applies the same
  * rules; keep the two in step.
  */
+/**
+ * A show's id follows the seed's own convention (VFW-FW26, GFC-TYO-FW26) rather
+ * than catalogueId's name-slug: brand, city and a season abbreviation ("Spring/
+ * Summer 27" -> SS27) are what actually distinguish one show from another —
+ * the name alone does not, since "Vancouver Fashion Week" repeats every season.
+ */
+export function eventId(brand: string, cityId: string, season: string): string {
+  const year = season.match(/(\d{2,4})\s*$/)?.[1]?.slice(-2) ?? '';
+  const initials = season
+    .replace(/\d+/g, '')
+    .split(/[^A-Za-z]+/)
+    .filter(Boolean)
+    .map((w) => w[0]!.toUpperCase())
+    .join('');
+  if (!initials || !year) {
+    throw new BadRequestException(
+      'Season must look like "Spring/Summer 27" or "Fall/Winter 26" — initials followed by a year',
+    );
+  }
+  return `${brand.toUpperCase()}-${cityId.toUpperCase()}-${initials}${year}`;
+}
+
 export function catalogueId(brand: string, name: string): string {
   const slug = name
     .toUpperCase()
@@ -700,6 +724,133 @@ export class AdminService {
         tx,
       );
       return created;
+    });
+  }
+
+  /**
+   * A new show is additive, exactly like a new package: it appears on the
+   * new-submission form's season tabs from now on and touches nothing already
+   * sold. This is the gap that left the Summer/Spring tab with nothing to
+   * show — every show up to now could only be seeded by a developer editing
+   * prisma/seed.ts.
+   */
+  async createEvent(dto: CreateEventDto, actor: AuthUser) {
+    const brand = dto.brand.trim().toUpperCase();
+    const name = dto.name.trim();
+    const season = dto.season.trim();
+
+    const city = await this.prisma.city.findUnique({ where: { id: dto.cityId } });
+    if (!city) throw new BadRequestException(`Unknown city ${dto.cityId}`);
+
+    const id = eventId(brand, city.id, season);
+    if (await this.prisma.event.findUnique({ where: { id } })) {
+      throw new BadRequestException(
+        `${brand} already has a show with the id ${id} — give this one a different season or city`,
+      );
+    }
+
+    const start = new Date(dto.start);
+    const end = new Date(dto.end);
+    if (end < start) throw new BadRequestException('A show cannot end before it starts');
+
+    return this.prisma.$transaction(async (tx) => {
+      const created = await tx.event.create({
+        data: {
+          id,
+          brand,
+          name,
+          season,
+          venue: dto.venue?.trim() || null,
+          start,
+          end,
+          cityId: city.id,
+        },
+        include: { city: true },
+      });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'CATALOG_EVENT_CREATED',
+          detail: `Show added to the catalogue: ${brand} ${name} (${season})`,
+          payload: {
+            eventId: id,
+            brand,
+            name,
+            season,
+            cityId: city.id,
+            venue: dto.venue ?? null,
+            start: dto.start,
+            end: dto.end,
+          },
+        },
+        tx,
+      );
+      return created;
+    });
+  }
+
+  async updateEvent(id: string, dto: UpdateEventDto, actor: AuthUser) {
+    const event = await this.prisma.event.findUnique({ where: { id } });
+    if (!event) throw new NotFoundException('Show not found');
+
+    const before: Record<string, Prisma.InputJsonValue | null> = {};
+    const after: Record<string, Prisma.InputJsonValue | null> = {};
+    const data: Prisma.EventUpdateInput = {};
+
+    if (dto.name !== undefined && dto.name.trim() !== event.name) {
+      before.name = event.name;
+      after.name = dto.name.trim();
+      data.name = dto.name.trim();
+    }
+    if (dto.season !== undefined && dto.season.trim() !== event.season) {
+      before.season = event.season;
+      after.season = dto.season.trim();
+      data.season = dto.season.trim();
+    }
+    if (dto.venue !== undefined && (dto.venue?.trim() || null) !== event.venue) {
+      before.venue = event.venue;
+      after.venue = dto.venue?.trim() || null;
+      data.venue = dto.venue?.trim() || null;
+    }
+    if (dto.cityId !== undefined && dto.cityId !== event.cityId) {
+      if (!(await this.prisma.city.findUnique({ where: { id: dto.cityId } }))) {
+        throw new BadRequestException(`Unknown city ${dto.cityId}`);
+      }
+      before.cityId = event.cityId;
+      after.cityId = dto.cityId;
+      data.city = { connect: { id: dto.cityId } };
+    }
+    if (dto.start !== undefined) {
+      const start = new Date(dto.start);
+      if (start.getTime() !== event.start.getTime()) {
+        before.start = event.start.toISOString().slice(0, 10);
+        after.start = dto.start;
+        data.start = start;
+      }
+    }
+    if (dto.end !== undefined) {
+      const end = new Date(dto.end);
+      if (end.getTime() !== event.end.getTime()) {
+        before.end = event.end.toISOString().slice(0, 10);
+        after.end = dto.end;
+        data.end = end;
+      }
+    }
+
+    if (!Object.keys(after).length) throw new BadRequestException('Nothing was changed');
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.event.update({ where: { id }, data, include: { city: true } });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'CATALOG_EVENT_UPDATED',
+          detail: `Show updated: ${event.brand} ${event.name}`,
+          payload: { eventId: id, before, after },
+        },
+        tx,
+      );
+      return updated;
     });
   }
 

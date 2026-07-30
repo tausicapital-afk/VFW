@@ -266,6 +266,77 @@ export class UpdatePackageDto {
   prices?: CityPriceDto[];
 }
 
+/**
+ * A show. The id is derived server-side the same way a package's is — from
+ * brand, name and season — because these ids surface in exports and audit
+ * payloads the same way catalogue ids do.
+ */
+export class CreateEventDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(20)
+  brand: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(120)
+  name: string;
+
+  /** Free text with a trailing year, e.g. "Spring/Summer 27" — see lib/season.ts on the frontend. */
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  season: string;
+
+  @IsString()
+  cityId: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  venue?: string;
+
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'start must look like 2027-03-16' })
+  start: string;
+
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'end must look like 2027-03-22' })
+  end: string;
+}
+
+export class UpdateEventDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  season?: string;
+
+  @IsOptional()
+  @IsString()
+  cityId?: string;
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsString()
+  @MaxLength(200)
+  venue?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'start must look like 2027-03-16' })
+  start?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'end must look like 2027-03-22' })
+  end?: string;
+}
+
 export class UpdateAddonDto {
   @IsOptional()
   @IsString()

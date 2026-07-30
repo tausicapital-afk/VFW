@@ -6,6 +6,7 @@ import { randomUUID } from 'crypto';
 import { ActivityService } from '../activity/activity.service';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser, SessionClaims } from '../common/auth.guard';
+import { PayrollService } from '../payroll/payroll.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { avatarKeyPrefix, avatarUrl } from './avatar';
@@ -41,12 +42,23 @@ export class ProfileService {
     private readonly audit: AuditService,
     private readonly activity: ActivityService,
     private readonly jwt: JwtService,
+    private readonly payroll: PayrollService,
   ) {}
 
-  /** Add the signed picture link to a row selected with PROFILE_FIELDS. */
-  private async withAvatar<T extends { avatarKey: string | null }>(row: T) {
+  /**
+   * Add the signed picture link and lifetime payroll earnings to a row
+   * selected with PROFILE_FIELDS. Every method below hands its result straight
+   * back to the browser's profile cache, so this is the one place both derived
+   * fields are attached — an update or an avatar change must not make
+   * lifetimeEarned disappear from the screen until the next full reload.
+   */
+  private async withAvatar<T extends { id: string; avatarKey: string | null }>(row: T) {
     const { avatarKey, ...rest } = row;
-    return { ...rest, hasAvatar: avatarKey !== null, avatarUrl: await avatarUrl(this.storage, avatarKey) };
+    const [signedUrl, lifetimeEarned] = await Promise.all([
+      avatarUrl(this.storage, avatarKey),
+      this.payroll.lifetimeEarned(row.id),
+    ]);
+    return { ...rest, hasAvatar: avatarKey !== null, avatarUrl: signedUrl, lifetimeEarned };
   }
 
   private async load(userId: string) {

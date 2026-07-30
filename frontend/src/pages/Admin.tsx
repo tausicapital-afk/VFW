@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { api } from '../lib/api';
 import { fmtDate, money } from '../lib/format';
 import type {
-  AdminCatalogue, AdminUser, Currency, Invitation, PayType, Role, Settings, UserStatus,
+  AdminCatalogue, AdminUser, Currency, EventRow, Invitation, PayType, Role, Settings, UserStatus,
 } from '../lib/types';
 import { useAuth } from '../auth/AuthContext';
 import { ExportMenu } from '../shell/ExportMenu';
@@ -1038,8 +1038,11 @@ function PackagesTab() {
   const [editing, setEditing] = useState<string | null>(null);
   const [addingPackage, setAddingPackage] = useState(false);
   const [addingAddon, setAddingAddon] = useState(false);
+  const [editingShow, setEditingShow] = useState<string | null>(null);
+  const [addingShow, setAddingShow] = useState(false);
 
   const pkg = data?.packages.find((p) => p.id === editing);
+  const show = data?.events.find((e) => e.id === editingShow);
   const refresh = () => void qc.invalidateQueries({ queryKey: ['admin', 'catalogue'] });
 
   return (
@@ -1051,6 +1054,40 @@ function PackagesTab() {
       </div>
 
       <div className="card">
+        <div className="hd">
+          <h3>Shows</h3>
+          <div className="sp" />
+          <button className="btn sm blue" onClick={() => setAddingShow(true)}>+ New show</button>
+        </div>
+        <div className="tbl-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Brand</th><th>Show</th><th>Season</th><th>City</th><th>Dates</th><th />
+              </tr>
+            </thead>
+            <tbody>
+              {data?.events.map((ev) => (
+                <tr key={ev.id}>
+                  <td><span className={'tag ' + ev.brand}>{ev.brand}</span></td>
+                  <td className="b">{ev.name}</td>
+                  <td className="sm">{ev.season}</td>
+                  <td className="sm">{ev.city.name}</td>
+                  <td className="sm mono">{fmtDate(ev.start)} – {fmtDate(ev.end)}</td>
+                  <td>
+                    <button className="btn sm" onClick={() => setEditingShow(ev.id)}>Edit</button>
+                  </td>
+                </tr>
+              ))}
+              {data && data.events.length === 0 && (
+                <tr><td colSpan={6} className="mut">No shows yet.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 16 }}>
         <div className="hd">
           <h3>Package rate card</h3>
           <div className="sp" />
@@ -1137,6 +1174,21 @@ function PackagesTab() {
           glAccounts={data.glAccounts}
           onClose={() => setAddingAddon(false)}
           onSaved={() => { setAddingAddon(false); refresh(); }}
+        />
+      )}
+      {show && (
+        <EventModal
+          event={show}
+          cities={data?.cities ?? []}
+          onClose={() => setEditingShow(null)}
+          onSaved={() => { setEditingShow(null); refresh(); }}
+        />
+      )}
+      {addingShow && data && (
+        <NewEventModal
+          cities={data.cities}
+          onClose={() => setAddingShow(false)}
+          onSaved={() => { setAddingShow(false); refresh(); }}
         />
       )}
     </>
@@ -1585,6 +1637,230 @@ function PackageModal({
             onClick={() => { setError(null); save.mutate(); }}
           >
             {save.isPending ? 'Saving…' : 'Save rate card'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Mirrors `eventId` in admin.service.ts — brand, city and a season abbreviation
+ * ("Spring/Summer 27" -> SS27), because the name alone repeats every season.
+ */
+function previewEventId(brand: string, cityId: string, season: string): string {
+  const year = season.match(/(\d{2,4})\s*$/)?.[1]?.slice(-2) ?? '';
+  const initials = season
+    .replace(/\d+/g, '')
+    .split(/[^A-Za-z]+/)
+    .filter(Boolean)
+    .map((w) => w[0]!.toUpperCase())
+    .join('');
+  return cityId && initials && year ? `${brand}-${cityId}-${initials}${year}` : '';
+}
+
+/**
+ * Additive, like a new package: a show appears on the new-submission form's
+ * season tabs from now on and touches no sale already on the books.
+ */
+function NewEventModal({
+  cities, onClose, onSaved,
+}: {
+  cities: AdminCatalogue['cities'];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [brand, setBrand] = useState(BRANDS[0]);
+  const [name, setName] = useState('');
+  const [season, setSeason] = useState('');
+  const [cityId, setCityId] = useState(cities[0]?.id ?? '');
+  const [venue, setVenue] = useState('');
+  const [start, setStart] = useState('');
+  const [end, setEnd] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const id = previewEventId(brand, cityId, season.trim());
+
+  const create = useMutation({
+    mutationFn: () =>
+      api.post('/api/admin/events', {
+        brand,
+        name: name.trim(),
+        season: season.trim(),
+        cityId,
+        venue: venue.trim() || undefined,
+        start,
+        end,
+      }),
+    onSuccess: onSaved,
+    onError: (e: Error) => setError(e.message),
+  });
+
+  const ready =
+    name.trim() !== '' && season.trim() !== '' && !!cityId && start !== '' && end !== '';
+
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="box" onClick={(e) => e.stopPropagation()}>
+        <div className="hd">
+          <h3>New show</h3>
+          <div className="sp" style={{ flex: 1 }} />
+          <button className="btn sm" onClick={onClose}>Close</button>
+        </div>
+        <div className="bd">
+          <div className="fields">
+            <div className="f">
+              <label>Brand</label>
+              <select value={brand} onChange={(e) => setBrand(e.target.value)}>
+                {BRANDS.map((b) => <option key={b}>{b}</option>)}
+              </select>
+            </div>
+            <div className="f">
+              <label>City</label>
+              <select value={cityId} onChange={(e) => setCityId(e.target.value)}>
+                {cities.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div className="f wide">
+              <label>Show name</label>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Vancouver Fashion Week"
+              />
+            </div>
+            <div className="f">
+              <label>Season</label>
+              <input
+                value={season}
+                onChange={(e) => setSeason(e.target.value)}
+                placeholder="Spring/Summer 27"
+              />
+              <div className="help">
+                {id
+                  ? <>Filed as <b className="mono">{id}</b>.</>
+                  : 'Needs initials and a year, e.g. "Spring/Summer 27".'}
+              </div>
+            </div>
+            <div className="f">
+              <label>Venue (optional)</label>
+              <input value={venue} onChange={(e) => setVenue(e.target.value)} />
+            </div>
+            <div className="f">
+              <label>Start date</label>
+              <input type="date" value={start} onChange={(e) => setStart(e.target.value)} />
+            </div>
+            <div className="f">
+              <label>End date</label>
+              <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} />
+            </div>
+          </div>
+          {error && <div className="note bad" style={{ marginTop: 12 }}>{error}</div>}
+        </div>
+        <div className="ft">
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button
+            className="btn primary"
+            disabled={!ready || create.isPending}
+            onClick={() => { setError(null); create.mutate(); }}
+          >
+            {create.isPending ? 'Adding…' : 'Add show'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EventModal({
+  event, cities, onClose, onSaved,
+}: {
+  event: EventRow;
+  cities: AdminCatalogue['cities'];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState(event.name);
+  const [season, setSeason] = useState(event.season);
+  const [cityId, setCityId] = useState(event.cityId);
+  const [venue, setVenue] = useState(event.venue ?? '');
+  const [start, setStart] = useState(event.start.slice(0, 10));
+  const [end, setEnd] = useState(event.end.slice(0, 10));
+  const [error, setError] = useState<string | null>(null);
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.patch(`/api/admin/events/${event.id}`, {
+        name: name.trim(),
+        season: season.trim(),
+        cityId,
+        venue: venue.trim() || null,
+        start,
+        end,
+      }),
+    onSuccess: onSaved,
+    onError: (e: Error) => setError(e.message),
+  });
+
+  const dirty =
+    name.trim() !== event.name ||
+    season.trim() !== event.season ||
+    cityId !== event.cityId ||
+    (venue.trim() || null) !== event.venue ||
+    start !== event.start.slice(0, 10) ||
+    end !== event.end.slice(0, 10);
+
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="box" onClick={(e) => e.stopPropagation()}>
+        <div className="hd">
+          <h3>Edit {event.name}</h3>
+          <div className="sp" style={{ flex: 1 }} />
+          <button className="btn sm" onClick={onClose}>Close</button>
+        </div>
+        <div className="bd">
+          <div className="fields">
+            <div className="f wide">
+              <label>Show name</label>
+              <input value={name} onChange={(e) => setName(e.target.value)} />
+            </div>
+            <div className="f">
+              <label>Season</label>
+              <input value={season} onChange={(e) => setSeason(e.target.value)} />
+            </div>
+            <div className="f">
+              <label>City</label>
+              <select value={cityId} onChange={(e) => setCityId(e.target.value)}>
+                {cities.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div className="f">
+              <label>Venue (optional)</label>
+              <input value={venue} onChange={(e) => setVenue(e.target.value)} />
+            </div>
+            <div className="f">
+              <label>Start date</label>
+              <input type="date" value={start} onChange={(e) => setStart(e.target.value)} />
+            </div>
+            <div className="f">
+              <label>End date</label>
+              <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} />
+            </div>
+          </div>
+          <div className="note lock" style={{ marginTop: 12 }}>
+            The id ({event.id}) stays fixed once a show is created — it is what submissions and
+            exports already point at.
+          </div>
+          {error && <div className="note bad" style={{ marginTop: 12 }}>{error}</div>}
+        </div>
+        <div className="ft">
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button
+            className="btn primary"
+            disabled={!dirty || save.isPending}
+            onClick={() => { setError(null); save.mutate(); }}
+          >
+            {save.isPending ? 'Saving…' : 'Save show'}
           </button>
         </div>
       </div>

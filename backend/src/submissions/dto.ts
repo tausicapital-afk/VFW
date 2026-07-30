@@ -50,6 +50,26 @@ export class CreateSubmissionDto {
   @IsOptional() @IsArray() @IsString({ each: true })
   addonIds?: string[];
 
+  // --- package customization ------------------------------------------------
+  // All optional and all independent: setting only `packagePriceOverride` is a
+  // negotiated price on an otherwise-catalogue package; setting the other
+  // three renames/rebadges it for this sale; setting all four is a fully
+  // ad-hoc package that shares nothing with the catalogue anchor but its tax
+  // profile, GL account and currency. Whichever combination is set, the server
+  // still runs it through PricingService exactly like a catalogue price — see
+  // SubmissionsService.resolveSale.
+  @IsOptional() @IsString() @MinLength(1) @MaxLength(120)
+  packageNameOverride?: string;
+
+  @IsOptional() @IsNumber() @Min(0) @Max(999) @Type(() => Number)
+  packageLooksOverride?: number;
+
+  @IsOptional() @IsString() @MaxLength(2000)
+  packageBlurbOverride?: string;
+
+  @IsOptional() @IsNumber() @Min(0) @Max(100_000_000) @Type(() => Number)
+  packagePriceOverride?: number;
+
   @IsOptional() @IsDateString()
   showDate?: string;
 
@@ -87,6 +107,16 @@ export class ApproveDto {
    */
   @IsOptional() @IsBoolean()
   acknowledgeDiscountOverride?: boolean;
+
+  /**
+   * Sign-off that this sale's package was customized or built ad-hoc rather
+   * than sold straight off the rate card — the same "say it out loud"
+   * mechanism as acknowledgeDiscountOverride, for the same reason: a rep-typed
+   * price or description must never reach approval indistinguishably from a
+   * catalogue sale.
+   */
+  @IsOptional() @IsBoolean()
+  acknowledgeCustomPackage?: boolean;
 }
 
 export class RejectDto {

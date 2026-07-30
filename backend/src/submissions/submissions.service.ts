@@ -32,7 +32,7 @@ const DETAIL = {
   rep: { select: { id: true, name: true, colour: true, role: true } },
   contact: true,
   event: { include: { city: true } },
-  package: true,
+  package: { include: { prices: true } },
   addons: { include: { addon: true } },
   // Date first, then insertion order. `date` is date-only, so a payment and the
   // negative entry that reverses it usually share one — sorting on date alone
@@ -239,8 +239,23 @@ export class SubmissionsService {
 
     const rep = await this.prisma.user.findUniqueOrThrow({ where: { id: repId } });
 
+    // A rep may override the package's price and/or its displayed name/looks/
+    // description for this one sale. `pkg`/`price` above stay the anchor — its
+    // brand, tax profile, GL account and currency are never freeform — but the
+    // figure PricingService actually prices is the override when one was given.
+    // This is the one line that keeps "the server computes the total" true even
+    // for a custom price: nothing downstream (tax, discount, commission) is
+    // computed any differently than for a catalogue price.
+    const packagePriceInput = dto.packagePriceOverride ?? price.price;
+    const packageCustomized = Boolean(
+      dto.packageNameOverride?.trim() ||
+      dto.packageLooksOverride != null ||
+      dto.packageBlurbOverride?.trim() ||
+      dto.packagePriceOverride != null,
+    );
+
     const priced = this.pricing.compute({
-      packagePrice: price.price,
+      packagePrice: packagePriceInput,
       addons: addons.map((a) => ({
         addonId: a.id,
         qty: 1,
@@ -254,12 +269,23 @@ export class SubmissionsService {
       deposit: dto.deposit ?? 0,
     });
 
-    return { event, pkg, price, addons, discountType, rep, priced };
+    return {
+      event, pkg, price, addons, discountType, rep, priced,
+      packageCustomized,
+      packageNameOverride: dto.packageNameOverride?.trim() || null,
+      packageLooksOverride: dto.packageLooksOverride ?? null,
+      packageBlurbOverride: dto.packageBlurbOverride?.trim() || null,
+      packagePriceOverride: dto.packagePriceOverride != null ? new Decimal(dto.packagePriceOverride) : null,
+    };
   }
 
   async create(dto: CreateSubmissionDto, user: AuthUser) {
     // On create the caller is the rep — they are selling their own deal.
-    const { event, pkg, price, discountType, rep, priced } = await this.resolveSale(dto, user.id);
+    const {
+      event, pkg, price, discountType, rep, priced,
+      packageCustomized, packageNameOverride, packageLooksOverride,
+      packageBlurbOverride, packagePriceOverride,
+    } = await this.resolveSale(dto, user.id);
 
     return this.prisma.$transaction(async (tx) => {
       const contact = await this.resolveContact(tx, dto, user);
@@ -276,6 +302,11 @@ export class SubmissionsService {
           eventId: event.id,
           cityId: event.cityId,
           packageId: pkg.id,
+          packageCustomized,
+          packageNameOverride,
+          packageLooksOverride,
+          packageBlurbOverride,
+          packagePriceOverride: packagePriceOverride?.toFixed(2) ?? null,
           showDate: dto.showDate ? new Date(dto.showDate) : null,
           notes: dto.notes,
           currency: price.currency,
@@ -316,8 +347,26 @@ export class SubmissionsService {
           submissionId: submission.id,
           actorId: user.id,
           action: 'SUBMITTED',
-          detail: 'Sent to Accounting for approval',
-          payload: { total: submission.total.toString(), currency: submission.currency },
+          detail: packageCustomized
+            ? 'Sent to Accounting for approval — package customized from the rate card'
+            : 'Sent to Accounting for approval',
+          payload: {
+            total: submission.total.toString(),
+            currency: submission.currency,
+            ...(packageCustomized
+              ? {
+                  packageOverride: {
+                    anchorName: pkg.name,
+                    anchorLooks: pkg.looks,
+                    anchorPrice: price.price.toString(),
+                    name: packageNameOverride,
+                    looks: packageLooksOverride,
+                    blurb: packageBlurbOverride,
+                    price: packagePriceOverride?.toFixed(2) ?? null,
+                  },
+                }
+              : {}),
+          },
         },
         tx,
       );
@@ -367,6 +416,16 @@ export class SubmissionsService {
       );
     }
 
+    // The same "say it out loud" gate as the discount one above, for the same
+    // reason: a rep-typed price or description must never reach approval
+    // indistinguishably from a catalogue sale.
+    if (submission.packageCustomized && !dto.acknowledgeCustomPackage) {
+      throw new BadRequestException(
+        'This sale uses a customized or non-catalogue package. ' +
+          'Re-send with acknowledgeCustomPackage: true to approve it as priced.',
+      );
+    }
+
     // Only present when the threshold was actually beaten, so a normal approval
     // is byte-for-byte the audit row it was before.
     const override = discount.exceedsThreshold
@@ -394,20 +453,28 @@ export class SubmissionsService {
       });
 
       const posted = dto.glAccount ? `Posted to GL ${dto.glAccount}` : 'Approved';
+      const notes: string[] = [];
+      if (override) {
+        notes.push(
+          `discount override: ${override.discountPct}% exceeds the ${override.thresholdPct}% ` +
+            `approval threshold, signed off by ${user.name}`,
+        );
+      }
+      if (submission.packageCustomized) {
+        notes.push(`customized/non-catalogue package, signed off by ${user.name}`);
+      }
 
       await this.audit.log(
         {
           submissionId: id,
           actorId: user.id,
           action: 'APPROVED',
-          detail: override
-            ? `${posted} — discount override: ${override.discountPct}% exceeds the ` +
-              `${override.thresholdPct}% approval threshold, signed off by ${user.name}`
-            : posted,
+          detail: notes.length ? `${posted} — ${notes.join('; ')}` : posted,
           payload: {
             glAccount: dto.glAccount,
             total: updated.total.toString(),
             ...(override ? { discountOverride: override } : {}),
+            ...(submission.packageCustomized ? { customPackageAcknowledged: true } : {}),
           },
         },
         tx,
@@ -964,7 +1031,7 @@ export class SubmissionsService {
         country: s.contact.country,
       },
       event: { name: s.event.name, city: `${s.city.name}, ${s.city.country}`, showDate: s.showDate },
-      packageName: s.package.name,
+      packageName: s.packageNameOverride ?? s.package.name,
       packagePrice: s.packagePrice.toFixed(2),
       addons: s.addons.map((l) => ({ name: l.addon.name, qty: l.qty, amount: l.amount.toFixed(2) })),
       subtotal: s.subtotal.toFixed(2),
@@ -1101,7 +1168,11 @@ export class SubmissionsService {
     }
 
     // Price against the rep who OWNS the submission, not whoever is editing it.
-    const { event, price, discountType, rep, priced } = await this.resolveSale(dto, existing.repId);
+    const {
+      event, price, discountType, rep, priced,
+      packageCustomized, packageNameOverride, packageLooksOverride,
+      packageBlurbOverride, packagePriceOverride,
+    } = await this.resolveSale(dto, existing.repId);
 
     return this.prisma.$transaction(async (tx) => {
       const contact = await this.resolveContact(tx, dto, user);
@@ -1121,6 +1192,11 @@ export class SubmissionsService {
           eventId: event.id,
           cityId: event.cityId,
           packageId: dto.packageId,
+          packageCustomized,
+          packageNameOverride,
+          packageLooksOverride,
+          packageBlurbOverride,
+          packagePriceOverride: packagePriceOverride?.toFixed(2) ?? null,
           showDate: dto.showDate ? new Date(dto.showDate) : null,
           notes: dto.notes,
           currency: price.currency,

@@ -6,6 +6,7 @@ import { can } from '../lib/acl';
 import { api } from '../lib/api';
 import { downloadFile } from '../lib/export';
 import { fmtDate, fmtDateTime, money, PAY_LABEL } from '../lib/format';
+import { effectivePackage } from '../lib/pricing';
 import type { AuditEntry, Catalog, DesignerFeedback, SendInvoiceResult, Submission } from '../lib/types';
 import { Page } from '../shell/Shell';
 import { DocumentsCard } from './DocumentsCard';
@@ -233,11 +234,24 @@ export function SubmissionDetail() {
                 <Row label="Show" value={sub.event.name} />
                 <Row label="City" value={`${sub.event.city.name}, ${sub.event.city.country}`} />
                 <Row label="Runs" value={`${fmtDate(sub.event.start)} – ${fmtDate(sub.event.end)}`} />
-                <Row label="Package" value={`${sub.package.name} · ${sub.package.looks} looks`} />
+                <Row
+                  label="Package"
+                  value={`${effectivePackage(sub).name} · ${effectivePackage(sub).looks} looks`}
+                />
                 {sub.addons.length > 0 && (
                   <Row label="Add-ons" value={sub.addons.map((a) => a.addon.name).join(', ')} />
                 )}
               </div>
+              {sub.packageCustomized && (
+                <div className="note warn" style={{ marginTop: 14 }}>
+                  <b>Customized package.</b> Rate card: {sub.package.name} · {sub.package.looks} looks ·{' '}
+                  {money(
+                    sub.package.prices.find((p) => p.cityId === sub.event.cityId)?.price ?? sub.packagePrice,
+                    sub.currency,
+                  )}. Actually charged: {effectivePackage(sub).name} · {effectivePackage(sub).looks} looks
+                  · {money(sub.packagePrice, sub.currency)}.
+                </div>
+              )}
             </div>
           </div>
 

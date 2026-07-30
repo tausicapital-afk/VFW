@@ -43,6 +43,18 @@ export function NewSubmission() {
   const [eventId, setEventId] = useState('');
   const [packageId, setPackageId] = useState('');
   const [addonIds, setAddonIds] = useState<string[]>([]);
+
+  // Per-sale package customization. Off by default — most sales are the
+  // catalogue package as-is. `fullyCustom` starts the four fields blank
+  // instead of pre-filled, forcing the rep to type all of them; that is the
+  // only difference between "customize this package" and "fully custom
+  // package" — one mechanism serves both.
+  const [customize, setCustomize] = useState(false);
+  const [fullyCustom, setFullyCustom] = useState(false);
+  const [overrideName, setOverrideName] = useState('');
+  const [overrideLooks, setOverrideLooks] = useState('');
+  const [overrideBlurb, setOverrideBlurb] = useState('');
+  const [overridePrice, setOverridePrice] = useState('');
   const [discountType, setDiscountType] = useState<DiscountType>('PCT');
   const [discountValue, setDiscountValue] = useState(0);
   const [deposit, setDeposit] = useState(0);
@@ -97,6 +109,36 @@ export function NewSubmission() {
   const price = pkg && event ? pkg.prices.find((pr) => pr.cityId === event.cityId) : undefined;
   const currency: Currency = price?.currency ?? 'USD';
 
+  function toggleCustomize(on: boolean) {
+    setCustomize(on);
+    if (on && pkg && price) {
+      setOverrideName(pkg.name);
+      setOverrideLooks(String(pkg.looks));
+      setOverrideBlurb(pkg.blurb ?? '');
+      setOverridePrice(String(price.price));
+    } else {
+      setFullyCustom(false);
+      setOverrideName(''); setOverrideLooks(''); setOverrideBlurb(''); setOverridePrice('');
+    }
+  }
+
+  function toggleFullyCustom(on: boolean) {
+    setFullyCustom(on);
+    if (on) {
+      setOverrideName(''); setOverrideLooks(''); setOverrideBlurb(''); setOverridePrice('');
+    } else if (pkg && price) {
+      setOverrideName(pkg.name);
+      setOverrideLooks(String(pkg.looks));
+      setOverrideBlurb(pkg.blurb ?? '');
+      setOverridePrice(String(price.price));
+    }
+  }
+
+  const overridePriceNum = customize && overridePrice.trim() !== '' ? Number(overridePrice) : null;
+  const customPackageReady =
+    !customize || !fullyCustom ||
+    (overrideName.trim() !== '' && Number(overrideLooks) > 0 && overridePrice.trim() !== '');
+
   // Add-ons priced in another currency cannot go on this invoice — the server
   // rejects a mixed-currency sale, so never offer one.
   const sellable = useMemo(() => {
@@ -113,7 +155,7 @@ export function NewSubmission() {
    */
   const preview = useMemo(() => {
     if (!pkg || !price || !catalog) return null;
-    const base = Number(price.price);
+    const base = overridePriceNum ?? Number(price.price);
     const addonTotal = sellable
       .filter((a) => addonIds.includes(a.id))
       .reduce((t, a) => t + Number(a.price), 0);
@@ -124,7 +166,7 @@ export function NewSubmission() {
     const tax = Math.round(taxable * (rate / 100) * 100) / 100;
     const total = Math.round((taxable + tax) * 100) / 100;
     return { base, addonTotal, subtotal, discount, taxable, rate, tax, total, balance: total - deposit };
-  }, [pkg, price, catalog, sellable, addonIds, discountType, discountValue, deposit]);
+  }, [pkg, price, catalog, sellable, addonIds, discountType, discountValue, deposit, overridePriceNum]);
 
   // An indicative schedule shown while the rep builds the plan. Like the total, it
   // is recomputed on the server at submit — this only shows the shape of the terms
@@ -150,6 +192,12 @@ export function NewSubmission() {
           email: email || undefined,
           country: country || undefined,
           eventId, packageId, addonIds,
+          ...(customize ? {
+            packageNameOverride: overrideName.trim() || undefined,
+            packageLooksOverride: overrideLooks.trim() !== '' ? Number(overrideLooks) : undefined,
+            packageBlurbOverride: overrideBlurb.trim() || undefined,
+            packagePriceOverride: overridePrice.trim() !== '' ? Number(overridePrice) : undefined,
+          } : {}),
           discountType,
           discountValue,
           deposit,
@@ -235,7 +283,7 @@ export function NewSubmission() {
     );
   }
 
-  const ready = designer && brand && eventId && packageId;
+  const ready = designer && brand && eventId && packageId && customPackageReady;
 
   return (
     <Page crumb="Work" title="New submission">
@@ -335,6 +383,8 @@ export function NewSubmission() {
                         onChange={() => {
                           setPackageId(p.id);
                           setAddonIds([]);
+                          setCustomize(false);
+                          setFullyCustom(false);
                         }}
                       />
                       <span className="t">
@@ -345,6 +395,70 @@ export function NewSubmission() {
                     </label>
                   );
                 })}
+              </div>
+            )}
+            {pkg && price && (
+              <div style={{ marginTop: 14 }}>
+                <label className="chk" style={{ marginBottom: customize ? 10 : 0 }}>
+                  <input
+                    type="checkbox"
+                    checked={customize}
+                    onChange={(e) => toggleCustomize(e.target.checked)}
+                  />
+                  <span className="t">
+                    <b>Customize this package for this sale</b>
+                    <div className="sm mut">
+                      Override the price and/or the name, looks and description shown to this client.
+                    </div>
+                  </span>
+                </label>
+                {customize && (
+                  <>
+                    <label className="chk" style={{ marginBottom: 10 }}>
+                      <input
+                        type="checkbox"
+                        checked={fullyCustom}
+                        onChange={(e) => toggleFullyCustom(e.target.checked)}
+                      />
+                      <span className="t">
+                        <b>Fully custom package (not on the rate card)</b>
+                        <div className="sm mut">
+                          Build this line from scratch instead of starting from {pkg.name}.
+                        </div>
+                      </span>
+                    </label>
+                    <div className="fields">
+                      <div className="f wide">
+                        <label>Package name</label>
+                        <input value={overrideName} onChange={(e) => setOverrideName(e.target.value)} />
+                      </div>
+                      <div className="f">
+                        <label>Looks</label>
+                        <input
+                          type="number" min={0}
+                          value={overrideLooks}
+                          onChange={(e) => setOverrideLooks(e.target.value)}
+                        />
+                      </div>
+                      <div className="f">
+                        <label>Price ({currency})</label>
+                        <input
+                          type="number" min={0} step="0.01"
+                          value={overridePrice}
+                          onChange={(e) => setOverridePrice(e.target.value)}
+                        />
+                      </div>
+                      <div className="f wide">
+                        <label>Description (optional)</label>
+                        <input value={overrideBlurb} onChange={(e) => setOverrideBlurb(e.target.value)} />
+                      </div>
+                    </div>
+                    <div className="help">
+                      Customized packages are flagged for Accounting and need explicit sign-off at
+                      approval.
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>

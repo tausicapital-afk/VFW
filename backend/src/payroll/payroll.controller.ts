@@ -1,7 +1,7 @@
-import { Controller, Get, Module, Query } from '@nestjs/common';
+import { Body, Controller, Get, Module, Param, Patch, Post, Query } from '@nestjs/common';
 import { AuthUser, Can, CurrentUser } from '../common/auth.guard';
 import { PayrollService } from './payroll.service';
-import { PayrollQueryDto } from './dto';
+import { EditPayrollInvoiceDto, PayrollQueryDto, RejectPayrollInvoiceDto, SubmitPayrollDto } from './dto';
 
 /**
  * Payroll. Both routes carry `payroll.viewOwn`, which every role holds, because
@@ -28,6 +28,53 @@ export class PayrollController {
   @Can('payroll.viewOwn')
   statement(@Query() query: PayrollQueryDto, @CurrentUser() user: AuthUser) {
     return this.payroll.statementFor(query, user);
+  }
+
+  // --- Payroll invoices ------------------------------------------------------
+  // Declared before any :id-shaped route, same reason as "run" above.
+
+  @Post('submit')
+  @Can('payroll.submit')
+  submit(@Body() dto: SubmitPayrollDto, @CurrentUser() user: AuthUser) {
+    return this.payroll.submitMine(dto, user);
+  }
+
+  @Get('invoices/mine')
+  @Can('payroll.viewOwn')
+  mine(@CurrentUser() user: AuthUser) {
+    return this.payroll.mine(user);
+  }
+
+  @Get('invoices/pending')
+  @Can('payroll.approve')
+  pending(@CurrentUser() user: AuthUser) {
+    return this.payroll.pending(user);
+  }
+
+  @Patch('invoices/:id')
+  @Can('payroll.approve')
+  editInvoice(
+    @Param('id') id: string,
+    @Body() dto: EditPayrollInvoiceDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.payroll.editInvoice(id, dto, user);
+  }
+
+  @Post('invoices/:id/approve')
+  @Can('payroll.approve')
+  approveInvoice(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.payroll.approveInvoice(id, user);
+  }
+
+  @Post('invoices/:id/reject')
+  @Can('payroll.approve')
+  rejectInvoice(
+    @Param('id') id: string,
+    @Body() dto: RejectPayrollInvoiceDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.payroll.rejectInvoice(id, dto, user);
   }
 }
 
