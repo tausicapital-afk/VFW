@@ -24,7 +24,13 @@ export type Period = {
   cityId?: string;
 };
 
-const iso = (d: Date) => d.toISOString().slice(0, 10);
+// The local calendar date, deliberately not `toISOString().slice(0, 10)`.
+// A preset builds its boundary with `new Date(y, m, 1)`, which is midnight
+// *local*; `toISOString()` then converts to UTC, and for anyone east of UTC
+// that lands on the previous day. "This month" would run from the 31st of last
+// month, quietly pulling the prior period's last day into this one.
+const iso = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 /** The mockup's period presets (applyPeriod, line 2708). */
 function preset(p: string): Pick<Period, 'from' | 'to'> {

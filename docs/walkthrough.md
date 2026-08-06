@@ -678,6 +678,82 @@ Feedback is about the designer; internal notes are about the rep.
 
 ---
 
+# Cycle 9 — Insight: Reports, Audit trail, Leaderboard
+
+## 9.1 — The CAD consolidation is real, and two reports opt out
+
+Ten report types, one shown at a time, sharing three filters (period, event, city) that also drive the
+Leaderboard. Every conversion checked against the configured FX was exact:
+
+| Native | × FX | Reported |
+| --- | --- | --- |
+| EUR 22,690.80 | 1.49 | CAD 33,809.29 |
+| EUR 24,300.00 | 1.49 | CAD 36,207.00 |
+| USD 22,050.00 | 1.37 | CAD 30,208.50 |
+| USD 21,340.80 | 1.37 | CAD 29,236.90 |
+
+**Two reports deliberately do not consolidate** — *Revenue analysis* and *Outstanding receivables*.
+They carry a `CURRENCY` column and show native amounts, because a receivable is owed in the currency it
+was invoiced in and converting it would misstate what the client actually owes.
+
+Three details worth carrying:
+
+- **Customized sales report under their catalogue package name.** *Package popularity* groups
+  `S-26-1002` (Gold, customized) and `S-26-1004` (Silver, renamed) under Gold and Silver — the rate card
+  is the unit of analysis, not the per-sale name.
+- ***Customer retention* is the only report that includes a returned deal**, counting REHAK ATELIER as
+  one booking with zero lifetime net.
+- ***Outstanding receivables* is "approved and unpaid", not "invoiced and unpaid".** `S-26-1004` appears
+  there with no `INVOICE` event against it.
+
+## 9.2 — The Leaderboard formula, derived and checked
+
+Ranking is by **score, not revenue**, and the four weights reproduce the displayed scores exactly with
+the revenue term **capped at 100% of target**:
+
+```
+score = 30 × min(revenue/target, 1) + 20 × approvalRate + 30 × collectionRate + 20 × retentionRate
+```
+
+| Rep | Working | Score |
+| --- | --- | --- |
+| Aiko Tanaka | 30×0.96 + 20×1.00 + 30×0.50 | 63.8 → **64** |
+| Priya Raman | 30×1.00 *(259% capped)* + 20×1.00 + 30×0.17 | 55.1 → **55** |
+
+**Priya out-sells Aiko 2.25 : 1 and still ranks below her.** That is the formula working as specified —
+the revenue term saturates at target, so everything above quota is worth nothing, and her 17% collection
+rate gives away the 30-point collection term. Worth knowing before anyone reads the board as a revenue
+ranking. The *Sales representative performance* report prints `259%` and `Performance Review Required`
+on the same row.
+
+Reps with zero sales are **included, never hidden**, and hold real rank numbers. Ties at zero are not
+stably ordered — their relative positions shift as filters change.
+
+## 9.3 — The audit trail really is append-only
+
+Not merely documented as such — the screen contributes **zero interactive elements** beyond search,
+the action filter and export. No row menu, no edit, no delete, and rows are not clickable.
+
+The data model shows the same discipline. `S-26-1001` carries three consecutive entries: `INSTALLMENT
+PAID`, then `INSTALLMENT UNPAID` ("reopened — 6000.00 USD reversed"), then `INSTALLMENT PAID` again with
+the identical amount and reference. The reversal was recorded as a new event; nothing was rewritten.
+
+Every entry carries a structured `payload` beside the human sentence — and **secrets are redacted in it**:
+
+```
+CONFIG_UPDATED → {"changed":{
+  "R2_ENDPOINT":         {"before":"http://localhost:9000","after":"http://127.0.0.1:9000"},
+  "R2_SECRET_ACCESS_KEY":{"before":"••••••","after":"•••••• (updated)"} }}
+```
+
+Non-secret config values are recorded verbatim; the secret is masked on both sides of the diff.
+
+**Gap:** that payload is returned by the API and **never surfaced in the UI**. The screen shows only the
+`detail` string, with no expand affordance, so the structured before/after diff is invisible to an
+operator using the console.
+
+---
+
 # Bugs found while walking the system
 
 All were found by using the system, not by reading it.
@@ -766,13 +842,88 @@ Sessions orphaned by a dead process carry `durationSec = null` deliberately. The
 `_sum(durationSec)`, and Prisma skips nulls, so those sessions contribute zero. The Sessions tab is
 honest and shows `—`; the roll-up presents an undercount as a total with nothing signalling it.
 
-### Not a bug — a false positive worth recording
+### 6. Every period preset starts one day early — **fixed**
 
-An agent reported that `S-26-1001` (a **VFW** show) posts to GL `4050 — Designer Package Revenue — GFC`
-rather than `4010 — … VFW`. The catalogue is in fact correct: `VFW-GOLD` carries `glCode 4010`. The sale
-shows 4050 because this walkthrough passed `"glAccount": "4050"` explicitly when approving it over the
-API. **Bad test data, not a defect** — recorded here because it is exactly the kind of finding that
-looks like a revenue-misclassification bug until the seed is checked.
+`Reports.tsx` built each preset's boundary in local time and then formatted it in UTC:
+
+```ts
+const iso = (d: Date) => d.toISOString().slice(0, 10);
+…
+if (p === 'm') return { from: iso(new Date(y, now.getMonth(), 1)), to: iso(now) };
+```
+
+`new Date(y, m, 1)` is midnight **local**; `toISOString()` converts to **UTC**. For anyone east of UTC
+that lands on the previous day. Observed from a UTC+3 browser on 2026-08-06:
+
+| Preset | Sent | Should be |
+| --- | --- | --- |
+| This month | `from=2026-07-31` | 2026-08-01 |
+| This quarter | `from=2026-06-30` | 2026-07-01 |
+| This year | `from=2025-12-31` | 2026-01-01 |
+
+So "This month" quietly included the last day of the previous month, and "This year" the last day of the
+previous year — in a reporting screen whose whole purpose is period totals. It affects Reports and the
+Leaderboard, which share the definition. Invisible from Vancouver (UTC−7) and wrong everywhere the
+company actually shows — Tokyo, Milan, Paris, London.
+
+Fixed by formatting the local calendar date directly instead of round-tripping through UTC.
+
+### 7. The rank-3 badge is invisible on the Leaderboard — **open**
+
+The `#` badge for rank 3 only renders dark-on-dark. The character is in the DOM, so it is purely
+contrast — presumably a "bronze" colour with no dark-theme variant. It follows the *position*, not the
+rep, across reloads and filter changes. A distinct instance from the `.btn.on` family above.
+
+### 8. Admin-owned sales do not reconcile between reports — **open, needs a decision**
+
+`S-26-1005` (rep: System Administrator) is counted in *Sales by event*, *Sales by city*, *Package
+popularity*, *Revenue analysis* and *Customer retention* — and is absent from *Payment collection*,
+*Sales representative performance* and the *Leaderboard*, which list only SALES-role users.
+
+The arithmetic is exact:
+
+```
+Sales by event, gross          CAD 129,461.69
+Payment collection, invoiced   CAD 100,224.79
+difference                     CAD  29,236.90   ← precisely the Tokyo row
+```
+
+Confirmed independently in the UI: filtering the Leaderboard to the Tokyo show shows **all four reps at
+$0.00**, though the event booked CAD 27,071.20 net.
+
+So CAD 29,236.90 of invoiced revenue and CAD 15,225.63 of collections are unattributed in the
+collection and performance reporting. This may well be intended — administrators are not quota-carrying
+— but it is undocumented, and two reports on the same screen do not add up. Either exclude admin-owned
+sales everywhere or attribute them everywhere; silently doing both is the one option that misleads.
+
+### 9. Minor — a JSON export the screen no longer offers
+
+The Reports footnote still reads *"CSV opens directly in Excel; JSON matches the internal data model"*,
+but the menu offers PDF / Excel / CSV only. JSON did not survive the migration to the shared export
+(see *History* in `modules&tabs.md`); the help text was not updated.
+
+### 10. Minor — two shows share one label in the filter
+
+The event dropdown lists **"Vancouver Fashion Week" twice**, with different values (`VFW-FW26` and
+`VFW-VAN-SS27`). The season is not in the label, so the two are indistinguishable to the reader.
+
+### Not a bug — false positives worth recording
+
+Three claims were investigated and rejected. They are kept here because each looked convincing.
+
+**"A VFW sale posts to the GFC revenue account."** `S-26-1001` shows GL `4050 — … GFC` on a VFW show.
+The catalogue is correct — `VFW-GOLD` carries `glCode 4010`. The sale shows 4050 because this
+walkthrough passed `"glAccount": "4050"` explicitly when approving it over the API. **Bad test data**,
+and exactly the kind of thing that reads as revenue misclassification until the seed is checked.
+
+**"Report exports are not audited."** They are. The observation came from searching `/audit` and finding
+nothing — but exports are console telemetry, so they are written to **Logs → Activity** as `DATA_EXPORT`,
+not to the financial audit trail. Querying it returns 62 rows including *"exported Revenue analysis as
+CSV"*. This is the `Logs` / `Audit` separation working exactly as designed, mistaken for a gap.
+
+**"`GET /api/activity/sessions` returns 500."** It returns 200 with the full list. The 500s were a
+crash-looping backend during the session. What the episode did expose is finding 3 above — the reason a
+dead endpoint looked like an empty table.
 
 ---
 

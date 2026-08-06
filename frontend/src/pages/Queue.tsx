@@ -97,8 +97,16 @@ export function Queue() {
                 {pending.map((s) => {
                   // Surface a deep discount here rather than making Accounting
                   // open the record to find it.
-                  const pct = Number(s.subtotal) > 0
-                    ? (Number(s.discountAmount) / Number(s.subtotal)) * 100
+                  //
+                  // Measured against the PACKAGE price, not the subtotal, because
+                  // that is the basis the approval threshold uses
+                  // (PricingService: discountAmount / packagePrice). Dividing by
+                  // the subtotal made every sale with add-ons look cheaper than
+                  // the rule considers it — a sale 15.4% off the package could
+                  // render as under the 15% bar and then be refused at approval,
+                  // quoting a percentage the approver was never shown.
+                  const pct = Number(s.packagePrice) > 0
+                    ? (Number(s.discountAmount) / Number(s.packagePrice)) * 100
                     : 0;
                   return (
                     <tr key={s.id} className={testRow(s)}>
