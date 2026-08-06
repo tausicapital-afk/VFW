@@ -1,12 +1,15 @@
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
+import { useToast } from '../shell/Toast';
 
 export function Login() {
   const { login } = useAuth();
+  const { showSuccess, showError } = useToast();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [remember, setRemember] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -17,8 +20,15 @@ export function Login() {
     try {
       await login(email, password, remember);
       // No navigate() here: once the session lands, App swaps the whole tree.
+      // The toast provider sits outside the router, so this survives the swap
+      // and lands on the dashboard.
+      showSuccess('Signed in.', 'Welcome back');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not sign in');
+      const message = err instanceof Error ? err.message : 'Could not sign in';
+      // Both: the toast is what catches the eye, the inline note is what stays
+      // put next to the fields while the password is retyped.
+      showError(message);
+      setError(message);
       setBusy(false);
     }
   }
@@ -64,14 +74,26 @@ export function Login() {
 
           <div className="f" style={{ marginTop: 12 }}>
             <label htmlFor="pw">Password</label>
-            <input
-              id="pw"
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
+            <div className="pw">
+              <input
+                id="pw"
+                type={showPassword ? 'text' : 'password'}
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+              />
+              <button
+                type="button"
+                className="pw-toggle"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                aria-pressed={showPassword}
+                title={showPassword ? 'Hide password' : 'Show password'}
+              >
+                <EyeIcon off={showPassword} />
+              </button>
+            </div>
           </div>
 
           <label className="chk" style={{ marginTop: 12 }}>
@@ -104,5 +126,29 @@ export function Login() {
         </form>
       </div>
     </section>
+  );
+}
+
+/* The design system's icons are unicode glyphs, but there is no eye among them —
+   and the emoji one renders in colour, which would clash. This is the same
+   monochrome stroke weight, drawn inline so it inherits currentColor. */
+function EyeIcon({ off }: { off: boolean }) {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M1.8 12S5.8 5 12 5s10.2 7 10.2 7-4 7-10.2 7S1.8 12 1.8 12Z" />
+      <circle cx="12" cy="12" r="3" />
+      {off && <line x1="4" y1="20" x2="20" y2="4" />}
+    </svg>
   );
 }

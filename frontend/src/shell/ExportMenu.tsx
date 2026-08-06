@@ -6,6 +6,7 @@ import {
   type ExportFormat,
   type ExportParams,
 } from '../lib/export';
+import { useToast } from './Toast';
 
 /**
  * The system-wide export control. Drop it into any card header:
@@ -35,6 +36,7 @@ export function ExportMenu({
   const [busy, setBusy] = useState<ExportFormat | null>(null);
   const [error, setError] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  const { showSuccess } = useToast();
 
   // Close on click-away or Escape, exactly as the user menu does.
   useEffect(() => {
@@ -59,6 +61,9 @@ export function ExportMenu({
     try {
       await downloadExport(dataset, format, params);
       setOpen(false);
+      // The download itself is silent and easy to miss, and closing the menu
+      // removes the only other sign anything happened — so say so.
+      showSuccess(`${dataset} exported as ${FORMAT_LABEL[format].label}.`, 'Export ready');
     } catch (e) {
       // Keep the menu open on failure — closing it would hide the reason.
       setError(e instanceof Error ? e.message : 'Export failed');

@@ -44,7 +44,9 @@ const NAV: NavItem[] = [
   { to: '/audit', label: 'Audit trail', ic: '◷', roles: ['ACCT', 'MGR', 'ADMIN'] },
   { grp: 'System' },
   { to: '/admin', label: 'Administration', ic: '⚙', roles: ['ACCT', 'ADMIN'] },
-  { to: '/logs', label: 'Logs', ic: '❈', roles: ['ADMIN'] },
+  // ACCT holds `activity.view` too (the route guard has always read the
+  // permission); the rail was the stale copy that still said ADMIN-only.
+  { to: '/logs', label: 'Logs', ic: '❈', roles: ['ACCT', 'ADMIN'] },
 ];
 
 /** The human label for a path, for the activity log line ("Opened Messages"). */

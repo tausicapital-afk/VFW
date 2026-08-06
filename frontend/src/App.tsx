@@ -29,6 +29,7 @@ import { VerifyOtp } from './pages/VerifyOtp';
 import { Submissions } from './pages/Submissions';
 import { SubmissionDetail } from './pages/SubmissionDetail';
 import { Guard, Shell } from './shell/Shell';
+import { ToastProvider } from './shell/Toast';
 import './styles/console.css';
 import './styles/additions.css';
 
@@ -104,11 +105,15 @@ export function App() {
   return (
     <QueryClientProvider client={qc}>
       <ThemeProvider>
-        <BrowserRouter>
-          <AuthProvider>
-            <Routed />
-          </AuthProvider>
-        </BrowserRouter>
+        {/* Outside the router so a toast survives navigation, and outside
+            AuthProvider so the signed-out screens can raise one too. */}
+        <ToastProvider>
+          <BrowserRouter>
+            <AuthProvider>
+              <Routed />
+            </AuthProvider>
+          </BrowserRouter>
+        </ToastProvider>
       </ThemeProvider>
     </QueryClientProvider>
   );

@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { AuthProvider } from '../auth/AuthContext';
 import { api, ApiError } from '../lib/api';
+import { ToastProvider } from '../shell/Toast';
 import { Login } from './Login';
 
 vi.mock('../lib/api', async () => {
@@ -20,11 +21,13 @@ function renderLogin() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={['/']}>
-        <AuthProvider>
-          <Login />
-        </AuthProvider>
-      </MemoryRouter>
+      <ToastProvider>
+        <MemoryRouter initialEntries={['/']}>
+          <AuthProvider>
+            <Login />
+          </AuthProvider>
+        </MemoryRouter>
+      </ToastProvider>
     </QueryClientProvider>,
   );
 }
@@ -45,6 +48,23 @@ describe('<Login />', () => {
     expect(screen.getByLabelText('Work email')).toBeInTheDocument();
     expect(screen.getByLabelText('Password')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
+  });
+
+  it('reveals and re-hides the password without submitting the form', async () => {
+    const user = userEvent.setup();
+    renderLogin();
+
+    const password = screen.getByLabelText('Password');
+    expect(password).toHaveAttribute('type', 'password');
+
+    await user.click(screen.getByRole('button', { name: 'Show password' }));
+    expect(password).toHaveAttribute('type', 'text');
+
+    await user.click(screen.getByRole('button', { name: 'Hide password' }));
+    expect(password).toHaveAttribute('type', 'password');
+
+    // The toggle is type="button", so none of that hit the login endpoint.
+    expect(mockedApi.post).not.toHaveBeenCalled();
   });
 
   it('submits the entered credentials and shows a busy state while the request is in flight', async () => {
@@ -79,8 +99,22 @@ describe('<Login />', () => {
     await user.type(screen.getByLabelText('Password'), 'nope');
     await user.click(screen.getByRole('button', { name: 'Sign in' }));
 
-    expect(await screen.findByText('Invalid email or password')).toBeInTheDocument();
+    // Reported twice on purpose: once as a toast, once inline under the form.
+    expect(await screen.findAllByText('Invalid email or password')).toHaveLength(2);
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeEnabled();
+  });
+
+  it('raises a toast on a successful sign-in', async () => {
+    const user = userEvent.setup();
+    mockedApi.post.mockResolvedValueOnce({ user: { id: 'u1', name: 'M', email: 'm@x.com', role: 'SALES' } });
+
+    renderLogin();
+    await user.type(screen.getByLabelText('Work email'), 'm@x.com');
+    await user.type(screen.getByLabelText('Password'), 'pw');
+    await user.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    expect(await screen.findByText('Welcome back')).toBeInTheDocument();
+    expect(screen.getByText('Signed in.')).toBeInTheDocument();
   });
 
   it('sends remember=true when "keep me signed in" is checked', async () => {

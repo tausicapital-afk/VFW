@@ -22,6 +22,106 @@
   color: #5A3D06;
 }
 
+/* ---------- TOASTS ----------
+   The global success/failure popup, stacked in the top-right corner. Sits at
+   z-index 300 — above the modal layer (100), because most of what needs
+   confirming is confirmed from inside a modal. Built as a card with a status
+   spine and a tinted glyph chip rather than a solid colour block, so it reads
+   as the same family as .note and the status pills. */
+.toasts {
+  position: fixed; top: 16px; right: 16px; z-index: 300;
+  display: flex; flex-direction: column; align-items: flex-end;
+  pointer-events: none; /* the gaps between cards must not eat clicks */
+}
+
+.toast-card {
+  pointer-events: auto;
+  position: relative; overflow: hidden;
+  display: flex; align-items: flex-start; gap: 10px;
+  width: 340px; max-width: calc(100vw - 32px); margin-bottom: 10px;
+  padding: 12px 12px 14px;
+  background: var(--card); color: var(--text);
+  border: 1px solid var(--line); border-left-width: 3px;
+  border-radius: var(--r);
+  box-shadow: 0 18px 46px -16px rgba(0, 0, 0, .45);
+  transform: translateX(calc(100% + 24px)); opacity: 0;
+  transition: transform .22s ease-out, opacity .22s ease-out;
+}
+.toast-card.in { transform: translateX(0); opacity: 1; }
+
+/* The status spine, the glyph chip and the progress bar are the only coloured
+   parts — one hue per card, taken from the shared status tokens. */
+.toast-card.success { border-left-color: var(--green); }
+.toast-card.error   { border-left-color: var(--red); }
+.toast-card.warning { border-left-color: var(--amber); }
+.toast-card.info    { border-left-color: var(--blue); }
+
+.toast-ic {
+  flex: 0 0 auto; width: 20px; height: 20px; margin-top: 1px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; font-size: 12px; font-weight: 700; line-height: 1;
+}
+.toast-card.success .toast-ic { background: var(--green-soft); color: var(--green); }
+.toast-card.error   .toast-ic { background: var(--red-soft);   color: var(--red); }
+.toast-card.warning .toast-ic { background: var(--amber-soft); color: var(--amber); }
+.toast-card.info    .toast-ic { background: var(--blue-soft);  color: var(--blue); }
+
+.toast-body { flex: 1; min-width: 0; }
+.toast-title {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .1em; line-height: 1.4;
+}
+.toast-msg { font-size: 13px; color: var(--muted); margin-top: 2px; word-break: break-word; }
+.toast-action {
+  margin-top: 7px; padding: 0; border: 0; background: none; cursor: pointer;
+  font-size: 12px; font-weight: 600; color: var(--blue); text-decoration: underline;
+}
+.toast-action:hover { text-decoration: none; }
+
+.toast-x {
+  flex: 0 0 auto; border: 0; background: none; padding: 0; cursor: pointer;
+  font-size: 11px; line-height: 1; color: var(--muted); transition: color .15s;
+}
+.toast-x:hover { color: var(--text); }
+
+/* Time remaining, drained by the component over the toast's duration. */
+.toast-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--line-soft); }
+.toast-bar-fill { height: 100%; width: 100%; }
+.toast-card.success .toast-bar-fill { background: var(--green); }
+.toast-card.error   .toast-bar-fill { background: var(--red); }
+.toast-card.warning .toast-bar-fill { background: var(--amber); }
+.toast-card.info    .toast-bar-fill { background: var(--blue); }
+
+/* Dark theme brightens the amber/red/green foregrounds the same way the status
+   pills do — the base hues are tuned for a white sheet and go muddy on ink. */
+:root[data-theme="dark"] .toast-card.success .toast-ic { color: #4CC08A; }
+:root[data-theme="dark"] .toast-card.error   .toast-ic { color: #F08A80; }
+:root[data-theme="dark"] .toast-card.warning .toast-ic { color: #E0A93C; }
+
+@media (max-width: 520px) {
+  .toasts { left: 16px; align-items: stretch; }
+  .toast-card { width: auto; }
+}
+
+/* ---------- PASSWORD FIELD ----------
+   A reveal toggle sitting inside the field's own box. The button is absolutely
+   placed over the input's right edge, and the input reserves that space in its
+   padding so a long password never runs under the icon. */
+.pw { position: relative; }
+.pw input { display: block; padding-right: 38px; }
+/* Edge draws its own reveal eye inside password inputs; two would be one too many. */
+.pw input::-ms-reveal, .pw input::-ms-clear { display: none; }
+
+.pw-toggle {
+  position: absolute; top: 0; right: 0; height: 100%; width: 36px;
+  display: flex; align-items: center; justify-content: center;
+  border: 0; background: none; padding: 0; cursor: pointer;
+  color: var(--muted); border-radius: 0 var(--r) var(--r) 0;
+  transition: color .15s;
+}
+.pw-toggle:hover { color: var(--text); }
+.pw-toggle:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+
 /* ---------- EXPORT MENU ----------
    The one export control, reused wherever a screen is exportable. Built from
    the same parts as the topbar user menu (.usermenu-pop) so a popup menu looks

@@ -2,7 +2,7 @@
 
 Every screen in the VFW Console, grouped the way the left navigation rail groups them, with the role that can reach it and the tabs it contains.
 
-Source of truth: `frontend/src/shell/Shell.tsx` (the `NAV` array) and `frontend/src/App.tsx` (the route table). Only three modules use tabs — Administration, Logs, and Reports (as a report picker). Everything else is a single screen.
+Source of truth: `frontend/src/shell/Shell.tsx` (the `NAV` array) and `frontend/src/App.tsx` (the route table). Six modules use tabs — Administration, Logs, Attendance, Payroll, Emails, and Reports (as a report picker). Everything else is a single screen.
 
 Roles: **SALES** (Sales Representative), **INTERN**, **ACCT** (Accounting), **MGR** (Sales Manager), **ADMIN** (Administrator).
 
@@ -16,9 +16,16 @@ Roles: **SALES** (Sales Representative), **INTERN**, **ACCT** (Accounting), **MG
 *No tabs.*
 
 ### New submission — `/new`
-**SALES, INTERN, ADMIN.** The form for creating a new submission — contact, event, package, add-ons, and pricing.
+**All roles** (`submission.create`). The form for creating a new submission — contact, show, package,
+add-ons, and pricing.
 
 *No tabs.*
+
+**Per-sale package customization.** A rep is not limited to the catalogue as priced. On a sale they can
+override the package's price, or its name / looks / description, or abandon the catalogue entirely and
+build a custom package for that sale alone. Any of these sets `packageCustomized` on the submission,
+which is what the Approval queue keys its extra sign-off off. The catalogue itself is untouched — this
+is a per-sale deviation, not a rate-card edit.
 
 ### Submissions — `/submissions`
 **All roles.** The list of all submissions you are allowed to see, opening into a detail view (`/submissions/:id`) and an edit view (`/submissions/:id/edit`).
@@ -32,6 +39,20 @@ amendment keeps the approval rather than sending the sale back through the queue
 `EXPORTED` sale warns that QuickBooks will not follow. Full rules in
 `docs/roles-and-permissions.md` → *Editing a sale, and its invoice number*.
 
+The detail view also carries the money side of a sale:
+
+- **Generate invoice** (`invoice.generate` — ACCT, ADMIN) once the sale is `APPROVED` and has no
+  number yet, then **Download invoice (PDF)** server-rendered from the same record.
+- **Send invoice** (`email.send` — ACCT, ADMIN) emails it to the contact; the copy is logged in
+  **Emails**, and the screen links straight there.
+- **Installments card** — the payment plan: scheduled instalments, and marking one paid posts a real
+  `Payment` to the ledger. Reading a plan carries no permission of its own (it rides on the sale, so
+  whoever sees the sale sees how it is being paid); writing splits into `installment.plan`
+  (reschedule, moves no money) and `installment.mark` (post a payment), both now open to every role
+  that can work a sale. An undo reverses a mark with a visible negative entry rather than deleting it.
+- **Void** (`submission.void` — ACCT, ADMIN) is a soft delete: hidden from lists and reports, kept for
+  audit, reversible.
+
 ### Contacts — `/contacts`
 **SALES, ACCT, MGR, ADMIN.** Searchable directory of client contacts and brands, opening into a per-contact history (`/contacts/:id`).
 
@@ -42,10 +63,37 @@ amendment keeps the approval rather than sending the sale back through the queue
 
 *No tabs.* The screen is a conversation list beside the open thread, not tabbed.
 
+### Emails — `/emails`
+**All roles** (`email.viewOwn`). The log of mail the system has sent and received — invoices, OTPs,
+resets, notifications — with a detail view per message.
+
+| Tab | Who | What |
+| --- | --- | --- |
+| Sent | all roles | Outbound mail. Row-scoped: a rep sees only mail they triggered; `email.viewAll` (ACCT, MGR, ADMIN) sees the whole log. |
+| Received | same | Inbound mail, scoped the same way. |
+
+Reading is split like submissions — everyone may open the module, the list decides which rows.
+*Sending* an invoice is an accounting action (`email.send` — ACCT, ADMIN) and happens from the
+submission detail, not from here. How mail actually leaves the box is `docs/email-delivery.md`.
+
 ### Approval queue — `/queue`
-**ACCT, ADMIN.** Submissions waiting on accounting sign-off, where they get approved or returned to sales; carries an unread badge showing queue depth.
+**SALES, ACCT, ADMIN** (`submission.queueView`). Submissions waiting on accounting sign-off, where they
+get approved or returned to sales; carries an unread badge showing queue depth.
 
 *No tabs.* Two stacked cards: **Pending accounting approval** and **Returned to sales**.
+
+**Reading the queue is not deciding on it.** SALES holds `queueView` so a rep can see where their own
+submission sits, and the read is row-scoped like every other submission read. Acting on one stays with
+`submission.approve` / `.reject` / `.return` (ACCT, ADMIN) — the maker and the checker must not be the
+same person.
+
+Two things the queue does beyond approve/return:
+
+- **Custom-package sign-off.** A row whose sale was customized (see *New submission*) shows a
+  **Custom package** pill, and the approve dialog will not submit until the approver ticks an explicit
+  acknowledgement that they are approving a non-catalogue package *as priced*. Approving blind is the
+  failure this prevents.
+- **Direct Edit shortcut** on a row, so a returned sale can be corrected without opening it first.
 
 ### QuickBooks — `/qbo`
 **ACCT, ADMIN.** Exports approved submissions to QuickBooks and keeps the ledger of what has already gone across.
@@ -88,8 +136,11 @@ and the arithmetic it came from.
 
 | Tab | Who | What |
 | --- | --- | --- |
-| My pay | all roles | Your own statement: base, commission, gross — beside your full profile and the hours and sales it was derived from. |
-| Payroll run | `payroll.viewAll` | Every active account for the month, with run totals, and a row that opens into that person's statement. |
+| My pay | all roles | Your own statement: base, commission, gross — beside your full profile, the hours and sales it was derived from, and your lifetime earnings. Also where you submit the month for approval. |
+| Payroll run | `payroll.viewAll` (ACCT, ADMIN) | Every active account for the month, with run totals, and a row that opens into that person's statement. |
+| Approvals | `payroll.approve` (ACCT, ADMIN) | The queue of submitted payroll invoices — edit the figures, then approve or reject. |
+
+A rep with neither permission sees no tab bar at all, just their own statement.
 
 A statement is **base + commission = gross**, with each part shown as its own arithmetic rather than
 as a total to be taken on faith:
@@ -103,8 +154,23 @@ as a total to be taken on faith:
 - **Commission not yet collected** is shown beside the total: commission is earned on approval, so
   part of a month's gross can be sitting against invoices the client has not settled.
 
-Nothing is stored — the month is derived on every read. See `docs/roles-and-permissions.md` →
+The **statement** is derived on every read — nothing is stored. See `docs/roles-and-permissions.md` →
 *Payroll: derived, never stored* for why, and for the one place `MGR` sees less than Accounting.
+
+#### Payroll invoices — the one thing here that *is* stored
+
+The derived statement is a calculation; a **payroll invoice** is a claim made against it, and a claim
+has to persist because it gets argued over. The lifecycle is maker/checker, exactly like a sale:
+
+1. **Submit** (`payroll.submit` — all roles, and it can only ever resolve to the caller). You send
+   your own month's statement for approval from *My pay*.
+2. **Review** (`payroll.approve` — ACCT, ADMIN). Accounting can *edit the figures before sign-off* —
+   the derived number is the starting position, not the last word — then approve or reject.
+
+`payroll.submit` mirrors `payroll.viewOwn` (yours to see, yours to submit) and `payroll.approve`
+mirrors `submission.approve`: the maker and the checker must not be the same permission. **`MGR` holds
+neither half of the approval** — a sales manager reads the team's hours and their numbers, not their
+salaries. **Lifetime earnings** roll up from approved invoices and show on both *My pay* and Account.
 
 ### Leaderboard — `/board`
 **All roles.** Ranks sales representatives by performance over the selected period.
@@ -156,13 +222,18 @@ All figures convert through the FX rates set in **Administration → Settings** 
 ## System
 
 ### Administration — `/admin`
-**ADMIN only.** The control panel for who gets in, what things cost, and how the system behaves.
+**ACCT and ADMIN** (`admin.manage`). The control panel for who gets in, what things cost, and how the
+system behaves.
+
+Accounting holds this as a *second keyholder*, so account recovery does not depend on a single admin
+being reachable. Note the consequence, stated plainly because it is not obvious: **a role that can edit
+roles can raise its own to ADMIN**, so this grant is effectively a grant of everything below it.
 
 | Tab | What it does |
 | --- | --- |
 | Invitations & approvals | Issues invitation codes with a fixed role, revokes them, and reviews sign-ups pending approval. |
-| Users & roles | Lists staff accounts and changes each one's role. |
-| Packages & pricing | Adds to and maintains the package catalogue and its add-ons and prices. New packages and add-ons are created from the button on each card; the id is derived from the brand and the name. |
+| Users & roles | Lists staff accounts and changes each one's role, pay type and rate. |
+| Packages & pricing | Three cards: **Shows**, the package catalogue, and the add-on catalogue. New rows are created from the button on each card; package and show ids are derived from the brand (and city/season), and stay fixed once created because that is what submissions point at. |
 | Tax rates | Adds to and maintains the tax rates applied at pricing time. New profiles are created from the button on the card; the code is typed, not derived, because it is the key packages and cities point at. |
 | Settings | Discount approval threshold, invoice prefix and next invoice number (read-only, allocated transactionally), and the FX rates every report converts through. |
 | Configuration | Edits runtime config straight to the database — no redeploy — for values that aren't needed before the database is reachable. Passwords and secrets stay in env. |
@@ -171,12 +242,17 @@ Tabs are defined in `frontend/src/pages/Admin.tsx` (`TABS`); the Configuration t
 
 Every catalogue write is additive and never reaches a sale that has already been priced — a submission copies its prices and its tax rate onto the record at submission time. `backend/src/admin/catalogue-create.spec.ts` and `catalog.spec.ts` hold that line.
 
+**Shows** (the `Event` table) follow the same rule: adding one makes it selectable on the new-submission
+form and changes nothing already sold. The card exists because seasons used to be a deploy-time
+concern — the Summer/Spring filter on the submission form rendered an empty list purely because no SS
+shows had been seeded, which is a content problem wearing a bug's clothes.
+
 #### Known gap — `listValue` and `cap` are not editable
 
 `Package.listValue` (the revenue forgone on a sponsored package, which reporting shows) and `Package.cap` (a per-event limit — VKFW VIP has only 2) exist in the schema and are set by the seed, but no admin screen touches either. Neither the new-package modal nor the edit modal can set them, so a sponsored or capped package cannot currently be created from the console — it has to be seeded or written directly. Wiring them up means adding them to both modals together; adding them to only one would leave the tab able to create a package it cannot then edit.
 
 ### Logs — `/logs`
-**ADMIN only.** Telemetry on how the console itself is being used, as opposed to the business events in Audit trail.
+**ACCT and ADMIN** (`activity.view`). Telemetry on how the console itself is being used, as opposed to the business events in Audit trail. It is user-monitoring — who signed in, what they opened, who they messaged — so it is HR/security-sensitive and stops at the two roles that carry full authority.
 
 | Tab | What it does |
 | --- | --- |
@@ -185,6 +261,14 @@ Every catalogue write is additive and never reaches a sale that has already been
 | Sessions | Sign-in sessions, with device and duration. |
 
 Tabs are defined in `frontend/src/pages/Logs.tsx` (`TABS`).
+
+#### Fixed — the rail and the guard used to disagree about Logs
+
+`activity.view` was widened to `['ACCT', 'ADMIN']` (commit 62451e3, *"Give Accounting the Logs too"*)
+and the route guard in `App.tsx` read that permission, but the `NAV` entry in `Shell.tsx` was missed
+and still said `roles: ['ADMIN']`. Accounting could open `/logs` by typing the URL and could not see
+the link. The rail now matches the guard. Every nav item's `roles` is now consistent with its route's
+permission — that is the invariant to check when adding one.
 
 ---
 
@@ -321,6 +405,18 @@ declare its columns exactly one way; there is no shape that satisfies both or ne
 | New submission, Submission detail, Contact detail | One record, not a table. A submission's client-facing artefact is its invoice, which is its own concern. |
 | Administration → Settings, Administration → Configuration | Forms, not tables — and Configuration holds secrets. |
 | Console → Settings, Account | Personal preferences and your own profile — forms, not tables. Your hours are exportable from Attendance. |
+| Payroll → My pay | One statement, not a table. The month it came from exports from *Payroll run*. |
+
+### Not exported, but not obviously by design
+
+These have no dataset and no stated reason. Recorded here so the absence is visible rather than
+assumed to be a decision someone made:
+
+| Screen / tab | Note |
+| --- | --- |
+| Emails (Sent / Received) | A row-scoped table with filters — structurally the same shape as Logs → Activity, which does export. Whether a mail log *should* be downloadable is a real question (it is closer to Messages than to Contacts), but nobody has answered it in writing. |
+| Payroll → Approvals | A queue of submitted invoices. The reconciliation case for exporting it is at least as strong as for *Payroll run*, which exports. |
+| Administration → Packages & pricing → Shows | The other two cards on the same tab export (`packages`, `addons`); the Shows card was added later and did not get a dataset. This one looks like an oversight rather than a choice. |
 
 ### History — the Reports migration
 

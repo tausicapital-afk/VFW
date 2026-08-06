@@ -14,7 +14,11 @@
     "outDir": "./dist",
     "rootDir": "./src",
     "baseUrl": "./",
-    "incremental": true,
+    // NOT incremental, on purpose. nest-cli.json sets `deleteOutDir: true`, so
+    // every build wipes dist/ — but a .tsbuildinfo left behind still claims those
+    // outputs exist, so tsc reports "Found 0 errors" and emits nothing. The app
+    // then dies with `Cannot find module dist/main`. Incremental state and a
+    // deleted outDir cannot both be trusted; correctness wins over a few seconds.
     "skipLibCheck": true,
     "strict": true,
     "strictPropertyInitialization": false,
