@@ -269,6 +269,96 @@
   .cal-day .s { display: none; }
 }
 
+/* ---------- TEST DATA ----------
+   Demo/rehearsal rows sitting in the same tables as the real book.
+   See lib/testData.tsx for what draws these and why.
+
+   COLOUR. Magenta, and magenta specifically because every other hue in this
+   system already means something: blue is EXPORTED and every link, green is
+   APPROVED/PAID, amber is PENDING/PARTIAL, red is REJECTED/UNPAID, violet is
+   RETURNED, and gold/taupe are the VKFW and GFC brand tags. A tint that shared
+   a hue with any of those would read as a status, which is the one thing this
+   must not be mistaken for — a test row can hold ANY status.
+
+   TOKENS. Declared here for both themes exactly the way console.css declares
+   --green-soft and friends: the light values on :root, the dark values inside
+   :root[data-theme="dark"]. Every rule below then names a token and never a
+   hex, so a rule written once resolves correctly in both themes.
+
+   The tint is an rgba wash rather than a solid fill on purpose. It composites
+   over whatever surface the row is on (card, striped, selected), so it survives
+   the dark theme's inverted surface ordering without a second set of rules —
+   and at 6-9% it cannot drag the row's body text out of contrast, which a solid
+   pastel absolutely would in dark mode. */
+:root {
+  --test: #9B2D8E;        /* the accent: pill text, the left edge */
+  --test-soft: #F8E6F5;   /* pill fill. 5.6:1 against --test */
+  --test-edge: #C55CB4;   /* the 3px rail down the left of a marked row */
+  --test-row: rgba(155, 45, 142, .06);
+  --test-row-hover: rgba(155, 45, 142, .11);
+}
+:root[data-theme="dark"] {
+  --test: #F0A6E2;        /* lifted, like every other on-tint colour in dark */
+  --test-soft: #3D1338;   /* 8.3:1 against --test */
+  --test-edge: #A63C96;
+  --test-row: rgba(240, 166, 226, .085);
+  --test-row-hover: rgba(240, 166, 226, .15);
+}
+
+/* The row.
+
+   SPECIFICITY, which this file has been bitten by before. console.css carries
+   `:root[data-theme="dark"] tbody tr:hover { background: var(--ink-2) }` at
+   (0,3,2) — higher than a plain `tbody tr.is-test:hover` at (0,2,2). Without the
+   dark rule below, hovering a marked row in dark mode would repaint it --ink-2
+   and the tint would vanish under the cursor: the classic half-themed override,
+   where the base rule wins one property and the new rule wins another.
+
+   So both states are stated twice, once per theme, at a specificity that beats
+   the themed base rule rather than merely equalling it. The left rail is the
+   belt to that braces — it is a box-shadow, which nothing else in either sheet
+   sets on a row, so the marking survives even if a future background rule
+   outranks these. */
+tbody tr.is-test { background: var(--test-row); box-shadow: inset 3px 0 0 var(--test-edge); }
+tbody tr.is-test:hover { background: var(--test-row-hover); }
+:root[data-theme="dark"] tbody tr.is-test { background: var(--test-row); }
+:root[data-theme="dark"] tbody tr.is-test:hover { background: var(--test-row-hover); }
+
+/* A SELECTED marked row keeps its selection colour, in both themes.
+
+   This needs stating explicitly, and it is the second half of the trap above.
+   In light, `.email-row.on` (0,2,0) already outranks `tbody tr.is-test` (0,1,2)
+   and selection wins. In dark it does not: the themed rule that has to exist for
+   the hover fix, `:root[data-theme="dark"] tbody tr.is-test` (0,3,2), outranks
+   it — so without this the same row would read blue in light and magenta in
+   dark. Verified by reading the computed background in a headless browser in
+   both themes rather than by eye.
+
+   Selection wins on purpose: "the row I clicked" is the more urgent of the two
+   facts, and the rail and the pill still mark it as test data either way. */
+tbody tr.is-test.on,
+:root[data-theme="dark"] tbody tr.is-test.on { background: var(--blue-soft); }
+
+/* The marker. Built as a .pill modifier so it inherits the shape, size and
+   letter-spacing every other pill in the system already has, and sits happily
+   beside a status pill without looking like a different species of object.
+
+   Both properties come from tokens that are themselves redeclared per theme, and
+   nothing else in either stylesheet targets `.pill.testdata` — so unlike
+   `.btn.on`, there is no higher-specificity themed rule to win half of this and
+   leave the other half unreadable. */
+.pill.testdata { background: var(--test-soft); color: var(--test); }
+
+/* Kept off the flow of the cell it sits in: a ref cell is mono and narrow, and a
+   pill that pushed the reference onto a second line would cost more legibility
+   than it bought. */
+.pill.testdata { margin-left: 6px; vertical-align: middle; }
+
+/* The Settings switch and the admin Test-data card reuse the same rail so the
+   preference reads as the same object as the thing it controls. */
+.testdata-summary { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; }
+.testdata-summary .n { font-family: "IBM Plex Mono"; color: var(--text); font-weight: 600; }
+
 /* The status picker: pills you can press. The pill keeps its own colours, so
    the button underneath contributes only the pressed state. */
 .status-choices { display: flex; gap: 8px; flex-wrap: wrap; }

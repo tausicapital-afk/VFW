@@ -5,6 +5,7 @@ import { ActivityService } from '../activity/activity.service';
 import { AuditService } from '../audit/audit.service';
 import { can } from '../common/acl';
 import { AuthUser } from '../common/auth.guard';
+import { ConfigService } from '../config/config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { avatarUrl } from '../profile/avatar';
@@ -89,6 +90,7 @@ function shape(entry: EntryRow, subjectId: string) {
     checkIn: entry.checkIn,
     checkOut: entry.checkOut,
     note: entry.note,
+    isTestData: entry.isTestData,
     // Surfaced rather than left to the client to work out, because "your manager
     // changed this" is the one thing about a timesheet row you cannot infer from
     // the row: the values look identical either way.
@@ -140,6 +142,8 @@ export class AttendanceService {
     private readonly audit: AuditService,
     private readonly activity: ActivityService,
     private readonly storage: StorageService,
+    /** The Test data switch — see ConfigService.testDataMode. */
+    private readonly config: ConfigService,
   ) {}
 
   /**
@@ -280,7 +284,10 @@ export class AttendanceService {
 
     const entry = await this.prisma.attendanceEntry.upsert({
       where: { userId_date: { userId, date } },
-      create: { userId, date, ...data },
+      // The Test data flag is on `create` only: correcting a day that was
+      // already worked is a correction, not a new record, and it must not be
+      // reclassified by whatever the switch happens to be set to today.
+      create: { userId, date, ...data, isTestData: this.config.testDataMode },
       update: data,
       include: ENTRY_INCLUDE,
     });
@@ -351,6 +358,7 @@ export class AttendanceService {
         status: AttendanceStatus.PRESENT,
         checkIn: dto.time,
         updatedById: actor.id,
+        isTestData: this.config.testDataMode,
       },
       update: { checkIn: dto.time, updatedById: actor.id },
       include: ENTRY_INCLUDE,

@@ -262,6 +262,9 @@ model Event {
 
   submissions Submission[]
 
+  // See Submission.isTestData for what this flag is and why it is stored.
+  isTestData Boolean @default(false)
+
   @@index([brand])
 }
 
@@ -293,6 +296,9 @@ model Package {
 
   prices      PackagePrice[]
   submissions Submission[]
+
+  // See Submission.isTestData for what this flag is and why it is stored.
+  isTestData Boolean @default(false)
 
   @@index([brand])
 }
@@ -326,6 +332,9 @@ model Addon {
 
   lines SubmissionAddon[]
 
+  // See Submission.isTestData for what this flag is and why it is stored.
+  isTestData Boolean @default(false)
+
   @@index([brand])
 }
 
@@ -350,6 +359,9 @@ model Contact {
 
   submissions Submission[]
   feedback    DesignerFeedback[]
+
+  // See Submission.isTestData for what this flag is and why it is stored.
+  isTestData Boolean @default(false)
 
   // One contact per brand name — the mockup auto-creates a contact the first
   // time a sale is submitted for a brand it has not seen.
@@ -483,6 +495,26 @@ model Submission {
   voidedById String?
   voidedBy   User?             @relation("SubmissionVoider", fields: [voidedById], references: [id])
 
+  // Demo/test data living in the same database as the real book.
+  //
+  // Orthogonal to every other state a sale carries — a test submission is still
+  // PENDING or APPROVED, still prices, still exports. This says only where the
+  // row came from, so the console can mark it and a reader can tell a rehearsal
+  // apart from a sale at a glance. It is deliberately NOT a filter: hiding test
+  // rows would make the totals above them disagree with the rows under them,
+  // and someone would eventually reconcile against the wrong number without
+  // ever seeing why.
+  //
+  // Set at creation time from the Test data runtime switch (ConfigService,
+  // TEST_DATA_MODE), or afterwards by the backfill (backend/src/testdata). It
+  // defaults to false so nothing already in the database is reclassified by the
+  // migration itself — only an explicit backfill can turn an existing row true.
+  //
+  // The same field, with the same meaning, is on every other model that surfaces
+  // as a row in a module table; see backend/src/testdata/test-data.marker.ts for
+  // the full list and why those and not others.
+  isTestData Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -532,6 +564,9 @@ model Payment {
   // Set when this payment was posted by marking an installment done, so the
   // ledger row and the schedule row point at each other.
   installment Installment?
+
+  // See Submission.isTestData for what this flag is and why it is stored.
+  isTestData Boolean @default(false)
 
   @@index([submissionId])
 }
@@ -854,6 +889,9 @@ model EmailMessage {
   receivedAt DateTime?
   createdAt  DateTime  @default(now())
 
+  // See Submission.isTestData for what this flag is and why it is stored.
+  isTestData Boolean @default(false)
+
   // Idempotent inbound: the same message pulled twice by the poller upserts onto
   // one row. Scoped by mailbox so two accounts can each hold a copy of a message
   // sent to both. (Outbound rows leave messageId null and are never deduped.)
@@ -1060,6 +1098,11 @@ model AttendanceEntry {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // See Submission.isTestData for what this flag is and why it is stored. Set
+  // when the row is first written and never on a later correction: a real day
+  // that someone edits while the switch happens to be on is still a real day.
+  isTestData Boolean @default(false)
+
   @@unique([userId, date])
   // The team view reads a month across everyone.
   @@index([date])
@@ -1116,6 +1159,11 @@ model PayrollInvoice {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // See Submission.isTestData for what this flag is and why it is stored. Like
+  // AttendanceEntry, set on first submit only — a resubmission of a real month
+  // must not be reclassified by whatever the switch happens to be set to.
+  isTestData Boolean @default(false)
 
   // One invoice per person per month — resubmitting upserts this row rather
   // than creating a second one.

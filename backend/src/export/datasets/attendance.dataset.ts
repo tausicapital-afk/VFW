@@ -19,6 +19,9 @@ type DayRow = Awaited<ReturnType<AttendanceService['list']>>['entries'][number] 
 const dayColumns: ExportColumn<DayRow>[] = [
   { header: 'Date', value: (r) => r.date, width: 12 },
   { header: 'Person', value: (r) => r.person, width: 22 },
+  // A timesheet is what hours get paid from, so a rehearsal day inside one has
+  // to be visible in the file and not only on the calendar.
+  { header: 'Test data', value: (r) => (r.isTestData ? 'TEST' : ''), width: 10 },
   { header: 'Status', value: (r) => STATUS_LABEL[r.status], width: 12 },
   { header: 'In', value: (r) => r.checkIn, width: 8 },
   { header: 'Out', value: (r) => r.checkOut, width: 8 },

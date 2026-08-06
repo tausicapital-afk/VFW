@@ -4,6 +4,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { can } from '../lib/acl';
 import { api } from '../lib/api';
+import { TestTag, useTestRow } from '../lib/testData';
 import type { Contact } from '../lib/types';
 import { ExportMenu } from '../shell/ExportMenu';
 import { Page } from '../shell/Shell';
@@ -12,6 +13,7 @@ const TYPES = ['Designer', 'Sponsor', 'Vendor', 'Media', 'Buyer', 'School'];
 
 export function Contacts() {
   const { user } = useAuth();
+  const testRow = useTestRow();
   const [q, setQ] = useState('');
   const [adding, setAdding] = useState(false);
 
@@ -72,8 +74,8 @@ export function Contacts() {
               </thead>
               <tbody>
                 {rows.map((c) => (
-                  <tr key={c.id}>
-                    <td><b>{c.brand}</b></td>
+                  <tr key={c.id} className={testRow(c)}>
+                    <td><b>{c.brand}</b><TestTag on={c.isTestData} /></td>
                     <td className="sm">{c.type ?? 'Designer'}</td>
                     <td className="sm">{c.designer || '—'}</td>
                     <td className="sm">{c.email || '—'}</td>

@@ -5,6 +5,7 @@ import { useAuth } from '../auth/AuthContext';
 import { can } from '../lib/acl';
 import { api } from '../lib/api';
 import { fmtDateTime } from '../lib/format';
+import { TestTag, useTestRow } from '../lib/testData';
 import type { EmailDetail, EmailDirection, EmailKind, EmailRow } from '../lib/types';
 import { Page } from '../shell/Shell';
 
@@ -81,6 +82,7 @@ function EmailReader({ id }: { id: string }) {
 
 export function Emails() {
   const { user } = useAuth();
+  const testRow = useTestRow();
   const [direction, setDirection] = useState<EmailDirection>('OUTBOUND');
   const [kind, setKind] = useState<EmailKind | ''>('');
   const [selected, setSelected] = useState<string | null>(null);
@@ -152,7 +154,9 @@ export function Emails() {
                   {data.map((e) => (
                     <tr
                       key={e.id}
-                      className={'email-row' + (selected === e.id ? ' on' : '')}
+                      // The selected row keeps its blue fill (see additions.css)
+                      // — the rail and the pill still mark it as test data.
+                      className={testRow(e, 'email-row', selected === e.id && 'on')}
                       onClick={() => setSelected(e.id)}
                     >
                       <td className="sm">
@@ -162,6 +166,7 @@ export function Emails() {
                       </td>
                       <td>
                         <b style={{ overflowWrap: 'anywhere' }}>{e.subject}</b>
+                        <TestTag on={e.isTestData} />
                         {e.preview && <div className="sm mut email-preview">{e.preview}</div>}
                       </td>
                       <td><span className="tag">{KIND_LABEL[e.kind]}</span></td>

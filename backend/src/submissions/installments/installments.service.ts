@@ -8,6 +8,7 @@ import { InstallmentStatus, Prisma, SubmissionStatus } from '@prisma/client';
 import { Decimal } from 'decimal.js';
 import { AuditService } from '../../audit/audit.service';
 import { AuthUser } from '../../common/auth.guard';
+import { ConfigService } from '../../config/config.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SubmissionsService } from '../submissions.service';
 import { MarkInstallmentDto, SetPlanDto } from './dto';
@@ -43,6 +44,10 @@ export class InstallmentsService {
     private readonly prisma: PrismaService,
     private readonly submissions: SubmissionsService,
     private readonly audit: AuditService,
+    // The Test data switch, applied to the payments posted here by the same rule
+    // SubmissionsService.addPayment uses: a payment is test data if the sale it
+    // settles is, or if the switch was on when it was recorded.
+    private readonly config: ConfigService,
   ) {}
 
   /**
@@ -236,6 +241,7 @@ export class InstallmentsService {
           method,
           reference: dto.reference || null,
           recordedById: user.id,
+          isTestData: sale.isTestData || this.config.testDataMode,
         },
       });
       await tx.installment.update({
@@ -320,6 +326,9 @@ export class InstallmentsService {
             method: inst.method || sale.paymentMethod || FALLBACK_METHOD,
             reference: `Reversal of instalment ${inst.seq}`,
             recordedById: user.id,
+            // A reversal is part of the same ledger line as the payment it
+            // undoes, so it must never read differently from it.
+            isTestData: sale.isTestData || this.config.testDataMode,
           },
         });
       }

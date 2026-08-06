@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 import type {
   ConfigField, ConfigGroup, ConfigState, ConfigTestResult, EnvPanelRow,
   MailAccount, MailAccountInput, MailAccountsState,
+  TestDataMarkResult, TestDataSummary,
 } from '../lib/types';
 
 // ---------------------------------------------------------------------------
@@ -42,7 +43,14 @@ export function ConfigTab() {
       <MailAccountsCard />
 
       {data.groups.map((g) => (
-        <ConfigGroupCard key={g.id} group={g} onSaved={refresh} />
+        <div key={g.id}>
+          <ConfigGroupCard group={g} onSaved={refresh} />
+          {/* The backfill sits directly under the switch it completes, rather
+              than in a card of its own further down: the switch decides what NEW
+              rows are and this decides what old ones were, and reading one
+              without the other leaves you thinking the switch did nothing. */}
+          {g.id === 'data' && <TestDataCard />}
+        </div>
       ))}
 
       <EnvPanel rows={data.env} />
@@ -374,6 +382,155 @@ function MailAccountForm({
           {isNew ? 'Add account' : 'Save changes'}
         </button>
         <button className="btn" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Test data — the backfill
+// ---------------------------------------------------------------------------
+
+const COUNT_LABEL: [keyof TestDataSummary['counts'], string][] = [
+  ['submissions', 'submissions'],
+  ['contacts', 'contacts'],
+  ['payments', 'payments'],
+  ['emails', 'emails'],
+  ['events', 'shows'],
+  ['packages', 'packages'],
+  ['addons', 'add-ons'],
+  ['attendance', 'timesheet days'],
+  ['payroll', 'payroll invoices'],
+];
+
+/**
+ * Marking records that already exist.
+ *
+ * The one-click button covers the case this exists for — the demo book that was
+ * loaded before anyone thought about flagging it — and the box below it takes
+ * references for anything else. Both are the same endpoint; the button just
+ * sends no references, which the server reads as "the demo ones".
+ *
+ * Unmarking is offered next to marking rather than hidden, because the honest
+ * consequence of a mistyped reference is that a real sale is now drawn as a
+ * rehearsal, and the fix for that has to be one click away.
+ */
+function TestDataCard() {
+  const qc = useQueryClient();
+  const key = ['admin', 'test-data'];
+  const { data } = useQuery({
+    queryKey: key,
+    queryFn: () => api.get<TestDataSummary>('/api/admin/test-data'),
+  });
+
+  const [refs, setRefs] = useState('');
+  const [result, setResult] = useState<TestDataMarkResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = useMutation({
+    mutationFn: (unmark: boolean) =>
+      api.post<TestDataMarkResult>('/api/admin/test-data/mark', {
+        // Blank means the demo set. Split on commas AND whitespace, because
+        // these get pasted out of a spreadsheet as often as typed.
+        refs: refs.split(/[\s,]+/).filter(Boolean),
+        unmark,
+      }),
+    onSuccess: (r) => {
+      setResult(r);
+      setError(null);
+      void qc.invalidateQueries({ queryKey: key });
+      // Every module table is now drawing stale flags — drop the lot rather
+      // than trying to name the queries a backfill can reach.
+      void qc.invalidateQueries();
+    },
+    onError: (e: Error) => { setResult(null); setError(e.message); },
+  });
+
+  if (!data) return null;
+  const marked = Object.values(data.counts).reduce((t, n) => t + n, 0);
+  const custom = refs.trim().length > 0;
+
+  return (
+    <div className="card" style={{ marginBottom: 16 }}>
+      <div className="hd">
+        <h3>Mark existing records</h3>
+        <div className="sp" style={{ flex: 1 }} />
+        <span className={'pill ' + (data.mode ? 'PENDING' : 'DRAFT')}>
+          {data.mode ? 'Switch is on' : 'Switch is off'}
+        </span>
+      </div>
+      <div className="bd">
+        <p className="sm mut" style={{ marginTop: 0 }}>
+          The switch above only affects records created from now on. This marks records that
+          already exist — the demo sales the console shipped with, or any references you name.
+          Marking a sale also marks its contact, its payments and the emails sent about it.
+        </p>
+
+        {marked > 0 ? (
+          <div className="testdata-summary">
+            {COUNT_LABEL.filter(([k]) => data.counts[k] > 0).map(([k, label]) => (
+              <span key={k} className="sm mut">
+                <span className="n">{data.counts[k]}</span> {label}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <div className="sm mut" style={{ marginTop: 10 }}>
+            Nothing is currently marked as test data.
+          </div>
+        )}
+
+        <div className="f" style={{ marginTop: 14 }}>
+          <label>References</label>
+          <input
+            value={refs}
+            placeholder={data.demoRefs.join(', ')}
+            onChange={(e) => setRefs(e.target.value)}
+          />
+          <div className="help">
+            Submission references, separated by commas or spaces. Leave blank to use the demo
+            records ({data.demoRefs.length} sales, shown above as the placeholder).
+          </div>
+        </div>
+
+        {error && <div className="note bad" style={{ marginTop: 12 }}>{error}</div>}
+        {result && !error && (
+          <div className="note good" style={{ marginTop: 12 }}>
+            Changed <b>{result.submissions}</b> submission{result.submissions === 1 ? '' : 's'},{' '}
+            <b>{result.contacts}</b> contact{result.contacts === 1 ? '' : 's'},{' '}
+            <b>{result.payments}</b> payment{result.payments === 1 ? '' : 's'} and{' '}
+            <b>{result.emails}</b> email{result.emails === 1 ? '' : 's'}.
+            {result.unknownRefs.length > 0 && (
+              <div className="sm" style={{ marginTop: 6 }}>
+                Not found in this database:{' '}
+                <span className="mono">{result.unknownRefs.join(', ')}</span>
+              </div>
+            )}
+            {result.submissions === 0 && result.unknownRefs.length === 0 && (
+              <div className="sm" style={{ marginTop: 6 }}>
+                Those records already read that way — nothing needed changing.
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="ft">
+        <button
+          className="btn"
+          disabled={run.isPending}
+          onClick={() => { setError(null); setResult(null); run.mutate(true); }}
+        >
+          Clear the marking
+        </button>
+        <button
+          className="btn primary"
+          disabled={run.isPending}
+          onClick={() => { setError(null); setResult(null); run.mutate(false); }}
+        >
+          {run.isPending
+            ? 'Working…'
+            : custom ? 'Mark these records' : 'Mark the demo records'}
+        </button>
       </div>
     </div>
   );

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api } from '../lib/api';
 import { fmtDate, money } from '../lib/format';
+import { TestTag, useTestRow } from '../lib/testData';
 import type {
   AdminCatalogue, AdminUser, Currency, EventRow, Invitation, PayType, Role, Settings, UserStatus,
 } from '../lib/types';
@@ -1034,6 +1035,7 @@ function useCatalogue() {
 
 function PackagesTab() {
   const qc = useQueryClient();
+  const testRow = useTestRow();
   const { data } = useCatalogue();
   const [editing, setEditing] = useState<string | null>(null);
   const [addingPackage, setAddingPackage] = useState(false);
@@ -1068,9 +1070,9 @@ function PackagesTab() {
             </thead>
             <tbody>
               {data?.events.map((ev) => (
-                <tr key={ev.id}>
+                <tr key={ev.id} className={testRow(ev)}>
                   <td><span className={'tag ' + ev.brand}>{ev.brand}</span></td>
-                  <td className="b">{ev.name}</td>
+                  <td className="b">{ev.name}<TestTag on={ev.isTestData} /></td>
                   <td className="sm">{ev.season}</td>
                   <td className="sm">{ev.city.name}</td>
                   <td className="sm mono">{fmtDate(ev.start)} – {fmtDate(ev.end)}</td>
@@ -1104,9 +1106,9 @@ function PackagesTab() {
             </thead>
             <tbody>
               {data?.packages.map((p) => (
-                <tr key={p.id}>
+                <tr key={p.id} className={testRow(p)}>
                   <td><span className={'tag ' + p.brand}>{p.brand}</span></td>
-                  <td className="b">{p.name}</td>
+                  <td className="b">{p.name}<TestTag on={p.isTestData} /></td>
                   <td className="num">{p.looks}</td>
                   <td className="sm mono">
                     {p.prices.map((pr) => (
@@ -1517,6 +1519,7 @@ function AddonRowEdit({
   addon: AdminCatalogue['addons'][number];
   onSaved: () => void;
 }) {
+  const testRow = useTestRow();
   const [price, setPrice] = useState(addon.price);
   const [error, setError] = useState<string | null>(null);
 
@@ -1531,9 +1534,9 @@ function AddonRowEdit({
   const dirty = price !== addon.price;
 
   return (
-    <tr>
+    <tr className={testRow(addon)}>
       <td><span className={'tag ' + addon.brand}>{addon.brand}</span></td>
-      <td className="b">{addon.name}</td>
+      <td className="b">{addon.name}<TestTag on={addon.isTestData} /></td>
       <td className="num">
         <input
           type="number"

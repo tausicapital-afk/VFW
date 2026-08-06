@@ -32,6 +32,11 @@ export function submissionsDataset(submissions: SubmissionsService): ExportDatas
     load: (user) => submissions.list(user),
     columns: [
       { header: 'Ref', value: (s) => s.ref, width: 12 },
+      // Second column, and NOT spreadsheetOnly. A downloaded file loses the row
+      // tint the screen carries, so this is the only thing standing between a
+      // reader and a demo sale totalled into a real figure — it has to be next
+      // to the reference and on the printed page, not buried at column twenty.
+      { header: 'Test data', value: (s) => (s.isTestData ? 'TEST' : ''), width: 10 },
       { header: 'Brand', value: (s) => s.contact.brand, width: 20 },
       { header: 'Designer', value: (s) => s.contact.designer, width: 20, spreadsheetOnly: true },
       { header: 'Show', value: (s) => s.event.brand, width: 8 },

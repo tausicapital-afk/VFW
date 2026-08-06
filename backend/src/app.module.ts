@@ -30,6 +30,7 @@ import { FxModule } from './fx/fx.controller';
 import { ReportsModule } from './reports/reports.controller';
 import { StorageModule } from './storage/storage.service';
 import { SubmissionsModule } from './submissions/submissions.controller';
+import { TestDataModule } from './testdata/test-data.controller';
 
 @Module({
   imports: [
@@ -63,6 +64,7 @@ import { SubmissionsModule } from './submissions/submissions.controller';
     ProfileModule,
     AttendanceModule,
     PayrollModule,
+    TestDataModule,
     ExportModule,
   ],
   controllers: [AuthController],

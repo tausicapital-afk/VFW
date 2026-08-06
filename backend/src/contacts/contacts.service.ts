@@ -6,6 +6,7 @@ import {
 import { Prisma, SubmissionStatus } from '@prisma/client';
 import { AuthUser } from '../common/auth.guard';
 import { can } from '../common/acl';
+import { ConfigService } from '../config/config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SubmissionsService } from '../submissions/submissions.service';
 import { CreateContactDto } from './dto';
@@ -19,6 +20,8 @@ export class ContactsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly submissions: SubmissionsService,
+    /** The Test data switch — see ConfigService.testDataMode. */
+    private readonly config: ConfigService,
   ) {}
 
   /**
@@ -97,6 +100,10 @@ export class ContactsService {
         currency: s.currency,
         status: s.status,
         createdAt: s.createdAt,
+        // Carried through the flattening on purpose: this list is a submissions
+        // table like any other, and a row that is marked on the Submissions
+        // screen but not here would look like two different sales.
+        isTestData: s.isTestData,
       })),
     };
   }
@@ -116,6 +123,7 @@ export class ContactsService {
         country: dto.country,
         type: dto.type ?? 'Designer',
         createdById: user.id,
+        isTestData: this.config.testDataMode,
       },
     });
   }

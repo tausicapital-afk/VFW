@@ -6,6 +6,7 @@ import { can } from '../lib/acl';
 import { api } from '../lib/api';
 import { fmtDate, money } from '../lib/format';
 import { effectivePackage } from '../lib/pricing';
+import { TestTag, useTestRow } from '../lib/testData';
 import type { Catalog, Submission } from '../lib/types';
 import { Page } from '../shell/Shell';
 
@@ -29,6 +30,7 @@ export function Queue() {
   const qc = useQueryClient();
   const nav = useNavigate();
   const { user } = useAuth();
+  const testRow = useTestRow();
   const [action, setAction] = useState<Action | null>(null);
 
   // A rep reads this screen to track their own submissions; deciding on one is
@@ -99,9 +101,10 @@ export function Queue() {
                     ? (Number(s.discountAmount) / Number(s.subtotal)) * 100
                     : 0;
                   return (
-                    <tr key={s.id}>
+                    <tr key={s.id} className={testRow(s)}>
                       <td className="mono">
                         {s.ref}
+                        <TestTag on={s.isTestData} />
                         {s.packageCustomized && (
                           <div><span className="pill RETURNED" style={{ marginTop: 4 }}>Custom package</span></div>
                         )}
@@ -161,8 +164,8 @@ export function Queue() {
               </thead>
               <tbody>
                 {returned.map((s) => (
-                  <tr key={s.id}>
-                    <td className="mono">{s.ref}</td>
+                  <tr key={s.id} className={testRow(s)}>
+                    <td className="mono">{s.ref}<TestTag on={s.isTestData} /></td>
                     <td>{s.contact.brand}</td>
                     <td className="sm">{s.rep.name}</td>
                     <td className="sm mut">{s.returnNote}</td>

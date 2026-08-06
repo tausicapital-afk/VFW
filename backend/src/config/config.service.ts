@@ -106,6 +106,24 @@ export class ConfigService implements OnModuleInit {
     return keys.every((k) => this.get(k) !== undefined);
   }
 
+  /**
+   * The Test data switch (Administration → Configuration).
+   *
+   * Every write path that creates a row a module table shows reads this at
+   * creation time and stamps `isTestData` from it. Read through a getter rather
+   * than each caller comparing strings, so "on" is spelled once — and so that a
+   * caller cannot accidentally treat the *presence* of the setting as truth: the
+   * stored value is 'off' just as often as it is 'on', and `if (config.get(...))`
+   * would be true for both.
+   *
+   * Anything but 'on' is off, deliberately. A misconfigured value must fail
+   * towards real data being real, never towards the whole book being marked as a
+   * rehearsal.
+   */
+  get testDataMode(): boolean {
+    return this.get('TEST_DATA_MODE')?.trim().toLowerCase() === 'on';
+  }
+
   // -------------------------------------------------------------------------
   // Admin surface
   // -------------------------------------------------------------------------

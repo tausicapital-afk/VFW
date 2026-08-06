@@ -717,6 +717,11 @@ export class EmailService {
           triggeredById: mail.triggeredById ?? null,
           submissionId: mail.submissionId ?? null,
           sentAt: status === 'SENT' ? new Date() : null,
+          // Mail sent while the Test data switch is on is a rehearsal send. The
+          // config is already injected here for the brand/appearance settings,
+          // so this costs nothing — and this is the one choke point every
+          // outbound message passes through, so it covers all of them at once.
+          isTestData: this.config.testDataMode,
         },
       });
     } catch (err) {

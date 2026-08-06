@@ -38,6 +38,7 @@ const LIST_SELECT = {
   sentAt: true,
   receivedAt: true,
   createdAt: true,
+  isTestData: true,
   triggeredBy: { select: { id: true, name: true } },
   submission: { select: { id: true, ref: true, invoiceNo: true } },
 } satisfies Prisma.EmailMessageSelect;

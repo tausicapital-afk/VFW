@@ -45,7 +45,7 @@ export interface ConfigField {
 }
 
 export interface ConfigGroup {
-  id: 'email' | 'storage';
+  id: 'email' | 'storage' | 'data';
   title: string;
   blurb: string;
   /** Keys that must all resolve to a value for the group to be usable. */
@@ -137,6 +137,35 @@ export const CONFIG_GROUPS: ConfigGroup[] = [
         type: 'text',
         required: true,
         help: 'The bucket documents are stored in.',
+      },
+    ],
+  },
+  {
+    id: 'data',
+    title: 'Test data',
+    blurb:
+      'Demo and rehearsal records live in this database alongside the real book. While the ' +
+      'switch below is on, everything created is stamped as test data and the console marks ' +
+      'those rows wherever they appear. Existing records are not affected — use the backfill ' +
+      'below to mark rows that already exist.',
+    // Nothing is required: the switch has a working default (off), and a
+    // configured/not-configured pill on a setting whose "unset" state is a
+    // legitimate answer would be permanently red for no reason.
+    requiredKeys: [],
+    fields: [
+      {
+        key: 'TEST_DATA_MODE',
+        label: 'Flag new records as test data',
+        type: 'select',
+        options: ['off', 'on'],
+        // A `select` rather than a new boolean field type: the registry, its
+        // validator and the admin form already handle selects end to end, and a
+        // tenth field type earning its keep on one setting is a poor trade.
+        // ConfigService.testDataMode is the one place that reads the string, so
+        // nothing else has to know it is spelled "on".
+        help:
+          'While ON, every submission, contact, payment, timesheet day and email created is ' +
+          'marked as test data. Turn it off before entering anything real.',
       },
     ],
   },

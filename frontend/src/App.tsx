@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth/AuthContext';
+import { TestDataProvider } from './lib/testData';
 import { ThemeProvider } from './theme/ThemeContext';
 import { Account } from './pages/Account';
 import { Admin } from './pages/Admin';
@@ -108,11 +109,15 @@ export function App() {
         {/* Outside the router so a toast survives navigation, and outside
             AuthProvider so the signed-out screens can raise one too. */}
         <ToastProvider>
-          <BrowserRouter>
-            <AuthProvider>
-              <Routed />
-            </AuthProvider>
-          </BrowserRouter>
+          {/* Outside the router, like the theme: both are display preferences that
+              every screen reads and neither depends on the route or the session. */}
+          <TestDataProvider>
+            <BrowserRouter>
+              <AuthProvider>
+                <Routed />
+              </AuthProvider>
+            </BrowserRouter>
+          </TestDataProvider>
         </ToastProvider>
       </ThemeProvider>
     </QueryClientProvider>

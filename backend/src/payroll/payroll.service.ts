@@ -6,6 +6,7 @@ import { Decimal } from 'decimal.js';
 import { AuditService } from '../audit/audit.service';
 import { can } from '../common/acl';
 import { AuthUser } from '../common/auth.guard';
+import { ConfigService } from '../config/config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { avatarUrl } from '../profile/avatar';
@@ -82,6 +83,8 @@ export class PayrollService {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly audit: AuditService,
+    /** The Test data switch — see ConfigService.testDataMode. */
+    private readonly config: ConfigService,
   ) {}
 
   /**
@@ -423,7 +426,16 @@ export class PayrollService {
       };
       const invoice = await tx.payrollInvoice.upsert({
         where: { userId_month: { userId: actor.id, month: dto.month } },
-        create: { userId: actor.id, month: dto.month, status: PayrollInvoiceStatus.SUBMITTED, ...snapshot },
+        // The flag is set on the first submit only, and left alone on the
+        // resubmission branch below: a real month someone resubmits during a
+        // demo is still a real month, and it is the one people get paid from.
+        create: {
+          userId: actor.id,
+          month: dto.month,
+          status: PayrollInvoiceStatus.SUBMITTED,
+          isTestData: this.config.testDataMode,
+          ...snapshot,
+        },
         update: {
           ...snapshot,
           status: PayrollInvoiceStatus.SUBMITTED,

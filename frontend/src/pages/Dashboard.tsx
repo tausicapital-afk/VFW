@@ -4,6 +4,7 @@ import { useAuth } from '../auth/AuthContext';
 import { can } from '../lib/acl';
 import { api } from '../lib/api';
 import { fmtDate, money, PAY_LABEL, shortMoney } from '../lib/format';
+import { TestTag, useTestRow } from '../lib/testData';
 import type { Submission } from '../lib/types';
 import { Page } from '../shell/Shell';
 import { SubmissionsTable } from './Submissions';
@@ -35,6 +36,7 @@ function Kpi({
 
 export function Dashboard() {
   const { user } = useAuth();
+  const testRow = useTestRow();
 
   const { data: subs, isLoading } = useQuery({
     queryKey: ['submissions'],
@@ -141,8 +143,11 @@ export function Dashboard() {
               </thead>
               <tbody>
                 {owing.slice(0, 8).map((s) => (
-                  <tr key={s.id}>
-                    <td className="mono"><Link to={`/submissions/${s.id}`}>{s.ref}</Link></td>
+                  <tr key={s.id} className={testRow(s)}>
+                    <td className="mono">
+                      <Link to={`/submissions/${s.id}`}>{s.ref}</Link>
+                      <TestTag on={s.isTestData} />
+                    </td>
                     <td>
                       <b>{s.contact.brand}</b>
                       <div className="sm mut">{s.contact.designer}</div>

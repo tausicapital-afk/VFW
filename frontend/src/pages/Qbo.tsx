@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 import { api } from '../lib/api';
 import { fmtDate, money } from '../lib/format';
+import { TestTag, useTestRow } from '../lib/testData';
 import type { Submission } from '../lib/types';
 import { ExportMenu } from '../shell/ExportMenu';
 import { Page } from '../shell/Shell';
@@ -71,6 +72,7 @@ function qboPayload(s: Submission, docType: string): Record<string, unknown> {
 }
 
 export function Qbo() {
+  const testRow = useTestRow();
   const { data, isLoading } = useQuery({
     queryKey: ['submissions'],
     queryFn: () => api.get<Submission[]>('/api/submissions'),
@@ -93,8 +95,8 @@ export function Qbo() {
           </thead>
           <tbody>
             {rows.map((s) => (
-              <tr key={s.id}>
-                <td className="mono sm">{s.ref}</td>
+              <tr key={s.id} className={testRow(s)}>
+                <td className="mono sm">{s.ref}<TestTag on={s.isTestData} /></td>
                 <td className="mono sm">{s.invoiceNo || '—'}</td>
                 <td><b>{s.contact.brand}</b></td>
                 <td className="num">{money(s.total, s.currency)}</td>

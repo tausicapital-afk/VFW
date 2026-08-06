@@ -5,6 +5,7 @@ import { Decimal } from 'decimal.js';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/auth.guard';
 import { EmailService } from '../common/email';
+import { ConfigService } from '../config/config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CreateAddonDto,
@@ -100,6 +101,8 @@ export class AdminService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly email: EmailService,
+    /** The Test data switch — see ConfigService.testDataMode. */
+    private readonly config: ConfigService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -652,6 +655,10 @@ export class AdminService {
           taxCode: dto.taxCode,
           glCode: dto.glCode,
           prices: { create: prices },
+          // A package invented while the Test data switch is on is a rehearsal
+          // package. Only creation reads the switch — editing a real package
+          // during a demo must not turn the rate card into one.
+          isTestData: this.config.testDataMode,
         },
         include: { prices: { include: { city: true } } },
       });
@@ -704,6 +711,7 @@ export class AdminService {
           note: dto.note?.trim() || null,
           forBrands,
           glCode: dto.glCode,
+          isTestData: this.config.testDataMode,
         },
       });
       await this.audit.log(
@@ -764,6 +772,7 @@ export class AdminService {
           start,
           end,
           cityId: city.id,
+          isTestData: this.config.testDataMode,
         },
         include: { city: true },
       });
