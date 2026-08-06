@@ -7,6 +7,7 @@ import { api } from '../lib/api';
 import { downloadFile } from '../lib/export';
 import { fmtDate, fmtDateTime, money, PAY_LABEL } from '../lib/format';
 import { effectivePackage } from '../lib/pricing';
+import { TestTag, useTestRow } from '../lib/testData';
 import type { AuditEntry, Catalog, DesignerFeedback, SendInvoiceResult, Submission } from '../lib/types';
 import { Page } from '../shell/Shell';
 import { DocumentsCard } from './DocumentsCard';
@@ -33,6 +34,7 @@ function Row({ label, value, cls }: { label: string; value: string; cls?: string
 
 export function SubmissionDetail() {
   const { id } = useParams<{ id: string }>();
+  const testRow = useTestRow();
   const nav = useNavigate();
   const qc = useQueryClient();
   const { user } = useAuth();
@@ -172,7 +174,14 @@ export function SubmissionDetail() {
   const depositShown = Number(sub.deposit) > 0;
 
   return (
-    <Page crumb="Work / Submissions" title={sub.ref} actions={actions}>
+    <Page
+      crumb="Work / Submissions"
+      // Marked in the title as well as on the payment rows: this screen is
+      // reached straight from a link as often as from the list, and someone
+      // who lands here never sees the table that would have told them.
+      title={<>{sub.ref}<TestTag on={sub.isTestData} /></>}
+      actions={actions}
+    >
       {sub.status === 'RETURNED' && sub.returnNote && (
         <div className="note warn" style={{ marginBottom: 16 }}>
           <b>Returned by Accounting:</b> {sub.returnNote}
@@ -295,8 +304,8 @@ export function SubmissionDetail() {
                         </tr>
                       )}
                       {sub.payments.map((p) => (
-                        <tr key={p.id}>
-                          <td className="sm">{fmtDate(p.date)}</td>
+                        <tr key={p.id} className={testRow(p)}>
+                          <td className="sm">{fmtDate(p.date)}<TestTag on={p.isTestData} /></td>
                           <td className="sm">{p.method}</td>
                           <td className="mono sm">{p.reference || '—'}</td>
                           <td className="num">{money(p.amount, p.currency)}</td>

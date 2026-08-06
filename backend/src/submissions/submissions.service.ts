@@ -9,6 +9,7 @@ import { Decimal } from 'decimal.js';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/auth.guard';
 import { can } from '../common/acl';
+import { ConfigService } from '../config/config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PricingService } from '../pricing/pricing.service';
 import { buildInvoicePdf, type InvoicePdfData } from './invoice-pdf';
@@ -55,6 +56,11 @@ export class SubmissionsService {
     private readonly prisma: PrismaService,
     private readonly pricing: PricingService,
     private readonly audit: AuditService,
+    // The Test data switch. Read at the moment a row is written, never cached:
+    // an admin can flip it mid-session and the very next sale must land on the
+    // right side of it. SystemConfigModule is @Global, so this arrives without
+    // SubmissionsModule importing anything.
+    private readonly config: ConfigService,
   ) {}
 
   /**
@@ -167,7 +173,16 @@ export class SubmissionsService {
       return tx.contact.upsert({
         where: { brand: dto.brand },
         update: {},
-        create: { brand: dto.brand, ...details, createdById: user.id },
+        // The flag goes on `create` only, matching the empty `update` above and
+        // for the same reason: a brand somebody else already entered is their
+        // row, and a test sale against a real customer must not reclassify that
+        // customer. Only a contact this sale brings into existence inherits it.
+        create: {
+          brand: dto.brand,
+          ...details,
+          createdById: user.id,
+          isTestData: this.config.testDataMode,
+        },
       });
     }
 
@@ -329,6 +344,10 @@ export class SubmissionsService {
           commissionAmount: priced.commissionAmount.toFixed(2),
           paymentMethod: dto.paymentMethod,
           department: rep.department,
+          // Stamped once, at creation. The edit path below deliberately does not
+          // carry it: an amendment, an approval or a void changes where a sale
+          // is in its life, never what it was entered as.
+          isTestData: this.config.testDataMode,
           addons: {
             create: priced.lines.map((l) => ({
               addonId: l.addonId,
@@ -615,6 +634,11 @@ export class SubmissionsService {
           method: dto.method,
           reference: dto.reference,
           recordedById: user.id,
+          // A payment inherits the sale it settles: money moved against a
+          // rehearsal is rehearsal money whatever the switch says today, and a
+          // ledger where the sale is marked and its payments are not would read
+          // as if a test invoice had been really paid.
+          isTestData: submission.isTestData || this.config.testDataMode,
         },
       });
 

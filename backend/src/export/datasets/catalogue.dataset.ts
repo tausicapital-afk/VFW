@@ -25,6 +25,7 @@ export function packagesDataset(admin: AdminService): ExportDataset<PackageRow> 
     columns: [
       { header: 'Brand', value: (p) => p.brand, width: 8 },
       { header: 'Package', value: (p) => p.name, width: 24 },
+      { header: 'Test data', value: (p) => (p.isTestData ? 'TEST' : ''), width: 10 },
       { header: 'Looks', value: (p) => p.looks, width: 7 },
       {
         header: 'City pricing',
@@ -54,6 +55,7 @@ export function addonsDataset(admin: AdminService): ExportDataset<AddonRow> {
     columns: [
       { header: 'Brand', value: (a) => a.brand, width: 8 },
       { header: 'Add-on', value: (a) => a.name, width: 24 },
+      { header: 'Test data', value: (a) => (a.isTestData ? 'TEST' : ''), width: 10 },
       { header: 'Price', value: (a) => a.price, money: true, width: 12 },
       { header: 'Currency', value: (a) => a.currency, width: 9 },
       { header: 'GL', value: (a) => a.glCode, width: 10 },

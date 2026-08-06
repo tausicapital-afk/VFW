@@ -5,6 +5,7 @@ import { useAuth } from '../auth/AuthContext';
 import { can } from '../lib/acl';
 import { api } from '../lib/api';
 import { fmtDate, money, STATUS_LABEL } from '../lib/format';
+import { TestTag, useTestRow } from '../lib/testData';
 import type { Submission } from '../lib/types';
 import { ExportMenu } from '../shell/ExportMenu';
 import { Page } from '../shell/Shell';
@@ -14,6 +15,10 @@ export function StatusPill({ status }: { status: Submission['status'] }) {
 }
 
 export function SubmissionsTable({ rows }: { rows: Submission[] }) {
+  // This one table is the Submissions list, the voided list AND both Dashboard
+  // cards, so marking it here is most of the feature's reach in one place.
+  const testRow = useTestRow();
+
   if (!rows.length) {
     return (
       <div className="empty">
@@ -39,9 +44,10 @@ export function SubmissionsTable({ rows }: { rows: Submission[] }) {
         </thead>
         <tbody>
           {rows.map((s) => (
-            <tr key={s.id}>
+            <tr key={s.id} className={testRow(s)}>
               <td className="mono">
                 <Link to={`/submissions/${s.id}`}>{s.ref}</Link>
+                <TestTag on={s.isTestData} />
               </td>
               <td>
                 <b>{s.contact.brand}</b>

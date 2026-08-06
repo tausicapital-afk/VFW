@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { fmtDate, money } from '../lib/format';
+import { TestTag, useTestRow } from '../lib/testData';
 import type { ContactDetail as ContactDetailData } from '../lib/types';
 import { Page } from '../shell/Shell';
 import { StatusPill } from './Submissions';
@@ -17,6 +18,7 @@ function Row({ label, value }: { label: string; value: string }) {
 
 export function ContactDetail() {
   const { id } = useParams<{ id: string }>();
+  const testRow = useTestRow();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['contact', id],
@@ -44,7 +46,13 @@ export function ContactDetail() {
   const currencies = Object.keys(lifetimeValue);
 
   return (
-    <Page crumb="Work / Contacts" title={contact.brand}>
+    <Page
+      crumb="Work / Contacts"
+      // The header carries the marking too, not just the rows below: this screen
+      // is reached from a link, and someone who lands straight on a demo
+      // customer never sees the Contacts table that would have told them.
+      title={<>{contact.brand}<TestTag on={contact.isTestData} /></>}
+    >
       <div className="split">
         <div className="card">
           <div className="hd"><h3>{contact.type ?? 'Designer'}</h3></div>
@@ -98,9 +106,10 @@ export function ContactDetail() {
               </thead>
               <tbody>
                 {submissions.map((s) => (
-                  <tr key={s.id}>
+                  <tr key={s.id} className={testRow(s)}>
                     <td className="mono">
                       <Link to={`/submissions/${s.id}`}>{s.ref}</Link>
+                      <TestTag on={s.isTestData} />
                     </td>
                     <td className="sm">
                       <span className={'tag ' + s.brand}>{s.brand}</span> {s.event}

@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import { decryptSecret } from '../config/config.crypto';
+import { ConfigService } from '../config/config.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
@@ -29,7 +30,11 @@ export class InboundMailService {
   // Guards against a slow poll overlapping the next tick's start.
   private running = false;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    /** The Test data switch — see ConfigService.testDataMode. */
+    private readonly config: ConfigService,
+  ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
   async poll(): Promise<void> {
@@ -137,6 +142,9 @@ export class InboundMailService {
           mailAccountId,
           messageId,
           receivedAt: parsed.date ?? new Date(),
+          // Inbound mail that lands while the switch is on is part of whatever
+          // is being rehearsed — usually a reply to a test send.
+          isTestData: this.config.testDataMode,
         },
       });
     } catch (err) {

@@ -1,4 +1,5 @@
 import { useAuth } from '../auth/AuthContext';
+import { useTestHighlight } from '../lib/testData';
 import { useTheme, type ThemePref } from '../theme/ThemeContext';
 import { Page } from '../shell/Shell';
 
@@ -11,6 +12,7 @@ const THEME_OPTIONS: { value: ThemePref; label: string; hint: string; ic: string
 export function Settings() {
   const { user } = useAuth();
   const { theme, resolved, setTheme } = useTheme();
+  const { on: highlightTest, setOn: setHighlightTest } = useTestHighlight();
 
   return (
     <Page crumb="Console" title="Settings">
@@ -40,6 +42,31 @@ export function Settings() {
               <div className="help" style={{ marginTop: 10 }}>
                 Currently showing the <b>{resolved}</b> theme.
               </div>
+            </div>
+
+            {/* Sits under Appearance rather than in a card of its own: it is a
+                display preference like the theme, stored in this browser, and
+                it changes nothing about the records themselves. */}
+            <div className="f">
+              <label>Test data</label>
+              <div className="help" style={{ marginBottom: 10 }}>
+                Demo and rehearsal records share this database with real ones. When this is on,
+                every table tints those rows and marks them <b>Test</b>.
+              </div>
+              <label className="chk">
+                <input
+                  type="checkbox"
+                  checked={highlightTest}
+                  onChange={(e) => setHighlightTest(e.target.checked)}
+                />
+                <span className="t">
+                  Highlight test data in tables
+                  <div className="sm mut">
+                    Turning this off hides the marking for you only — it does not change any
+                    record, and nobody else&apos;s screen is affected.
+                  </div>
+                </span>
+              </label>
             </div>
           </div>
         </div>

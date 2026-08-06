@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 import { can } from '../lib/acl';
 import { monthKey, monthLabel, shiftMonth } from '../lib/attendance';
 import { fmtDate, money } from '../lib/format';
+import { TestTag, useTestRow } from '../lib/testData';
 import type {
   PayrollInvoiceRow, PayrollInvoiceStatus, PayrollRun, PayrollSheet, PayrollStatement, PayType,
 } from '../lib/types';
@@ -407,6 +408,7 @@ type InvoiceAction = { kind: 'edit' | 'approve' | 'reject'; invoice: PayrollInvo
 
 function Approvals() {
   const qc = useQueryClient();
+  const testRow = useTestRow();
   const [action, setAction] = useState<InvoiceAction | null>(null);
 
   const { data: pending, isLoading } = useQuery({
@@ -450,12 +452,12 @@ function Approvals() {
               </thead>
               <tbody>
                 {pending.map((inv) => (
-                  <tr key={inv.id}>
+                  <tr key={inv.id} className={testRow(inv)}>
                     <td>
                       <div className="rowflex" style={{ gap: 10 }}>
                         <Avatar name={inv.user?.name ?? '?'} colour={inv.user?.colour} src={inv.user?.avatarUrl} size={28} />
                         <div style={{ minWidth: 0 }}>
-                          <div className="b">{inv.user?.name}</div>
+                          <div className="b">{inv.user?.name}<TestTag on={inv.isTestData} /></div>
                           <div className="mut sm">{inv.user ? ROLE_LABEL[inv.user.role] : ''}</div>
                         </div>
                       </div>

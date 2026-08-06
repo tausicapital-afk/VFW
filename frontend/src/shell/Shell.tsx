@@ -303,7 +303,11 @@ export function Page({
   crumb, title, actions, children,
 }: {
   crumb: string;
-  title: string;
+  // A node, not a string: a detail screen reached straight from a link has no
+  // table above it to carry a row marking, so the title is where a badge
+  // (currently the test-data pill) has to live. It still renders inside the one
+  // <h1>, so nothing about the page shape changes.
+  title: React.ReactNode;
   actions?: React.ReactNode;
   children: React.ReactNode;
 }) {

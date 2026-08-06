@@ -24,6 +24,10 @@ export function qboLedgerDataset(submissions: SubmissionsService): ExportDataset
     columns: [
       { header: 'Invoice', value: (s) => s.invoiceNo, width: 13 },
       { header: 'Ref', value: (s) => s.ref, width: 12 },
+      // This is the reconciliation file, so this column matters more here than
+      // anywhere: a demo sale posted to QuickBooks and then reconciled against
+      // is the exact failure the whole feature exists to prevent.
+      { header: 'Test data', value: (s) => (s.isTestData ? 'TEST' : ''), width: 10 },
       { header: 'Customer', value: (s) => s.contact.company || s.contact.brand, width: 24 },
       { header: 'Brand', value: (s) => s.contact.brand, width: 20, spreadsheetOnly: true },
       { header: 'Currency', value: (s) => s.currency, width: 9 },

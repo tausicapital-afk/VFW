@@ -28,6 +28,9 @@ export function contactsDataset(contacts: ContactsService): ExportDataset<Contac
     load: (user, f) => contacts.list(user, f.q),
     columns: [
       { header: 'Brand', value: (c) => c.brand, width: 22 },
+      // See submissions.dataset.ts for why this rides next to the identifier and
+      // stays on the PDF: a file has no row tint to carry the marking for it.
+      { header: 'Test data', value: (c) => (c.isTestData ? 'TEST' : ''), width: 10 },
       { header: 'Designer', value: (c) => c.designer, width: 22 },
       { header: 'Company', value: (c) => c.company, width: 24 },
       { header: 'Type', value: (c) => c.type, width: 12 },

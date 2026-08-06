@@ -1,3 +1,16 @@
+/**
+ * Demo/rehearsal records, living in the same tables as the real book.
+ *
+ * Every payload that surfaces as a row in a module table carries this, and every
+ * one of those tables marks it — see lib/testData.tsx. Optional here rather than
+ * required, so a screen reading an older payload (or a shape the flag genuinely
+ * does not apply to, like a report aggregate) simply draws no marking instead of
+ * failing to compile.
+ */
+export interface TestFlagged {
+  isTestData?: boolean;
+}
+
 export type Role = 'SALES' | 'INTERN' | 'ACCT' | 'MGR' | 'ADMIN';
 export type SubmissionStatus =
   | 'DRAFT' | 'PENDING' | 'RETURNED' | 'APPROVED' | 'REJECTED' | 'EXPORTED' | 'VOIDED';
@@ -37,7 +50,7 @@ export interface Profile extends User {
 export type AttendanceStatus =
   | 'PRESENT' | 'REMOTE' | 'LEAVE' | 'SICK' | 'HOLIDAY' | 'ABSENT';
 
-export interface AttendanceEntry {
+export interface AttendanceEntry extends TestFlagged {
   id: string;
   userId: string;
   /** A calendar day, "YYYY-MM-DD". Never parse this as an instant. */
@@ -96,16 +109,16 @@ export interface AttendanceTeam {
 export type Money = string;
 
 export interface City { id: string; name: string; country: string; currency: Currency }
-export interface EventRow {
+export interface EventRow extends TestFlagged {
   id: string; brand: string; name: string; season: string;
   venue: string | null; start: string; end: string; cityId: string; city: City;
 }
 export interface PackagePrice { cityId: string; currency: Currency; price: Money }
-export interface PackageRow {
+export interface PackageRow extends TestFlagged {
   id: string; brand: string; name: string; looks: number; blurb: string | null;
   taxCode: string; glCode: string; prices: PackagePrice[];
 }
-export interface AddonRow {
+export interface AddonRow extends TestFlagged {
   id: string; brand: string; name: string; price: Money;
   currency: Currency; note: string | null; forBrands: string[]; glCode: string;
 }
@@ -121,7 +134,7 @@ export interface Catalog {
   cities: City[];
 }
 
-export interface Contact {
+export interface Contact extends TestFlagged {
   id: string; brand: string; designer: string;
   company: string | null; email: string | null;
   phone?: string | null; country: string | null;
@@ -129,7 +142,7 @@ export interface Contact {
 }
 
 /** A single line of a contact's submission history, flattened by the API. */
-export interface ContactSubmission {
+export interface ContactSubmission extends TestFlagged {
   id: string; ref: string; event: string; brand: string;
   package: string; total: Money; currency: Currency;
   status: SubmissionStatus; createdAt: string;
@@ -157,7 +170,7 @@ export interface SubmissionDocument {
 
 export type DiscountType = 'PCT' | 'AMT';
 
-export interface Payment {
+export interface Payment extends TestFlagged {
   id: string;
   date: string;
   amount: Money;
@@ -191,7 +204,7 @@ export interface Installment {
   paymentId: string | null;
 }
 
-export interface Submission {
+export interface Submission extends TestFlagged {
   id: string;
   ref: string;
   status: SubmissionStatus;
@@ -260,7 +273,7 @@ export type EmailKind =
   | 'INVITATION' | 'INVOICE' | 'TEST' | 'INBOUND' | 'OTHER';
 
 /** A row in the Emails list — the summary shape, without the full body. */
-export interface EmailRow {
+export interface EmailRow extends TestFlagged {
   id: string;
   direction: EmailDirection;
   status: EmailStatus;
@@ -488,7 +501,7 @@ export interface PayrollStatement {
 export type PayrollInvoiceStatus = 'SUBMITTED' | 'APPROVED' | 'REJECTED';
 
 /** One person's submitted month — a frozen snapshot, not the live statement. */
-export interface PayrollInvoiceRow {
+export interface PayrollInvoiceRow extends TestFlagged {
   id: string;
   userId: string;
   month: string;
@@ -562,7 +575,7 @@ export interface AdminPackagePrice extends PackagePrice {
   id: string;
   city: City;
 }
-export interface AdminPackage {
+export interface AdminPackage extends TestFlagged {
   id: string; brand: string; name: string; looks: number; blurb: string | null;
   taxCode: string; glCode: string;
   prices: AdminPackagePrice[];
@@ -640,7 +653,7 @@ export interface ConfigField {
 }
 
 export interface ConfigGroup {
-  id: 'email' | 'storage';
+  id: 'email' | 'storage' | 'data';
   title: string;
   blurb: string;
   /** null when the group requires nothing — draw no status pill. */
@@ -666,6 +679,40 @@ export interface ConfigTestResult {
   ok: boolean;
   error?: string;
   sentTo?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Test data — the backfill (Administration → Configuration → Test data).
+//
+// The runtime switch above it only stamps rows as they are created; this is how
+// records that already exist get marked. See backend/src/testdata.
+// ---------------------------------------------------------------------------
+
+/** How many rows of each kind currently carry the flag, and whether the switch is on. */
+export interface TestDataSummary {
+  mode: boolean;
+  /** The demo sales the "Mark the demo records" button defaults to. */
+  demoRefs: string[];
+  counts: {
+    submissions: number;
+    contacts: number;
+    payments: number;
+    emails: number;
+    events: number;
+    packages: number;
+    addons: number;
+    attendance: number;
+    payroll: number;
+  };
+}
+
+/** What one backfill run changed. Counts are rows CHANGED, not rows matched. */
+export interface TestDataMarkResult {
+  unknownRefs: string[];
+  submissions: number;
+  contacts: number;
+  payments: number;
+  emails: number;
 }
 
 // ---------------------------------------------------------------------------
