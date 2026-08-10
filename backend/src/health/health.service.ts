@@ -307,7 +307,7 @@ export class HealthService implements OnApplicationBootstrap, OnApplicationShutd
                COUNT(*) FILTER (WHERE "status" = 'DEGRADED')::int    AS degraded,
                COUNT(*) FILTER (WHERE "status" = 'DOWN')::int        AS down
         FROM "HealthProbe"
-        WHERE "checkedAt" >= NOW() - make_interval(days => ${days})
+        WHERE "checkedAt" >= NOW() - make_interval(days => ${days}::int)
           AND "status" <> 'UNCONFIGURED'
         GROUP BY 1, 2
       `;
