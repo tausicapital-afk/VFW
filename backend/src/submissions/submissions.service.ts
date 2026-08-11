@@ -280,7 +280,15 @@ export class SubmissionsService {
       discountType,
       discountValue: dto.discountValue ?? 0,
       taxRate: pkg.tax.rate,
-      commissionPct: rep.commissionPct,
+      // The rep's rate, unless they are not on commission at all — a salaried
+      // account is stamped 0% here rather than filtered out further downstream.
+      // This is the ONE place the pay basis touches a sale, and it has to be
+      // this one: the percentage is frozen onto the Submission at creation, so
+      // every screen that reads commission afterwards (the sale itself, Reports,
+      // Payroll) agrees without any of them having to know how the person is
+      // paid. Gating it at payroll instead would leave a commission line on a
+      // salaried rep's own invoice that nobody was ever going to pay them.
+      commissionPct: rep.earnsCommission ? rep.commissionPct : 0,
       deposit: dto.deposit ?? 0,
     });
 

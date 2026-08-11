@@ -9,6 +9,7 @@ import { fmtDate, fmtDateTime, money, PAY_LABEL } from '../lib/format';
 import { effectivePackage } from '../lib/pricing';
 import { TestTag, useTestRow } from '../lib/testData';
 import type { AuditEntry, Catalog, DesignerFeedback, SendInvoiceResult, Submission } from '../lib/types';
+import { ConfirmModal } from '../shell/ConfirmModal';
 import { Page } from '../shell/Shell';
 import { DocumentsCard } from './DocumentsCard';
 import { FeedbackModal, Stars } from './Feedback';
@@ -59,6 +60,7 @@ export function SubmissionDetail() {
 
   const [payOpen, setPayOpen] = useState(false);
   const [sendOpen, setSendOpen] = useState(false);
+  const [voidOpen, setVoidOpen] = useState(false);
   const [sentTo, setSentTo] = useState<string | null>(null);
 
   function refresh() {
@@ -120,15 +122,6 @@ export function SubmissionDetail() {
     !canEditSales && (openForEdit || decided) && can('submission.editAny', user?.role);
   const canVoid = can('submission.void', user?.role);
 
-  function promptVoid() {
-    const reason = window.prompt(
-      'Void this submission? It will be hidden from lists and reports but kept for audit, and can be restored. Optionally note why:',
-      '',
-    );
-    // Cancel returns null; an empty string is a confirmed void with no reason.
-    if (reason !== null) voidSale.mutate(reason);
-  }
-
   const actions = (
     <>
       <StatusPill status={sub.status} />
@@ -159,7 +152,7 @@ export function SubmissionDetail() {
           </Link>
         )}
       {canVoid && !isVoided && (
-        <button className="btn dgr" disabled={voidSale.isPending} onClick={promptVoid}>
+        <button className="btn dgr" disabled={voidSale.isPending} onClick={() => setVoidOpen(true)}>
           {voidSale.isPending ? 'Voiding…' : 'Void'}
         </button>
       )}
@@ -429,6 +422,19 @@ export function SubmissionDetail() {
           sub={sub}
           onClose={() => setSendOpen(false)}
           onSent={(to) => { setSendOpen(false); setSentTo(to); }}
+        />
+      )}
+      {voidOpen && (
+        <ConfirmModal
+          title="Void this submission?"
+          message="It will be hidden from lists and reports but kept for audit, and can be restored."
+          reasonLabel="Reason (optional)"
+          reasonPlaceholder="Note why…"
+          confirmLabel="Void"
+          danger
+          pending={voidSale.isPending}
+          onCancel={() => setVoidOpen(false)}
+          onConfirm={(reason) => { setVoidOpen(false); voidSale.mutate(reason ?? ''); }}
         />
       )}
     </Page>

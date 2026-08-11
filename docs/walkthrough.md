@@ -357,6 +357,17 @@ GET /api/payroll/run?month=2026-08     (as Marcus, MGR)
 403  "Your role cannot view the payroll run"
 ```
 
+The same line holds for the **payslip** document, which is built from the statement and inherits its
+scoping rather than restating it:
+
+```
+GET /api/payroll/payslip.pdf?month=2026-08&userId={Aiko}   (as Marcus, MGR)
+403  "Your role cannot open someone else's pay"
+```
+
+That refusal comes from `PayrollService.subject()`, one layer below the route — the payslip endpoint
+carries no permission logic of its own, which is why it cannot drift away from the screen's rule.
+
 **A sales manager reads the team's hours and their numbers, not their salaries.** This is the one
 place in the system where MGR sees deliberately less than Accounting, and it is the sharpest line in
 the permission matrix.
@@ -451,7 +462,7 @@ that can edit roles can raise its own to ADMIN**.
 | Tab | The cycle it runs |
 | --- | --- |
 | Invitations & approvals | Issue a code with a fixed role → person signs up against it → verifies by OTP → admin approves → account is ACTIVE. Four gates before anyone gets in. |
-| Users & roles | Role, pay type, base rate, commission % and target. Changing a commission % moves the next sale, never one already booked. |
+| Users & roles | Role, pay type, base rate, whether they earn commission, commission % and target. The pay type and the commission switch together give the three arrangements: commission only, salary only, or both. Changing either moves the next sale, never one already booked. |
 | Packages & pricing | Shows, packages, add-ons. Every write is additive. |
 | Tax rates | Profiles applied at pricing time. |
 | Settings | Discount threshold, both invoice sequences (read-only), FX rates. |

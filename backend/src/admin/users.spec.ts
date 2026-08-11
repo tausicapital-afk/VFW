@@ -6,12 +6,14 @@ import { PrismaService } from '../prisma/prisma.service';
 /**
  * The Users & roles tab.
  *
- * Two properties worth holding here, beyond "the edit saves":
+ * Three properties worth holding here, beyond "the edit saves":
  *
  *   1. Editing a rep's commission changes what the NEXT sale pays, never what a
  *      sale already on the books paid. Submission copies commissionPct onto the
  *      record at creation — catalog.spec.ts holds the same line for prices.
- *   2. An admin cannot use this screen to lock everyone out of this screen.
+ *   2. The pay basis is two fields, and taking someone off commission obeys the
+ *      same rule: it moves the next sale, not the last one.
+ *   3. An admin cannot use this screen to lock everyone out of this screen.
  */
 
 const ADMIN = 'it@vanfashionweek.com';
@@ -154,6 +156,111 @@ describe('users & roles — edit and soft delete', () => {
         .set('Cookie', admin)
         .send({ status: 'REJECTED' })
         .expect(400);
+    });
+  });
+
+  /**
+   * The pay basis is two fields — `payType` (how base pay is worked out) and
+   * `earnsCommission` (whether there is commission at all) — because the three
+   * arrangements people are hired on are the product of the two, not a list.
+   */
+  describe('the pay basis', () => {
+    const patch = (id: string, body: object, code = 200) =>
+      http(app).patch(`/api/users/${id}`).set('Cookie', admin).send(body).expect(code);
+
+    it('saves commission only, salary only, and both', async () => {
+      const u = await scratchUser();
+
+      let res = await patch(u.id, { payType: 'SALARY', baseRate: '6000', earnsCommission: false });
+      expect(res.body.user).toMatchObject({ payType: 'SALARY', earnsCommission: false });
+
+      res = await patch(u.id, { earnsCommission: true });
+      expect(res.body.user).toMatchObject({ payType: 'SALARY', earnsCommission: true });
+
+      res = await patch(u.id, { payType: 'COMMISSION_ONLY' });
+      expect(res.body.user).toMatchObject({ payType: 'COMMISSION_ONLY', earnsCommission: true });
+
+      // Both rates survived the round trip. Coming off commission must not lose
+      // the percentage there is to come back to, and switching pay type must not
+      // clear a salary an admin would then have to remember and retype.
+      const row = await prisma.user.findUniqueOrThrow({ where: { id: u.id } });
+      expect(row.commissionPct.toFixed(2)).toBe('8.00');
+      expect(row.baseRate.toFixed(2)).toBe('6000.00');
+    });
+
+    it('refuses the one combination that would pay somebody nothing', async () => {
+      const u = await scratchUser();
+
+      // Both halves in a single save.
+      await patch(u.id, { payType: 'COMMISSION_ONLY', earnsCommission: false }, 400);
+
+      // And one half against the state already stored, which is the same edit
+      // arriving in two requests — the account is commission-only by the time
+      // the second one lands.
+      await patch(u.id, { payType: 'COMMISSION_ONLY' });
+      await patch(u.id, { earnsCommission: false }, 400);
+
+      const row = await prisma.user.findUniqueOrThrow({ where: { id: u.id } });
+      expect(row.earnsCommission).toBe(true);
+    });
+
+    it('is audited like every other change to what someone is paid', async () => {
+      const u = await scratchUser({ payType: 'SALARY', baseRate: '5000' });
+      await patch(u.id, { earnsCommission: false });
+
+      const entry = await prisma.auditEntry.findFirst({
+        where: { action: 'USER_UPDATED' },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(entry?.payload).toMatchObject({
+        before: { earnsCommission: true },
+        after: { earnsCommission: false },
+      });
+    });
+
+    it('stops the next sale earning commission, and leaves the last one alone', async () => {
+      const rep = await prisma.user.findUniqueOrThrow({ where: { email: SALES } });
+      const sales = await loginCookie(app, SALES);
+
+      const book = async () => {
+        const res = await http(app)
+          .post('/api/submissions')
+          .set('Cookie', sales)
+          .send({
+            designer: 'Pay Basis',
+            brand: `Basis ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            eventId: 'VFW-FW26',
+            packageId: 'VFW-BRONZE',
+          })
+          .expect(201);
+        return prisma.submission.findUniqueOrThrow({ where: { id: res.body.id as string } });
+      };
+
+      // Sold while on commission.
+      const earned = await book();
+      expect(earned.commissionPct.toFixed(2)).toBe(rep.commissionPct.toFixed(2));
+      expect(earned.commissionAmount.gt(0)).toBe(true);
+
+      // Moved onto a salary, off commission.
+      await patch(rep.id, { payType: 'SALARY', baseRate: '6000', earnsCommission: false });
+
+      // The next sale is stamped at 0% — the pay basis bites where the rate is
+      // frozen onto the record, so nothing downstream has to know about it.
+      const notEarned = await book();
+      expect(notEarned.commissionPct.toFixed(2)).toBe('0.00');
+      expect(notEarned.commissionAmount.toFixed(2)).toBe('0.00');
+
+      // And the sale made before the change still pays what it was struck at.
+      const after = await prisma.submission.findUniqueOrThrow({ where: { id: earned.id } });
+      expect(after.commissionPct.toFixed(2)).toBe(earned.commissionPct.toFixed(2));
+      expect(after.commissionAmount.toFixed(2)).toBe(earned.commissionAmount.toFixed(2));
+
+      // Put the seeded rep back the way the seed left them.
+      await patch(rep.id, {
+        earnsCommission: true,
+        payType: rep.payType,
+        baseRate: rep.baseRate.toFixed(2),
+      });
     });
   });
 
@@ -340,6 +447,35 @@ describe('users & roles — edit and soft delete', () => {
     });
   });
 
+  /**
+   * The sales panel under a user's details. It reports the month, not the
+   * account's history, and it reports payroll's figures rather than its own —
+   * so what is worth holding here is that it answers at all for someone who has
+   * never sold anything, and that it does not answer for someone who is not
+   * there. The arithmetic itself is payroll.spec.ts's to defend.
+   */
+  describe('this month at a glance', () => {
+    it('answers for an account with no sales, rather than 404 or an empty body', async () => {
+      const u = await scratchUser({ commissionPct: '7.5', target: '50000' });
+
+      const res = await http(app).get(`/api/users/${u.id}/sales`).set('Cookie', admin).expect(200);
+
+      expect(res.body).toMatchObject({
+        month: new Date().toISOString().slice(0, 7),
+        commissionPct: '7.50',
+        target: '50000.00',
+        count: 0,
+        revenue: '0.00',
+        commission: '0.00',
+        clients: [],
+      });
+    });
+
+    it('404s on an account that does not exist', async () => {
+      await http(app).get('/api/users/not-a-real-id/sales').set('Cookie', admin).expect(404);
+    });
+  });
+
   describe('authorization', () => {
     it('is admin-only — a rep cannot edit or delete an account', async () => {
       const u = await scratchUser();
@@ -348,6 +484,7 @@ describe('users & roles — edit and soft delete', () => {
       await http(app).patch(`/api/users/${u.id}`).set('Cookie', rep).send({ role: 'ADMIN' }).expect(403);
       await http(app).delete(`/api/users/${u.id}`).set('Cookie', rep).expect(403);
       await http(app).get('/api/users').set('Cookie', rep).expect(403);
+      await http(app).get(`/api/users/${u.id}/sales`).set('Cookie', rep).expect(403);
     });
   });
 });

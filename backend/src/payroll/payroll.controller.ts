@@ -1,10 +1,11 @@
-import { Body, Controller, Get, Module, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Module, Param, Patch, Post, Query, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import { AuthUser, Can, CurrentUser } from '../common/auth.guard';
 import { PayrollService } from './payroll.service';
 import { EditPayrollInvoiceDto, PayrollQueryDto, RejectPayrollInvoiceDto, SubmitPayrollDto } from './dto';
 
 /**
- * Payroll. Both routes carry `payroll.viewOwn`, which every role holds, because
+ * Payroll. The read routes carry `payroll.viewOwn`, which every role holds, because
  * the base case is reading your own pay — a rep checking the commission on the
  * sales they closed is the reason this module is tied to sales at all.
  *
@@ -22,6 +23,47 @@ export class PayrollController {
   @Can('payroll.viewOwn')
   run(@Query() query: PayrollQueryDto, @CurrentUser() user: AuthUser) {
     return this.payroll.run(query, user);
+  }
+
+  /**
+   * The same statement as `GET /` below, as a document somebody can print, file
+   * or forward. Carries `payroll.viewOwn` for exactly the reason that route
+   * does: the service resolves whose month this is and refuses anyone else's
+   * without `payroll.viewAll`, so the guard here is about reaching the module,
+   * not about who is on the page.
+   *
+   * Deliberately NOT a dataset under `/api/export`. That machinery renders a
+   * table — rows and columns, one shape across csv/xlsx/pdf — and a payslip is
+   * not a table: it is one person, one month, with the arithmetic shown beside
+   * each figure. Forcing it through would produce a two-column "Item / Value"
+   * spreadsheet that nobody wants and a PDF that reads like a database dump. It
+   * follows `submissions/:id/invoice.pdf` instead, which is the same shape of
+   * problem (one record, one client-facing artefact) and already the house
+   * pattern for it — and it reuses the same pdfkit renderer, so no second PDF
+   * library entered the tree.
+   *
+   * We take the response object directly so the binary is not run through Nest's
+   * JSON serialization. A thrown error still surfaces before anything is written.
+   */
+  @Get('payslip.pdf')
+  @Can('payroll.viewOwn')
+  async payslip(
+    @Query() query: PayrollQueryDto,
+    @CurrentUser() user: AuthUser,
+    @Res() res: Response,
+  ) {
+    const { buffer, filename } = await this.payroll.payslip(query, user);
+    res
+      .status(200)
+      .set({
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Length': String(buffer.length),
+        // The browser reads the filename off the header, which is only visible
+        // to a cross-origin fetch if it is explicitly exposed.
+        'Access-Control-Expose-Headers': 'Content-Disposition',
+      })
+      .end(buffer);
   }
 
   @Get()

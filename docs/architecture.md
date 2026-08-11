@@ -151,7 +151,8 @@ registered), `PasswordReset`.
 > department, `colour`, `avatarKey` — statements about yourself, changed on the
 > Account screen with no permission check because there is no `:id` to get wrong.
 > **Admin-only**: `role`, `status`, `commissionPct`, `target`, `payType`,
-> `baseRate` — grants and obligations other people make about you. **Never
+> `baseRate`, `earnsCommission` — grants and obligations other people make about
+> you. **Never
 > edited**: `email` (the login identity and where one-time codes go),
 > `passwordHash`, `tokenVersion`. `title` and `role` are deliberately separate
 > columns: a title people can rewrite about themselves must never be able to move

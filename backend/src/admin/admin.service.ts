@@ -1,23 +1,27 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { Invitation, Prisma, Role, UserStatus } from '@prisma/client';
+import { Invitation, PayType, Prisma, Role, UserStatus } from '@prisma/client';
 import { randomInt } from 'crypto';
 import { Decimal } from 'decimal.js';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/auth.guard';
 import { EmailService } from '../common/email';
 import { ConfigService } from '../config/config.service';
+import { currentMonth } from '../attendance/attendance.service';
+import { PayrollService } from '../payroll/payroll.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CreateAddonDto,
   CreateEventDto,
   CreateInvitationDto,
   CreatePackageDto,
+  CreateSeasonDto,
   CreateTaxDto,
   RejectUserDto,
   UpdateAddonDto,
   UpdateEventDto,
   UpdateInvitationDto,
   UpdatePackageDto,
+  UpdateSeasonDto,
   UpdateSettingsDto,
   UpdateTaxDto,
   UpdateUserDto,
@@ -69,7 +73,13 @@ function decimal(raw: string, field: string): Decimal {
  * Summer 27" -> SS27) are what actually distinguish one show from another —
  * the name alone does not, since "Vancouver Fashion Week" repeats every season.
  */
-export function eventId(brand: string, cityId: string, season: string): string {
+/**
+ * "Spring/Summer 27" -> { initials: "SS", year: "27" }. Shared by eventId
+ * (below) and by Season create/update, so a season is rejected at the moment
+ * it is added to the catalogue rather than the moment someone tries to build a
+ * show out of it.
+ */
+function seasonParts(season: string): { initials: string; year: string } {
   const year = season.match(/(\d{2,4})\s*$/)?.[1]?.slice(-2) ?? '';
   const initials = season
     .replace(/\d+/g, '')
@@ -82,6 +92,11 @@ export function eventId(brand: string, cityId: string, season: string): string {
       'Season must look like "Spring/Summer 27" or "Fall/Winter 26" — initials followed by a year',
     );
   }
+  return { initials, year };
+}
+
+export function eventId(brand: string, cityId: string, season: string): string {
+  const { initials, year } = seasonParts(season);
   return `${brand.toUpperCase()}-${cityId.toUpperCase()}-${initials}${year}`;
 }
 
@@ -103,6 +118,8 @@ export class AdminService {
     private readonly email: EmailService,
     /** The Test data switch — see ConfigService.testDataMode. */
     private readonly config: ConfigService,
+    /** Read-only here: the one definition of what a person sold in a month. */
+    private readonly payroll: PayrollService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -318,7 +335,7 @@ export class AdminService {
   private readonly userFields = {
     id: true, name: true, email: true, phone: true, role: true, department: true,
     status: true, employeeId: true, commissionPct: true, target: true, colour: true,
-    title: true, payType: true, baseRate: true, createdAt: true,
+    title: true, payType: true, baseRate: true, earnsCommission: true, createdAt: true,
   } satisfies Prisma.UserSelect;
 
   async listUsers() {
@@ -330,6 +347,31 @@ export class AdminService {
         select: this.userFields,
         orderBy: [{ status: 'asc' }, { name: 'asc' }],
       }),
+    };
+  }
+
+  /**
+   * The sales side of an account, for the month in progress: what they closed,
+   * what it earned them, and who it was sold to.
+   *
+   * The figures are PayrollService's, not this service's own — see
+   * `monthSales`. Administration is where someone's commission rate is set, so
+   * it is the screen where a rate and the money it has actually produced most
+   * need to be legible together; it is not a second place that computes them.
+   */
+  async userSales(id: string) {
+    const user = await this.prisma.user.findFirst({
+      where: { id, deletedAt: null },
+      select: { id: true, name: true, commissionPct: true, target: true },
+    });
+    if (!user) throw new NotFoundException('User not found');
+
+    return {
+      // Echoed back so the panel can show the rate the money was earned under
+      // without assuming the form beside it is still showing a saved value.
+      commissionPct: user.commissionPct.toFixed(2),
+      target: user.target.toFixed(2),
+      ...(await this.payroll.monthSales(id, currentMonth())),
     };
   }
 
@@ -374,7 +416,10 @@ export class AdminService {
    * Note what is NOT here: editing commission does not touch a sale that has
    * already been made. Submission copies commissionPct onto the record at
    * creation and re-pricing reads it back off the record, exactly as the rate
-   * card does — this rate is what the next sale will use, not the last one.
+   * card does — this rate is what the next sale will use, not the last one. The
+   * same is true of the pay basis: taking someone off commission stops the next
+   * sale earning any, and leaves every sale already on the books exactly as it
+   * was struck.
    */
   async updateUser(id: string, dto: UpdateUserDto, actor: AuthUser) {
     const user = await this.prisma.user.findFirst({ where: { id, deletedAt: null } });
@@ -452,9 +497,26 @@ export class AdminService {
         data.target = next;
       }
     }
+    // Pay basis. The two fields are checked against the state the edit LANDS in,
+    // not against what arrived in the body — an admin switching someone to
+    // commission-only in the same save that turns commission off would otherwise
+    // slip through, since neither field is wrong on its own.
+    const payType = dto.payType ?? user.payType;
+    const earnsCommission = dto.earnsCommission ?? user.earnsCommission;
+    if (payType === PayType.COMMISSION_ONLY && !earnsCommission) {
+      throw new BadRequestException(
+        'A commission-only account must earn commission — it would be paid nothing. '
+        + 'Put them on a salary or hourly rate first.',
+      );
+    }
+
     if (dto.payType !== undefined && dto.payType !== user.payType) {
       set('payType', user.payType, dto.payType);
       data.payType = dto.payType;
+    }
+    if (dto.earnsCommission !== undefined && dto.earnsCommission !== user.earnsCommission) {
+      set('earnsCommission', user.earnsCommission, dto.earnsCommission);
+      data.earnsCommission = dto.earnsCommission;
     }
     if (dto.baseRate !== undefined) {
       const next = decimal(dto.baseRate, 'Base rate').toFixed(2);
@@ -750,6 +812,10 @@ export class AdminService {
     const city = await this.prisma.city.findUnique({ where: { id: dto.cityId } });
     if (!city) throw new BadRequestException(`Unknown city ${dto.cityId}`);
 
+    if (!(await this.prisma.season.findUnique({ where: { label: season } }))) {
+      throw new BadRequestException(`Unknown season "${season}" — add it under Seasons first`);
+    }
+
     const id = eventId(brand, city.id, season);
     if (await this.prisma.event.findUnique({ where: { id } })) {
       throw new BadRequestException(
@@ -812,9 +878,13 @@ export class AdminService {
       data.name = dto.name.trim();
     }
     if (dto.season !== undefined && dto.season.trim() !== event.season) {
+      const season = dto.season.trim();
+      if (!(await this.prisma.season.findUnique({ where: { label: season } }))) {
+        throw new BadRequestException(`Unknown season "${season}" — add it under Seasons first`);
+      }
       before.season = event.season;
-      after.season = dto.season.trim();
-      data.season = dto.season.trim();
+      after.season = season;
+      data.season = season;
     }
     if (dto.venue !== undefined && (dto.venue?.trim() || null) !== event.venue) {
       before.venue = event.venue;
@@ -984,6 +1054,85 @@ export class AdminService {
         tx,
       );
       return updated;
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Seasons — the vocabulary a show's `season` field is drawn from
+  // -------------------------------------------------------------------------
+
+  async createSeason(dto: CreateSeasonDto, actor: AuthUser) {
+    const label = dto.label.trim();
+    seasonParts(label); // throws if the shape is wrong
+
+    if (await this.prisma.season.findUnique({ where: { label } })) {
+      throw new BadRequestException(`A season called "${label}" already exists`);
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const created = await tx.season.create({ data: { label } });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'CATALOG_SEASON_CREATED',
+          detail: `Season added: ${label}`,
+          payload: { seasonId: created.id, label },
+        },
+        tx,
+      );
+      return created;
+    });
+  }
+
+  async updateSeason(id: string, dto: UpdateSeasonDto, actor: AuthUser) {
+    const season = await this.prisma.season.findUnique({ where: { id } });
+    if (!season) throw new NotFoundException('Season not found');
+
+    const label = dto.label.trim();
+    if (label === season.label) throw new BadRequestException('Nothing was changed');
+    seasonParts(label); // throws if the shape is wrong
+
+    if (await this.prisma.season.findUnique({ where: { label } })) {
+      throw new BadRequestException(`A season called "${label}" already exists`);
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.season.update({ where: { id }, data: { label } });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'CATALOG_SEASON_UPDATED',
+          detail: `Season renamed: ${season.label} -> ${label}`,
+          payload: { seasonId: id, before: season.label, after: label },
+        },
+        tx,
+      );
+      return updated;
+    });
+  }
+
+  /**
+   * A hard delete, unlike the rest of the catalogue: a season is never itself
+   * referenced by a show or a sale — it only seeds the free-text `season`
+   * column a show copies at creation (see createEvent) — so removing it here
+   * cannot orphan anything already on the books.
+   */
+  async deleteSeason(id: string, actor: AuthUser) {
+    const season = await this.prisma.season.findUnique({ where: { id } });
+    if (!season) throw new NotFoundException('Season not found');
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.season.delete({ where: { id } });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'CATALOG_SEASON_DELETED',
+          detail: `Season deleted: ${season.label}`,
+          payload: { seasonId: id, label: season.label },
+        },
+        tx,
+      );
+      return { ok: true };
     });
   }
 
@@ -1167,7 +1316,7 @@ export class AdminService {
 
   /** The catalogue as the admin screen needs it — prices and cities included. */
   async catalogue() {
-    const [packages, addons, taxes, glAccounts, cities, events] = await Promise.all([
+    const [packages, addons, taxes, glAccounts, cities, events, seasons] = await Promise.all([
       this.prisma.package.findMany({
         include: { prices: { include: { city: true } } },
         orderBy: [{ brand: 'asc' }, { name: 'asc' }],
@@ -1177,7 +1326,8 @@ export class AdminService {
       this.prisma.glAccount.findMany({ orderBy: { code: 'asc' } }),
       this.prisma.city.findMany({ orderBy: { name: 'asc' } }),
       this.prisma.event.findMany({ include: { city: true }, orderBy: { start: 'asc' } }),
+      this.prisma.season.findMany({ orderBy: { label: 'asc' } }),
     ]);
-    return { packages, addons, taxes, glAccounts, cities, events };
+    return { packages, addons, taxes, glAccounts, cities, events, seasons };
   }
 }

@@ -9,8 +9,19 @@ import { messagingApi, qk, useMessagingRealtime, type Conversation } from '../li
 import type { Role, Submission, User } from '../lib/types';
 import { Avatar } from './Avatar';
 
+/**
+ * What each role is CALLED. Display only — the permission grant is the `Role`
+ * itself, and nothing here changes what anyone may do.
+ *
+ * SALES reads "User" rather than "Sales Representative" because the role stopped
+ * being sales-only: it is what everyone who is not an intern, an accountant, a
+ * manager or an administrator is given, salespeople and other staff alike. The
+ * enum is still SALES on the wire and in the database, where renaming it would
+ * mean a migration, a data backfill and every ACL entry — this map is the whole
+ * of the rename, and it is the only place the name is written.
+ */
 export const ROLE_LABEL: Record<Role, string> = {
-  SALES: 'Sales Representative',
+  SALES: 'User',
   INTERN: 'Intern',
   ACCT: 'Accounting',
   MGR: 'Sales Manager',

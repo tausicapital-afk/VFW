@@ -36,7 +36,12 @@ export function Login() {
   return (
     <section id="login">
       <div className="stage">
-        <div className="mark">VFW</div>
+        <div className="rowflex" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div className="mark">VFW</div>
+          {/* Full page nav on purpose, not a router Link: /api/health is a
+              server-rendered page from the backend, not an SPA route. */}
+          <a className="statusLink" href="/api/health">Status</a>
+        </div>
         <div>
           <h1>
             Sales<br />runs on a<br /><em>system</em>,<br />not email.

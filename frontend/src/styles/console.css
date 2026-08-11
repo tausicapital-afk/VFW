@@ -65,6 +65,10 @@ a{color:var(--blue)}
 }
 #login .mark{width:52px;height:52px;border-radius:50%;background:#fff;color:#0E0E11;
   display:grid;place-items:center;font-family:"Archivo";font-weight:800;letter-spacing:-.5px;font-size:15px}
+#login .statusLink{position:relative;z-index:1;font-size:11px;letter-spacing:.12em;text-transform:uppercase;font-weight:600;
+  text-decoration:none;color:#C7CCD4;border:1px solid #33333F;border-radius:100px;padding:7px 14px;
+  transition:color .15s,border-color .15s}
+#login .statusLink:hover{color:#fff;border-color:#5C6472}
 #login h1{font-size:clamp(34px,4.2vw,58px);font-weight:800;line-height:.98;letter-spacing:-.02em;text-transform:uppercase;margin-top:28px}
 #login h1 em{font-style:normal;color:var(--blue)}
 #login .sub{color:#9AA2AE;max-width:46ch;margin-top:18px;position:relative;z-index:1}

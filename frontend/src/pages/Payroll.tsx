@@ -4,6 +4,7 @@ import { useAuth } from '../auth/AuthContext';
 import { api } from '../lib/api';
 import { can } from '../lib/acl';
 import { monthKey, monthLabel, shiftMonth } from '../lib/attendance';
+import { downloadFile } from '../lib/export';
 import { fmtDate, money } from '../lib/format';
 import { TestTag, useTestRow } from '../lib/testData';
 import type {
@@ -24,6 +25,16 @@ const PAY_TYPE_LABEL: Record<PayType, string> = {
   SALARY: 'Salary',
   HOURLY: 'Hourly',
   COMMISSION_ONLY: 'Commission only',
+};
+
+/**
+ * The pay basis in one phrase. `payType` alone cannot say it: commission is the
+ * other half, and "Salary" against a $0.00 commission line is the pill that has
+ * someone opening a ticket to ask why they were not paid it.
+ */
+const payBasis = (payType: PayType, earnsCommission: boolean): string => {
+  if (payType === 'COMMISSION_ONLY') return PAY_TYPE_LABEL[payType];
+  return earnsCommission ? `${PAY_TYPE_LABEL[payType]} + commission` : PAY_TYPE_LABEL[payType];
 };
 
 /** Everything on this screen is consolidated to the reporting currency. */
@@ -71,6 +82,7 @@ function MyPay({ userId }: { userId?: string } = {}) {
   const qc = useQueryClient();
   const { user } = useAuth();
   const [month, setMonth] = useState(() => monthKey(new Date()));
+  const [payslipError, setPayslipError] = useState<string | null>(null);
   const mine = !userId || userId === user?.id;
 
   const { data: sheet, error } = useQuery({
@@ -98,6 +110,7 @@ function MyPay({ userId }: { userId?: string } = {}) {
           <span className={`pill ${INVOICE_PILL[invoice.status]}`}>{INVOICE_LABEL[invoice.status]}</span>
         )}
         <div className="sp" style={{ flex: 1 }} />
+        <PayslipButton month={month} userId={userId} disabled={!sheet} onError={setPayslipError} />
         {mine && (
           <button
             className="btn sm primary"
@@ -109,6 +122,9 @@ function MyPay({ userId }: { userId?: string } = {}) {
         )}
       </div>
 
+      {payslipError && (
+        <div className="errbox" style={{ marginBottom: 12 }}>{payslipError}</div>
+      )}
       {submit.isError && (
         <div className="errbox" style={{ marginBottom: 12 }}>{(submit.error as Error).message}</div>
       )}
@@ -142,6 +158,54 @@ function MyPay({ userId }: { userId?: string } = {}) {
   );
 }
 
+/**
+ * Download this month as a payslip.
+ *
+ * Not an `<ExportMenu>`: that renders a *table* in three formats, and a payslip
+ * is one person's month with the arithmetic shown beside each figure — the two
+ * spreadsheet formats would be a two-column Item/Value sheet nobody asked for.
+ * So it is a single button onto a single document, the way the invoice PDF on a
+ * submission is, and it goes through `downloadFile` for the same reason that one
+ * does: the bytes need the session cookie, so it cannot be a bare `<a href>`.
+ *
+ * The error surfaces to the caller rather than inside the button, because the
+ * one that matters is a 403 on somebody else's month, and that belongs beside
+ * the statement it was refused for, not in a tooltip.
+ */
+function PayslipButton({
+  month, userId, disabled, onError,
+}: {
+  month: string;
+  userId?: string;
+  disabled?: boolean;
+  onError: (message: string | null) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  const run = async () => {
+    setBusy(true);
+    onError(null);
+    try {
+      // The server names the file (Content-Disposition); this is only the
+      // fallback for a browser that cannot read the header.
+      await downloadFile(
+        `/api/payroll/payslip.pdf?month=${month}` + (userId ? `&userId=${userId}` : ''),
+        `payslip-${month}.pdf`,
+      );
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Could not build the payslip');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <button className="btn sm" disabled={disabled || busy} onClick={() => void run()}>
+      <span className="ic">↓</span> {busy ? 'Preparing…' : 'Payslip (PDF)'}
+    </button>
+  );
+}
+
 /** The money, shown as arithmetic rather than as a total to be taken on faith. */
 function Statement({ statement, month }: { statement: PayrollStatement; month: string }) {
   const { pay, sales, attendance } = statement;
@@ -153,7 +217,7 @@ function Statement({ statement, month }: { statement: PayrollStatement; month: s
         <h3>{monthLabel(month)}</h3>
         <div className="sp" style={{ flex: 1 }} />
         <span className={`pill ${pay.payType === 'COMMISSION_ONLY' ? 'DRAFT' : 'EXPORTED'}`}>
-          {PAY_TYPE_LABEL[pay.payType]}
+          {payBasis(pay.payType, pay.earnsCommission)}
         </span>
       </div>
       <div className="bd">
@@ -175,8 +239,22 @@ function Statement({ statement, month }: { statement: PayrollStatement; month: s
             <span>
               Commission
               <span className="mut sm">
-                {' '}· {sales.count} sale{sales.count === 1 ? '' : 's'} approved,{' '}
-                {cad(sales.revenue)} net at {Number(statement.user.commissionPct).toFixed(2)}%
+                {/* Someone not on commission still closed the sales, so the count
+                    stays; what changes is the claim about a rate they are not on.
+                    A bare "0 at 8%" here is the line that gets queried. */}
+                {pay.earnsCommission ? (
+                  <>
+                    {' '}· {sales.count} sale{sales.count === 1 ? '' : 's'} approved,{' '}
+                    {cad(sales.revenue)} net at {Number(statement.user.commissionPct).toFixed(2)}%
+                  </>
+                ) : (
+                  <>
+                    {' '}· not on commission
+                    {Number(pay.commission) > 0 && ' · earned before the change'}
+                    {' '}· {sales.count} sale{sales.count === 1 ? '' : 's'} approved,{' '}
+                    {cad(sales.revenue)} net
+                  </>
+                )}
               </span>
             </span>
             <span>{cad(pay.commission)}</span>
@@ -235,7 +313,7 @@ function ProfileCard({ statement }: { statement: PayrollStatement }) {
           <Field label="Email" value={u.email} />
           <Field label="Phone" value={u.phone ?? '—'} />
           <Field label="Joined" value={fmtDate(u.createdAt)} />
-          <Field label="Pay type" value={PAY_TYPE_LABEL[statement.pay.payType]} />
+          <Field label="Paid on" value={payBasis(statement.pay.payType, statement.pay.earnsCommission)} />
           <Field
             label="Base rate"
             value={
@@ -244,7 +322,10 @@ function ProfileCard({ statement }: { statement: PayrollStatement }) {
                 : cad(u.baseRate) + (statement.pay.payType === 'HOURLY' ? ' / hour' : ' / month')
             }
           />
-          <Field label="Commission" value={`${Number(u.commissionPct).toFixed(2)}%`} />
+          <Field
+            label="Commission"
+            value={statement.pay.earnsCommission ? `${Number(u.commissionPct).toFixed(2)}%` : '—'}
+          />
           <Field label="Sales target" value={cad(u.target)} />
           <Field label="Total earned since joining" value={cad(u.lifetimeEarned)} />
         </div>
@@ -357,7 +438,7 @@ function Run() {
                         </td>
                         <td>
                           <span className={`pill ${row.pay.payType === 'COMMISSION_ONLY' ? 'DRAFT' : 'EXPORTED'}`}>
-                            {PAY_TYPE_LABEL[row.pay.payType]}
+                            {payBasis(row.pay.payType, row.pay.earnsCommission)}
                           </span>
                         </td>
                         <td style={{ textAlign: 'right' }}>{row.attendance.hours}</td>

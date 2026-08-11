@@ -174,8 +174,9 @@ sources that each move independently:
 | Source | Contributes | Where it comes from |
 | --- | --- | --- |
 | `User.payType` + `User.baseRate` | base pay | Administration → Users & roles |
+| `User.earnsCommission` | whether there is commission at all | Administration → Users & roles |
 | `AttendanceEntry.hours` | the multiplier, for HOURLY only | the Attendance module |
-| `Submission.commissionAmount` | commission | struck at sale creation |
+| `Submission.commissionAmount` | commission | struck at sale creation, at 0% if the rep is not on commission |
 
 Four rules make the number defensible:
 

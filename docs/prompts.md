@@ -614,6 +614,94 @@ site down unattended.
 
 ---
 
+## Phase 6 — Mail resilience
+
+Written after an architecture review (2026-08-10) that first flagged four
+candidate gaps. Three evaporated on closer reading of this repo's own docs: a
+background job queue and multi-instance readiness are both **deliberate,
+documented deferrals** (`docs/roadmap.md` Phase 1.4; `docs/devops-roadmap.md`
+§"Deliberately NOT doing (yet)") — do not re-litigate either. Money-path test
+coverage is already extensive (33 spec files, including `pricing.service.spec.ts`
+at 29 cases, `acl.spec.ts`, `lifecycle.spec.ts`, `discount-approval.spec.ts`) —
+also not a gap. This phase is the one that survived: outbound email has exactly
+one live path in production, and its failure is currently invisible to a human.
+
+```
+I'm continuing work on the VFW Console. Read docs/architecture.md first, then
+docs/email-delivery.md in full — it is the authoritative account of how mail
+actually leaves this system and you must not re-derive or contradict it.
+
+Four rules must not be broken:
+1. Money is never a float; the server prices the sale via PricingService.
+2. backend/src/common/acl.ts is the security boundary. Guard every new endpoint.
+3. The audit trail is append-only, written in the same transaction as the change
+   it describes.
+4. Reuse the existing design system in frontend/src/styles/console.css if any UI
+   is touched — do not invent new classes.
+
+GOAL: outbound email (OTP, invitations, password resets, invoices) has exactly
+one live path today — the cPanel relay described in docs/email-delivery.md §4.
+docs/email-delivery.md §1 already names the risk in passing ("the cPanel box is
+now in the sending path — if it is down, mail does not send"), and a Resend
+fallback is already coded and deployed but unused (§5, "worth having if the
+cPanel box ever becomes a liability"). What is actually missing is not code for
+sending — it's that nobody is paged when it breaks, and the fallback is not
+ready to flip on under pressure.
+
+1. THE ALERTING GAP IS REAL AND SPECIFIC — read health.controller.ts and
+   health.service.ts before touching anything. GET /api/health's top-level `ok`
+   is DELIBERATELY never false for a dependency outage (see the comment above
+   health_() — this is so Railway's own health check doesn't restart-loop the
+   whole API over a mail blip). That's correct and must not change. But it means
+   docs/devops-roadmap.md's own suggested fix — "point UptimeRobot/BetterStack at
+   /api/health" — would NEVER fire for an email outage: an external monitor
+   watching for a non-200 or ok:false sees a healthy 200 while
+   checks[].component === 'email' silently reads DOWN. Confirm this by reading
+   the code, not by trusting this description.
+
+   Add a way for an external uptime monitor to actually catch this. The
+   simplest correct shape is a narrow, public, cheap endpoint —
+   e.g. GET /api/health/component/email — that reads HealthService.snapshot()
+   (already computed, do NOT trigger a live probe on this route — see the class
+   comment in health.service.ts about why the request path never probes) and
+   returns a real non-200 status when that component is DOWN or DEGRADED. Do
+   not touch /api/health's existing contract or status code — Railway depends on
+   it staying a 200 whenever the process is merely up.
+
+2. PREPARE THE RESEND FALLBACK, DO NOT WIRE AUTO-FAILOVER. The MailAccount model
+   is deliberately "exactly one active row, chosen on purpose"
+   (docs/email-delivery.md §3, §6) — do not build silent automatic switching
+   between providers; that contradicts a design decision already made and
+   documented. Instead, prepare a Resend MailAccount row (via
+   `npm run mail:add` or the admin panel) so that switching in an emergency is
+   "flip the active row," not "configure a new provider while the site is
+   already broken." This needs a real Resend API key and a verified sending
+   domain — if I have not given you both, STOP AND ASK. Do not leave a row that
+   LOOKS active/ready but isn't, and do not fabricate a key.
+
+3. WRITE THE RUNBOOK. Add a short, operator-facing section to
+   docs/email-delivery.md §6 ("Operating it"): what to do, in order, the moment
+   the new alert fires. Point at the existing troubleshooting table in §6 rather
+   than duplicating it.
+
+DONE WHEN: you have deliberately broken the relay in a local or staging
+environment (wrong token, or an unreachable host) and shown me the actual HTTP
+response from the new endpoint going non-200 within one health cycle — not "the
+code should do this." Then restore it and show the same endpoint going healthy
+again. If a Resend key was supplied, show me a real Send test response/screenshot
+proving the prepared row works, left INACTIVE unless I say otherwise. If it
+wasn't supplied, tell me clearly that this step is blocked on a credential, not
+quietly skip it.
+
+Do not: add a general APM/alerting stack (Prometheus, Grafana, Loki) —
+docs/devops-roadmap.md already rejects that at this scale; touch anything in
+common/throttler.ts, auth/, or the messaging gateway — out of scope; change how
+job processing or horizontal scaling work — both are deliberate deferrals, not
+this session's problem.
+```
+
+---
+
 ## A note on running these
 
 Each prompt ends with a **definition of done that requires demonstration**, not

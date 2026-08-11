@@ -11,6 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { avatarUrl } from '../profile/avatar';
 import { currentMonth, monthRange, summarise } from '../attendance/attendance.service';
+import { buildPayslipPdf, type PayslipPdfData } from './payslip-pdf';
 import { EditPayrollInvoiceDto, PayrollQueryDto, RejectPayrollInvoiceDto, SubmitPayrollDto } from './dto';
 
 /**
@@ -34,6 +35,7 @@ const PERSON_FIELDS = {
   createdAt: true,
   payType: true,
   baseRate: true,
+  earnsCommission: true,
   commissionPct: true,
   target: true,
 } satisfies Prisma.UserSelect;
@@ -47,8 +49,22 @@ interface RepSales {
   count: number;
   revenue: Decimal;
   invoiced: Decimal;
+  collected: Decimal;
+  outstanding: Decimal;
   commission: Decimal;
   commissionUnpaid: Decimal;
+  /** The same month split by who it was sold to, keyed by contact id. */
+  clients: Map<string, ClientSales>;
+}
+
+interface ClientSales {
+  brand: string;
+  designer: string;
+  deals: number;
+  revenue: Decimal;
+  invoiced: Decimal;
+  collected: Decimal;
+  outstanding: Decimal;
 }
 
 /**
@@ -61,6 +77,16 @@ interface RepSales {
  *   base       from the account's pay type and rate (× hours, if hourly)
  *   commission from the sales they closed, at the rate on each sale
  *   gross      base + commission
+ *
+ * **The pay basis is two fields, not one.** `payType` decides how base pay is
+ * worked out; `earnsCommission` decides whether there is commission at all. An
+ * administrator sets both, which is what lets someone be on commission, on a
+ * salary, or on both — and both is the arrangement every account had before the
+ * second field existed, because commission used to be added on top regardless.
+ * Note where the second one bites: it is applied when a sale is CREATED, where
+ * the rate is stamped onto the Submission, not here. By the time payroll reads
+ * a sale, a salaried rep's commission is already 0 and nothing below has to
+ * treat them as a special case.
  *
  * **Commission is earned on approval.** A sale counts in the month Accounting
  * approved it, not the month the client's money arrives. That matches what
@@ -166,46 +192,86 @@ export class PayrollService {
    * answer a different question — how the pipeline is moving — and a sale
    * submitted in March and approved in April belongs to March's activity but to
    * April's pay.
+   *
+   * `repId` narrows it to one person without changing any of the arithmetic —
+   * `monthSales` below is the same figures for a single account, not a second
+   * opinion about them.
    */
-  private async salesByRep(range: { gte: Date; lt: Date }, fx: Record<Currency, Decimal>) {
+  private async salesByRep(
+    range: { gte: Date; lt: Date },
+    fx: Record<Currency, Decimal>,
+    repId?: string,
+  ) {
     const sales = await this.prisma.submission.findMany({
       where: {
         status: { in: ['APPROVED', 'EXPORTED'] },
         approvedAt: range,
+        ...(repId ? { repId } : {}),
       },
       select: {
         repId: true,
         currency: true,
         taxable: true,
         total: true,
+        paidAmount: true,
+        balance: true,
         commissionAmount: true,
         payStatus: true,
+        contact: { select: { id: true, brand: true, designer: true } },
       },
     });
 
-    const zero = () => ({
+    const zero = (): RepSales => ({
       count: 0,
       revenue: new Decimal(0),
       invoiced: new Decimal(0),
+      collected: new Decimal(0),
+      outstanding: new Decimal(0),
       commission: new Decimal(0),
       commissionUnpaid: new Decimal(0),
+      clients: new Map(),
     });
-    const byRep = new Map<string, ReturnType<typeof zero>>();
+    const byRep = new Map<string, RepSales>();
 
     for (const sale of sales) {
       const rate = fx[sale.currency];
+      const cad = (v: { toString(): string }) => new Decimal(v.toString()).times(rate);
       const acc = byRep.get(sale.repId) ?? zero();
-      const commission = new Decimal(sale.commissionAmount.toString()).times(rate);
+      const commission = cad(sale.commissionAmount);
+      const revenue = cad(sale.taxable);
+      const invoiced = cad(sale.total);
+      const collected = cad(sale.paidAmount);
+      // An overpayment leaves a negative balance. It is not negative debt, so it
+      // is floored rather than allowed to cancel out another invoice's arrears.
+      const outstanding = Decimal.max(cad(sale.balance), 0);
 
       acc.count += 1;
-      acc.revenue = acc.revenue.plus(new Decimal(sale.taxable.toString()).times(rate));
-      acc.invoiced = acc.invoiced.plus(new Decimal(sale.total.toString()).times(rate));
+      acc.revenue = acc.revenue.plus(revenue);
+      acc.invoiced = acc.invoiced.plus(invoiced);
+      acc.collected = acc.collected.plus(collected);
+      acc.outstanding = acc.outstanding.plus(outstanding);
       acc.commission = acc.commission.plus(commission);
       // Earned, but sitting against an invoice the client has not settled. Not
       // deducted — just declared, so whoever signs the run can see the exposure.
       if (sale.payStatus !== 'PAID') {
         acc.commissionUnpaid = acc.commissionUnpaid.plus(commission);
       }
+
+      const client = acc.clients.get(sale.contact.id) ?? {
+        brand: sale.contact.brand,
+        designer: sale.contact.designer,
+        deals: 0,
+        revenue: new Decimal(0),
+        invoiced: new Decimal(0),
+        collected: new Decimal(0),
+        outstanding: new Decimal(0),
+      };
+      client.deals += 1;
+      client.revenue = client.revenue.plus(revenue);
+      client.invoiced = client.invoiced.plus(invoiced);
+      client.collected = client.collected.plus(collected);
+      client.outstanding = client.outstanding.plus(outstanding);
+      acc.clients.set(sale.contact.id, client);
 
       byRep.set(sale.repId, acc);
     }
@@ -283,6 +349,13 @@ export class PayrollService {
         // show its own arithmetic ("$32.00 × 142.50 h") rather than asserting it.
         baseHours: person.payType === PayType.HOURLY ? summary.hours : null,
         base: base.toFixed(2),
+        // The other half of the pay basis, carried so the screen can say which
+        // kind of zero a zero is. It is NOT a filter on the figure below it:
+        // commission is frozen onto each sale at the rate it was struck, so a
+        // rep taken off commission last week is still owed what they closed the
+        // week before. Their next sale stamps 0%, and this line stops the
+        // statement claiming a rate they are no longer on.
+        earnsCommission: person.earnsCommission,
         commission: commission.toFixed(2),
         commissionUnpaid: (sales?.commissionUnpaid ?? new Decimal(0)).toFixed(2),
         gross: base.plus(commission).toFixed(2),
@@ -317,6 +390,129 @@ export class PayrollService {
       self: userId === actor.id,
       invoice,
       ...(await this.statement(person, sales, attendance, lifetime)),
+    };
+  }
+
+  /**
+   * One person's month as a payslip — the same statement, as a document.
+   *
+   * Everything here comes off `statementFor`, and that is the whole design. Two
+   * things fall out of it, both of which would have been worth the indirection
+   * on their own:
+   *
+   *   - **The permission is inherited, not restated.** `statementFor` resolves
+   *     the subject through `subject()`, which lets you have your own and
+   *     demands `payroll.viewAll` for anybody else's. A payslip route that
+   *     checked that itself would be a second copy of the rule, and a second
+   *     copy is the one that drifts — the copy that gets forgotten is always the
+   *     one on the endpoint that hands out a file.
+   *   - **The arithmetic is inherited too.** Not one figure is recomputed below;
+   *     the mapping only relabels. A payslip that disagreed with the screen it
+   *     was downloaded from would be the worst possible bug in this module,
+   *     because the printed copy is the one that gets forwarded and argued from.
+   *
+   * The reviewer's name is the one thing the statement does not carry — the
+   * screen renders a status pill and never needed it — so it costs one extra
+   * lookup, and only when a reviewed invoice exists.
+   */
+  async payslip(
+    query: PayrollQueryDto,
+    actor: AuthUser,
+  ): Promise<{ buffer: Buffer; filename: string; data: PayslipPdfData }> {
+    const sheet = await this.statementFor(query, actor);
+    const settings = await this.prisma.settings.findUniqueOrThrow({ where: { id: 1 } });
+
+    const reviewer = sheet.invoice?.reviewedById
+      ? await this.prisma.user.findUnique({
+          where: { id: sheet.invoice.reviewedById },
+          select: { name: true },
+        })
+      : null;
+
+    const data: PayslipPdfData = {
+      companyName: settings.company,
+      month: sheet.month,
+      issuedAt: new Date(),
+      // Payroll consolidates everything to CAD before it totals anything, so the
+      // document states one currency rather than implying a per-person one.
+      currency: Currency.CAD,
+      person: {
+        name: sheet.user.name,
+        employeeId: sheet.user.employeeId,
+        role: sheet.user.role,
+        title: sheet.user.title,
+        department: sheet.user.department,
+        email: sheet.user.email,
+      },
+      basis: {
+        payType: sheet.pay.payType,
+        earnsCommission: sheet.pay.earnsCommission,
+        baseRate: sheet.pay.baseRate,
+        commissionPct: sheet.user.commissionPct,
+      },
+      attendance: sheet.attendance,
+      sales: { count: sheet.sales.count, revenue: sheet.sales.revenue, invoiced: sheet.sales.invoiced },
+      pay: {
+        base: sheet.pay.base,
+        baseHours: sheet.pay.baseHours,
+        commission: sheet.pay.commission,
+        commissionUnpaid: sheet.pay.commissionUnpaid,
+        gross: sheet.pay.gross,
+      },
+      invoice: sheet.invoice
+        ? {
+            status: sheet.invoice.status,
+            submittedAt: sheet.invoice.submittedAt,
+            reviewedAt: sheet.invoice.reviewedAt,
+            reviewedBy: reviewer?.name ?? null,
+            note: sheet.invoice.note,
+            // Normalised to the column's own scale for the same reason the
+            // statement normalises its own strings: the document compares this
+            // against the live gross, and "4800" never equals "4800.00".
+            gross: sheet.invoice.gross.toFixed(2),
+          }
+        : null,
+      preparedBy: actor.name,
+    };
+
+    /**
+     * Audited, including when it is your own.
+     *
+     * A payslip is not a screen — it is a file that leaves the system and gets
+     * forwarded, and the question it eventually provokes is always "who produced
+     * this copy, of whose pay, for which month". A trail that recorded only
+     * somebody-else's downloads could not answer that for the copy most likely
+     * to be in dispute, which is the one a person pulled of their own pay.
+     *
+     * Awaited rather than fire-and-forget: unlike the telemetry line on a bulk
+     * export, this is the financial trail, and the only realistic way this write
+     * fails is a database that `statementFor` above has already failed against.
+     */
+    await this.audit.log({
+      actorId: actor.id,
+      action: 'PAYSLIP_GENERATED',
+      detail: `Payslip generated for ${sheet.user.name} — ${sheet.month}`,
+      payload: {
+        month: sheet.month,
+        userId: sheet.user.id,
+        self: sheet.self,
+        gross: sheet.pay.gross,
+      },
+    });
+
+    // Named after the person and the month, not after "payslip": these end up in
+    // one folder, and a download that collides with last month's is a download
+    // somebody silently overwrites.
+    const who = (sheet.user.employeeId ?? sheet.user.name)
+      .normalize('NFKD')
+      .replace(/[^\w-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .toLowerCase();
+
+    return {
+      buffer: await buildPayslipPdf(data),
+      filename: `payslip-${who || 'employee'}-${sheet.month}.pdf`,
+      data,
     };
   }
 
@@ -379,6 +575,47 @@ export class PayrollService {
     return new Map(rows.map((r) => [r.userId, new Decimal(r._sum.gross ?? 0)]));
   }
 
+  /**
+   * One account's month of sales, in CAD, and the clients it came from.
+   *
+   * Administration opens this beside a user's details, so it is deliberately the
+   * same `salesByRep` the run above pays from rather than a fresh query with its
+   * own idea of what a sale is worth. An admin comparing this panel against the
+   * Payroll screen for the same month must not find two answers — the dating
+   * (approvedAt), the FX table and the commission are all one definition.
+   *
+   * Note what it is not: this is what the account *sold*, not what it will be
+   * paid. Base pay, hours and the payroll invoice lifecycle stay on Payroll.
+   */
+  async monthSales(userId: string, month: string) {
+    const fx = await this.fxRates();
+    const sales = (await this.salesByRep(monthRange(month), fx, userId)).get(userId);
+
+    const clients = [...(sales?.clients.values() ?? [])]
+      .sort((a, b) => b.revenue.comparedTo(a.revenue) || b.deals - a.deals)
+      .map((c) => ({
+        brand: c.brand,
+        designer: c.designer,
+        deals: c.deals,
+        revenue: c.revenue.toFixed(2),
+        invoiced: c.invoiced.toFixed(2),
+        collected: c.collected.toFixed(2),
+        outstanding: c.outstanding.toFixed(2),
+      }));
+
+    return {
+      month,
+      count: sales?.count ?? 0,
+      revenue: (sales?.revenue ?? new Decimal(0)).toFixed(2),
+      invoiced: (sales?.invoiced ?? new Decimal(0)).toFixed(2),
+      collected: (sales?.collected ?? new Decimal(0)).toFixed(2),
+      outstanding: (sales?.outstanding ?? new Decimal(0)).toFixed(2),
+      commission: (sales?.commission ?? new Decimal(0)).toFixed(2),
+      commissionUnpaid: (sales?.commissionUnpaid ?? new Decimal(0)).toFixed(2),
+      clients,
+    };
+  }
+
   /** Single-person convenience — used by the Profile screen. */
   async lifetimeEarned(userId: string): Promise<string> {
     const total = (await this.lifetimeEarnedByUser([userId])).get(userId) ?? new Decimal(0);
@@ -421,6 +658,7 @@ export class PayrollService {
         hours: sheet.attendance.hours,
         base: sheet.pay.base,
         commissionPct: sheet.user.commissionPct,
+        earnsCommission: sheet.pay.earnsCommission,
         commission: sheet.pay.commission,
         gross: sheet.pay.gross,
       };

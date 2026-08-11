@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsEmail,
   IsEnum,
   IsIn,
@@ -130,6 +131,17 @@ export class UpdateUserDto {
   @IsOptional()
   @IsString()
   baseRate?: string;
+
+  // The other half of the pay basis: whether commission is earned at all. With
+  // `payType` it spells out the three arrangements — commission only, salary
+  // only, or both — and the service refuses the fourth (COMMISSION_ONLY with
+  // this off), which is an account that would be paid nothing.
+  //
+  // Like `commissionPct` above, it decides the next sale rather than the last:
+  // a submission carries the rate it was stamped with.
+  @IsOptional()
+  @IsBoolean()
+  earnsCommission?: boolean;
 }
 
 export class RejectUserDto {
@@ -335,6 +347,25 @@ export class UpdateEventDto {
   @IsString()
   @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'end must look like 2027-03-22' })
   end?: string;
+}
+
+/**
+ * A season is just its label ("Fall/Winter 26") — the vocabulary the Shows
+ * dropdown draws from. See AdminService's `seasonParts` for the shape it must
+ * have: initials followed by a year.
+ */
+export class CreateSeasonDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  label: string;
+}
+
+export class UpdateSeasonDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(40)
+  label: string;
 }
 
 export class UpdateAddonDto {

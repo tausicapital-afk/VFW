@@ -17,6 +17,16 @@ const PAY_TYPE_LABEL: Record<PayType, string> = {
   COMMISSION_ONLY: 'Commission only',
 };
 
+/**
+ * The pay basis as one phrase, because it is two fields and a reader signing off
+ * a run should not have to cross-reference two columns to learn that the person
+ * on $0.00 commission is on a salary and was never going to earn any.
+ */
+const payBasis = (payType: PayType, earnsCommission: boolean): string => {
+  if (payType === 'COMMISSION_ONLY') return PAY_TYPE_LABEL[payType];
+  return earnsCommission ? `${PAY_TYPE_LABEL[payType]} + commission` : PAY_TYPE_LABEL[payType];
+};
+
 type PayrollRow = Awaited<ReturnType<PayrollService['run']>>['rows'][number];
 
 /**
@@ -38,14 +48,22 @@ const columns: ExportColumn<PayrollRow>[] = [
   { header: 'Role', value: (r) => ROLE_LABEL[r.user.role], width: 20, spreadsheetOnly: true },
   { header: 'Title', value: (r) => r.user.title, width: 22, spreadsheetOnly: true },
   { header: 'Department', value: (r) => r.user.department, width: 16 },
-  { header: 'Pay type', value: (r) => PAY_TYPE_LABEL[r.pay.payType], width: 15 },
+  { header: 'Pay basis', value: (r) => payBasis(r.pay.payType, r.pay.earnsCommission), width: 22 },
   { header: 'Rate (CAD)', value: (r) => Number(r.pay.baseRate), money: true, width: 12 },
   { header: 'Days worked', value: (r) => r.attendance.daysWorked, width: 12, spreadsheetOnly: true },
   { header: 'Hours', value: (r) => Number(r.attendance.hours), width: 10 },
   { header: 'Base (CAD)', value: (r) => Number(r.pay.base), money: true, width: 13 },
   { header: 'Sales', value: (r) => r.sales.count, width: 8, spreadsheetOnly: true },
   { header: 'Net revenue (CAD)', value: (r) => Number(r.sales.revenue), money: true, width: 16, spreadsheetOnly: true },
-  { header: 'Commission %', value: (r) => Number(r.user.commissionPct), width: 12, spreadsheetOnly: true },
+  // The rate they are actually on, not the one parked on the account: a
+  // salary-only person keeps their old percentage on file (so it comes back if
+  // they are put on commission again) but earns at 0.
+  {
+    header: 'Commission %',
+    value: (r) => (r.pay.earnsCommission ? Number(r.user.commissionPct) : 0),
+    width: 12,
+    spreadsheetOnly: true,
+  },
   { header: 'Commission (CAD)', value: (r) => Number(r.pay.commission), money: true, width: 15 },
   { header: 'Of which unpaid', value: (r) => Number(r.pay.commissionUnpaid), money: true, width: 15 },
   { header: 'Gross (CAD)', value: (r) => Number(r.pay.gross), money: true, width: 14 },

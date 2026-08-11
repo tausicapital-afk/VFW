@@ -109,6 +109,7 @@ export interface AttendanceTeam {
 export type Money = string;
 
 export interface City { id: string; name: string; country: string; currency: Currency }
+export interface Season { id: string; label: string }
 export interface EventRow extends TestFlagged {
   id: string; brand: string; name: string; season: string;
   venue: string | null; start: string; end: string; cityId: string; city: City;
@@ -456,7 +457,47 @@ export interface AdminUser extends User {
   payType: PayType;
   /** Monthly under SALARY, hourly under HOURLY, ignored when commission-only. */
   baseRate: Money;
+  /**
+   * The other half of the pay basis: whether commission is earned at all. With
+   * `payType` it gives the three arrangements — commission only, salary only,
+   * or both. Always true for a commission-only account, which the server
+   * refuses to save any other way.
+   */
+  earnsCommission: boolean;
   createdAt: string;
+}
+
+/**
+ * What one account sold this month, shown under their details in Administration.
+ *
+ * Every figure is CAD and comes from payroll's own aggregate, so it is the month
+ * as payroll would pay it: dated by approval, not by submission.
+ */
+export interface UserSales {
+  /** `2026-08` — the month the figures cover. */
+  month: string;
+  /** The rate on the account now, which is what the NEXT sale will earn. */
+  commissionPct: Money;
+  target: Money;
+  count: number;
+  revenue: Money;
+  invoiced: Money;
+  collected: Money;
+  outstanding: Money;
+  commission: Money;
+  /** The part of it sitting against invoices the client has not settled. */
+  commissionUnpaid: Money;
+  clients: UserSalesClient[];
+}
+
+export interface UserSalesClient {
+  brand: string;
+  designer: string;
+  deals: number;
+  revenue: Money;
+  invoiced: Money;
+  collected: Money;
+  outstanding: Money;
 }
 
 // --- Payroll ---------------------------------------------------------------
@@ -491,6 +532,13 @@ export interface PayrollStatement {
     /** The hours the base was multiplied by, or null when it was not hourly. */
     baseHours: string | null;
     base: Money;
+    /**
+     * Whether this person is on commission at all — which is what tells a zero
+     * below apart from a month with no sales. It does not zero the figure: a
+     * sale carries the rate it was struck at, so commission earned before the
+     * basis changed is still owed.
+     */
+    earnsCommission: boolean;
     commission: Money;
     /** Of the commission above, how much sits against invoices not yet settled. */
     commissionUnpaid: Money;
@@ -511,6 +559,8 @@ export interface PayrollInvoiceRow extends TestFlagged {
   hours: Money;
   base: Money;
   commissionPct: Money;
+  /** The pay basis as it stood when the month was frozen. */
+  earnsCommission: boolean;
   commission: Money;
   gross: Money;
   note: string | null;
@@ -591,6 +641,7 @@ export interface AdminCatalogue {
   glAccounts: GlAccount[];
   cities: City[];
   events: EventRow[];
+  seasons: Season[];
 }
 
 export interface DesignerFeedback {

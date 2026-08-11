@@ -9,6 +9,7 @@ import {
   type Cadence, type DraftLine,
 } from '../lib/installments';
 import type { Installment, Submission } from '../lib/types';
+import { ConfirmModal } from '../shell/ConfirmModal';
 
 const isOverdue = (i: Installment) =>
   i.status === 'PENDING' && i.dueDate.slice(0, 10) < today();
@@ -26,6 +27,8 @@ export function InstallmentsCard({ sub, onChanged }: { sub: Submission; onChange
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const [marking, setMarking] = useState<Installment | null>(null);
+  const [undoing, setUndoing] = useState<Installment | null>(null);
+  const [clearing, setClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const canPlan = can('installment.plan', user?.role);
@@ -133,18 +136,7 @@ export function InstallmentsCard({ sub, onChanged }: { sub: Submission; onChange
                               className="btn sm"
                               disabled={busy}
                               title="Reverses the payment this posted, with a negative ledger entry"
-                              onClick={() => {
-                                setError(null);
-                                if (
-                                  window.confirm(
-                                    `Reopen instalment ${i.seq}? The ${money(i.amount, i.currency)} ` +
-                                      'payment it posted stays on the ledger and is reversed by a ' +
-                                      'matching negative entry.',
-                                  )
-                                ) {
-                                  unmark.mutate(i.id);
-                                }
-                              }}
+                              onClick={() => { setError(null); setUndoing(i); }}
                             >
                               Undo
                             </button>
@@ -185,12 +177,7 @@ export function InstallmentsCard({ sub, onChanged }: { sub: Submission; onChange
                 <button
                   className="btn sm dgr"
                   disabled={busy}
-                  onClick={() => {
-                    setError(null);
-                    if (window.confirm('Remove the unpaid instalments? Paid ones are kept.')) {
-                      clear.mutate();
-                    }
-                  }}
+                  onClick={() => { setError(null); setClearing(true); }}
                 >
                   {clear.isPending ? 'Removing…' : 'Remove schedule'}
                 </button>
@@ -213,6 +200,30 @@ export function InstallmentsCard({ sub, onChanged }: { sub: Submission; onChange
           inst={marking}
           onClose={() => setMarking(null)}
           onDone={() => { setMarking(null); onChanged(); }}
+        />
+      )}
+      {undoing && (
+        <ConfirmModal
+          title={`Reopen instalment ${undoing.seq}?`}
+          message={
+            `The ${money(undoing.amount, undoing.currency)} payment it posted stays on the ledger ` +
+            'and is reversed by a matching negative entry.'
+          }
+          confirmLabel="Reopen"
+          pending={unmark.isPending}
+          onCancel={() => setUndoing(null)}
+          onConfirm={() => { const id = undoing.id; setUndoing(null); unmark.mutate(id); }}
+        />
+      )}
+      {clearing && (
+        <ConfirmModal
+          title="Remove the unpaid instalments?"
+          message="Paid ones are kept."
+          confirmLabel="Remove"
+          danger
+          pending={clear.isPending}
+          onCancel={() => setClearing(false)}
+          onConfirm={() => { setClearing(false); clear.mutate(); }}
         />
       )}
     </div>

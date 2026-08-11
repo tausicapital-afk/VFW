@@ -1,29 +1,39 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api } from '../lib/api';
+import { monthLabel } from '../lib/attendance';
 import { fmtDate, money } from '../lib/format';
 import { TestTag, useTestRow } from '../lib/testData';
 import type {
-  AdminCatalogue, AdminUser, Currency, EventRow, Invitation, PayType, Role, Settings, UserStatus,
+  AdminCatalogue, AdminUser, Currency, EventRow, Invitation, PayType, Role, Season, Settings,
+  UserSales, UserStatus,
 } from '../lib/types';
 import { useAuth } from '../auth/AuthContext';
 import { ExportMenu } from '../shell/ExportMenu';
-import { Page } from '../shell/Shell';
+// The role names people read are the shell's, not a second copy of them: this
+// screen is where a role is *assigned*, so a label that had drifted from the one
+// shown everywhere else would mislead exactly the person choosing it. The key
+// order is the order the dropdowns here offer, since they are built from it.
+import { Page, ROLE_LABEL } from '../shell/Shell';
 import { ConfigTab } from './AdminConfig';
-
-const ROLE_LABEL: Record<Role, string> = {
-  SALES: 'Sales Representative',
-  INTERN: 'Intern',
-  ACCT: 'Accounting',
-  MGR: 'Sales Manager',
-  ADMIN: 'Administrator',
-};
 
 const PAY_TYPE_LABEL: Record<PayType, string> = {
   SALARY: 'Salary (monthly)',
   HOURLY: 'Hourly',
   COMMISSION_ONLY: 'Commission only',
 };
+
+/**
+ * The pay basis said back as one sentence. It is two fields — how base pay is
+ * worked out, and whether commission is earned — and an admin setting them is
+ * entitled to read the arrangement they have just built without working it out
+ * from a dropdown and a tick box sitting next to each other.
+ */
+function payBasisLabel(payType: PayType, earnsCommission: boolean): string {
+  if (payType === 'COMMISSION_ONLY') return 'commission only';
+  const base = payType === 'HOURLY' ? 'an hourly rate' : 'a monthly salary';
+  return earnsCommission ? `${base} plus commission` : `${base}, no commission`;
+}
 
 const DEPARTMENTS = [
   'Sales', 'Accounting', 'Marketing', 'Production', 'Media', 'International', 'Administration',
@@ -777,7 +787,11 @@ function UsersTab() {
                 <td className="sm">{u.email}</td>
                 <td><span className={'pill ' + ROLE_PILL[u.role]}>{ROLE_LABEL[u.role]}</span></td>
                 <td className="sm">{u.department ?? '—'}</td>
-                <td className="num">{u.commissionPct}</td>
+                {/* A rate this account is not on is not a rate. Showing the
+                    stored percentage here would read as what they earn. */}
+                <td className="num" title={`Paid on ${payBasisLabel(u.payType, u.earnsCommission)}`}>
+                  {u.earnsCommission ? u.commissionPct : '—'}
+                </td>
                 <td className="num">{money(u.target, 'CAD')}</td>
                 <td><span className={'pill ' + USER_PILL[u.status]}>{u.status}</span></td>
               </tr>
@@ -823,6 +837,10 @@ function UserDetailModal({
   const [target, setTarget] = useState(String(user.target));
   const [payType, setPayType] = useState<PayType>(user.payType);
   const [baseRate, setBaseRate] = useState(String(user.baseRate));
+  const [earnsCommissionRaw, setEarnsCommission] = useState(user.earnsCommission);
+  // A commission-only account earns commission by definition — the server
+  // refuses the combination outright, so the form never lets it be built.
+  const earnsCommission = payType === 'COMMISSION_ONLY' ? true : earnsCommissionRaw;
   const [status, setStatus] = useState<UserStatus>(user.status);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
@@ -844,6 +862,7 @@ function UserDetailModal({
         target,
         payType,
         baseRate,
+        earnsCommission,
         ...(decided ? { status } : {}),
       }),
     onSuccess: () => { onSaved(); onClose(); },
@@ -865,6 +884,7 @@ function UserDetailModal({
     target !== String(user.target) ||
     payType !== user.payType ||
     baseRate !== String(user.baseRate) ||
+    earnsCommission !== user.earnsCommission ||
     status !== user.status;
 
   return (
@@ -921,6 +941,12 @@ function UserDetailModal({
                 value={commissionPct}
                 onChange={(e) => setCommission(e.target.value)}
               />
+              {!earnsCommission && (
+                <div className="help">
+                  Kept on file but not paid — this account is not on commission. Put them back on it
+                  below and this is the rate they return to.
+                </div>
+              )}
             </div>
             <div className="f">
               <label>Target (CAD)</label>
@@ -934,7 +960,31 @@ function UserDetailModal({
                 ))}
               </select>
               <div className="help">
-                Drives base pay on the Payroll screen. Commission is paid on top of all three.
+                How their base pay is worked out on the Payroll screen. Whether they also earn
+                commission is the setting below.
+              </div>
+            </div>
+            <div className="f">
+              <label>Commission</label>
+              <label className={'chk' + (earnsCommission ? ' on' : '')}>
+                <input
+                  type="checkbox"
+                  checked={earnsCommission}
+                  // Commission-only means commission by definition. The box is
+                  // locked on rather than hidden, so switching pay type shows an
+                  // admin what it did to the arrangement instead of quietly
+                  // removing a control they were just looking at.
+                  disabled={payType === 'COMMISSION_ONLY'}
+                  onChange={(e) => setEarnsCommission(e.target.checked)}
+                />
+                <span className="t">Earns commission on the sales they close</span>
+              </label>
+              <div className="help">
+                {payType === 'COMMISSION_ONLY'
+                  ? 'A commission-only account always earns commission — it is their whole pay.'
+                  : `Paid on ${payBasisLabel(payType, earnsCommission)}.`}
+                {' '}Turning this off stops their <b>next</b> sale earning any; sales already on the
+                books keep the rate they were struck at.
               </div>
             </div>
             {payType !== 'COMMISSION_ONLY' && (
@@ -984,6 +1034,8 @@ function UserDetailModal({
             <div className="r"><span>Joined</span><span>{fmtDate(user.createdAt)}</span></div>
           </div>
 
+          <UserSalesPanel userId={user.id} />
+
           {error && <div className="note bad" style={{ marginTop: 12 }}>{error}</div>}
         </div>
 
@@ -1022,6 +1074,140 @@ function UserDetailModal({
   );
 }
 
+/**
+ * What this account actually sold, under the form that sets what it earns.
+ *
+ * Administration is where a commission rate is decided, and a rate is an
+ * abstraction until you can see the money it produced — so the month sits
+ * directly beneath it rather than only on Payroll, which answers the different
+ * question of what someone is *paid*.
+ *
+ * The figures are payroll's own, fetched rather than recomputed: dated by
+ * approval, converted to CAD through Settings' rates, commission struck at the
+ * rate each sale carries. An admin who compared this against the Payroll screen
+ * for the same month and found two answers would be right to trust neither.
+ */
+function UserSalesPanel({ userId }: { userId: string }) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['users', userId, 'sales'],
+    queryFn: () => api.get<UserSales>(`/api/users/${userId}/sales`),
+  });
+
+  if (isLoading || !data) {
+    return (
+      <div className="sect" style={{ marginTop: 22 }}>
+        <div className="hd"><h3>This month</h3></div>
+        <div className="note">{error ? (error as Error).message : 'Loading…'}</div>
+      </div>
+    );
+  }
+
+  const cad = (v: string) => money(v, 'CAD');
+  const target = Number(data.target);
+  // Progress is against net revenue, which is what a target is set in and what
+  // commission is struck on — invoiced would flatter it by the tax on top.
+  const pct = target > 0 ? Math.round((Number(data.revenue) / target) * 100) : 0;
+  const unpaid = Number(data.commissionUnpaid);
+
+  return (
+    <>
+      <div className="sect" style={{ marginTop: 22 }}>
+        <div className="hd">
+          <h3>This month</h3>
+          <span className="n">{monthLabel(data.month)}</span>
+        </div>
+      </div>
+
+      {data.count === 0 ? (
+        <div className="note">
+          Nothing approved in {monthLabel(data.month)}. A sale counts here in the month
+          Accounting approved it, not the month it was submitted — so a deal still in the
+          queue will appear once it is decided.
+        </div>
+      ) : (
+        <>
+          <div className="kpis">
+            <div className="kpi">
+              <div className="lb">Sales closed</div>
+              <div className="vl">{data.count}</div>
+              <div className="dt">{cad(data.invoiced)} invoiced</div>
+            </div>
+            <div className="kpi accent">
+              <div className="lb">Net revenue</div>
+              <div className="vl">{cad(data.revenue)}</div>
+              <div className="dt">commission is struck on this</div>
+            </div>
+            <div className="kpi ok">
+              <div className="lb">Commission</div>
+              <div className="vl">{cad(data.commission)}</div>
+              <div className="dt">at {Number(data.commissionPct).toFixed(2)}%</div>
+            </div>
+          </div>
+
+          {target > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <div className="rowflex" style={{ justifyContent: 'space-between', fontSize: 12.5 }}>
+                <span className="mut">Against a {cad(data.target)} target</span>
+                <span className="b">{pct}%</span>
+              </div>
+              <div className="bar" style={{ marginTop: 6 }}>
+                <i style={{ width: `${Math.min(pct, 100)}%` }} />
+              </div>
+            </div>
+          )}
+
+          <div className="totals" style={{ marginTop: 14 }}>
+            <div className="r"><span>Collected</span><span>{cad(data.collected)}</span></div>
+            <div className="r due"><span>Outstanding</span><span>{cad(data.outstanding)}</span></div>
+          </div>
+
+          {unpaid > 0 && (
+            <div className="note warn" style={{ marginTop: 14 }}>
+              <b>{cad(data.commissionUnpaid)}</b> of that commission is on invoices the client
+              has not settled. It is earned all the same — commission follows approval, not
+              payment — but it is money the company has not collected yet.
+            </div>
+          )}
+
+          <div className="sect" style={{ marginTop: 22, marginBottom: 0 }}>
+            <div className="hd">
+              <h3>Who it came from</h3>
+              <span className="n">{data.clients.length}</span>
+            </div>
+          </div>
+          <div className="tbl-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Client</th>
+                  <th className="num">Deals</th>
+                  <th className="num">Net</th>
+                  <th className="num">Collected</th>
+                  <th className="num">Outstanding</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.clients.map((c) => (
+                  <tr key={c.brand}>
+                    <td>
+                      <b>{c.brand}</b>
+                      <div className="sm mut">{c.designer}</div>
+                    </td>
+                    <td className="num">{c.deals}</td>
+                    <td className="num">{cad(c.revenue)}</td>
+                    <td className="num">{cad(c.collected)}</td>
+                    <td className="num">{cad(c.outstanding)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Catalogue — packages, add-ons, tax
 // ---------------------------------------------------------------------------
@@ -1042,9 +1228,12 @@ function PackagesTab() {
   const [addingAddon, setAddingAddon] = useState(false);
   const [editingShow, setEditingShow] = useState<string | null>(null);
   const [addingShow, setAddingShow] = useState(false);
+  const [editingSeason, setEditingSeason] = useState<string | null>(null);
+  const [addingSeason, setAddingSeason] = useState(false);
 
   const pkg = data?.packages.find((p) => p.id === editing);
   const show = data?.events.find((e) => e.id === editingShow);
+  const season = data?.seasons.find((s) => s.id === editingSeason);
   const refresh = () => void qc.invalidateQueries({ queryKey: ['admin', 'catalogue'] });
 
   return (
@@ -1056,6 +1245,36 @@ function PackagesTab() {
       </div>
 
       <div className="card">
+        <div className="hd">
+          <h3>Seasons</h3>
+          <div className="sp" />
+          <button className="btn sm blue" onClick={() => setAddingSeason(true)}>+ New season</button>
+        </div>
+        <div className="tbl-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Season</th><th />
+              </tr>
+            </thead>
+            <tbody>
+              {data?.seasons.map((s) => (
+                <tr key={s.id}>
+                  <td className="b">{s.label}</td>
+                  <td>
+                    <button className="btn sm" onClick={() => setEditingSeason(s.id)}>Edit</button>
+                  </td>
+                </tr>
+              ))}
+              {data && data.seasons.length === 0 && (
+                <tr><td colSpan={2} className="mut">No seasons yet — add one before adding a show.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 16 }}>
         <div className="hd">
           <h3>Shows</h3>
           <div className="sp" />
@@ -1182,6 +1401,7 @@ function PackagesTab() {
         <EventModal
           event={show}
           cities={data?.cities ?? []}
+          seasons={data?.seasons ?? []}
           onClose={() => setEditingShow(null)}
           onSaved={() => { setEditingShow(null); refresh(); }}
         />
@@ -1189,8 +1409,22 @@ function PackagesTab() {
       {addingShow && data && (
         <NewEventModal
           cities={data.cities}
+          seasons={data.seasons}
           onClose={() => setAddingShow(false)}
           onSaved={() => { setAddingShow(false); refresh(); }}
+        />
+      )}
+      {season && (
+        <SeasonModal
+          season={season}
+          onClose={() => setEditingSeason(null)}
+          onSaved={() => { setEditingSeason(null); refresh(); }}
+        />
+      )}
+      {addingSeason && (
+        <NewSeasonModal
+          onClose={() => setAddingSeason(false)}
+          onSaved={() => { setAddingSeason(false); refresh(); }}
         />
       )}
     </>
@@ -1667,15 +1901,16 @@ function previewEventId(brand: string, cityId: string, season: string): string {
  * season tabs from now on and touches no sale already on the books.
  */
 function NewEventModal({
-  cities, onClose, onSaved,
+  cities, seasons, onClose, onSaved,
 }: {
   cities: AdminCatalogue['cities'];
+  seasons: Season[];
   onClose: () => void;
   onSaved: () => void;
 }) {
   const [brand, setBrand] = useState(BRANDS[0]);
   const [name, setName] = useState('');
-  const [season, setSeason] = useState('');
+  const [season, setSeason] = useState(seasons[0]?.label ?? '');
   const [cityId, setCityId] = useState(cities[0]?.id ?? '');
   const [venue, setVenue] = useState('');
   const [start, setStart] = useState('');
@@ -1734,16 +1969,14 @@ function NewEventModal({
             </div>
             <div className="f">
               <label>Season</label>
-              <input
-                value={season}
-                onChange={(e) => setSeason(e.target.value)}
-                placeholder="Spring/Summer 27"
-              />
-              <div className="help">
-                {id
-                  ? <>Filed as <b className="mono">{id}</b>.</>
-                  : 'Needs initials and a year, e.g. "Spring/Summer 27".'}
-              </div>
+              {seasons.length > 0 ? (
+                <select value={season} onChange={(e) => setSeason(e.target.value)}>
+                  {seasons.map((s) => <option key={s.id} value={s.label}>{s.label}</option>)}
+                </select>
+              ) : (
+                <div className="help">Add a season above first.</div>
+              )}
+              {id && <div className="help">Filed as <b className="mono">{id}</b>.</div>}
             </div>
             <div className="f">
               <label>Venue (optional)</label>
@@ -1776,10 +2009,11 @@ function NewEventModal({
 }
 
 function EventModal({
-  event, cities, onClose, onSaved,
+  event, cities, seasons, onClose, onSaved,
 }: {
   event: EventRow;
   cities: AdminCatalogue['cities'];
+  seasons: Season[];
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -1829,7 +2063,14 @@ function EventModal({
             </div>
             <div className="f">
               <label>Season</label>
-              <input value={season} onChange={(e) => setSeason(e.target.value)} />
+              <select value={season} onChange={(e) => setSeason(e.target.value)}>
+                {/* The show's current season may since have been renamed or deleted —
+                    kept as an extra option so the select never silently switches it. */}
+                {!seasons.some((s) => s.label === season) && (
+                  <option value={season}>{season}</option>
+                )}
+                {seasons.map((s) => <option key={s.id} value={s.label}>{s.label}</option>)}
+              </select>
             </div>
             <div className="f">
               <label>City</label>
@@ -1865,6 +2106,135 @@ function EventModal({
           >
             {save.isPending ? 'Saving…' : 'Save show'}
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The vocabulary the show Season dropdown draws from. Renaming or deleting one
+ * here changes what the New show form offers from now on — a show already
+ * created keeps its own copied `season` text either way (see EventModal).
+ */
+function NewSeasonModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const [label, setLabel] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const create = useMutation({
+    mutationFn: () => api.post('/api/admin/seasons', { label: label.trim() }),
+    onSuccess: onSaved,
+    onError: (e: Error) => setError(e.message),
+  });
+
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="box" onClick={(e) => e.stopPropagation()}>
+        <div className="hd">
+          <h3>New season</h3>
+          <div className="sp" style={{ flex: 1 }} />
+          <button className="btn sm" onClick={onClose}>Close</button>
+        </div>
+        <div className="bd">
+          <div className="fields">
+            <div className="f wide">
+              <label>Season</label>
+              <input
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                placeholder="Spring/Summer 27"
+              />
+              <div className="help">Needs initials and a year, e.g. "Spring/Summer 27".</div>
+            </div>
+          </div>
+          {error && <div className="note bad" style={{ marginTop: 12 }}>{error}</div>}
+        </div>
+        <div className="ft">
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button
+            className="btn primary"
+            disabled={label.trim() === '' || create.isPending}
+            onClick={() => { setError(null); create.mutate(); }}
+          >
+            {create.isPending ? 'Adding…' : 'Add season'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SeasonModal({
+  season, onClose, onSaved,
+}: {
+  season: Season;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [label, setLabel] = useState(season.label);
+  const [error, setError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+
+  const save = useMutation({
+    mutationFn: () => api.patch(`/api/admin/seasons/${season.id}`, { label: label.trim() }),
+    onSuccess: onSaved,
+    onError: (e: Error) => setError(e.message),
+  });
+
+  const remove = useMutation({
+    mutationFn: () => api.del(`/api/admin/seasons/${season.id}`),
+    onSuccess: onSaved,
+    onError: (e: Error) => { setConfirming(false); setError(e.message); },
+  });
+
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="box" onClick={(e) => e.stopPropagation()}>
+        <div className="hd">
+          <h3>Edit {season.label}</h3>
+          <div className="sp" style={{ flex: 1 }} />
+          <button className="btn sm" onClick={onClose}>Close</button>
+        </div>
+        <div className="bd">
+          <div className="fields">
+            <div className="f wide">
+              <label>Season</label>
+              <input value={label} onChange={(e) => setLabel(e.target.value)} />
+            </div>
+          </div>
+          <div className="note" style={{ marginTop: 12 }}>
+            Renaming or deleting a season only changes what the New show form offers from now
+            on — shows already using "{season.label}" keep that text.
+          </div>
+          {error && <div className="note bad" style={{ marginTop: 12 }}>{error}</div>}
+        </div>
+        <div className="ft">
+          {confirming ? (
+            <DeleteFooter
+              label="Delete this season?"
+              pending={remove.isPending}
+              onCancel={() => setConfirming(false)}
+              onConfirm={() => remove.mutate()}
+            />
+          ) : (
+            <>
+              <button
+                className="btn dgr"
+                style={{ marginRight: 'auto' }}
+                onClick={() => { setError(null); setConfirming(true); }}
+              >
+                Delete
+              </button>
+              <button className="btn" onClick={onClose}>Cancel</button>
+              <button
+                className="btn primary"
+                disabled={label.trim() === '' || label.trim() === season.label || save.isPending}
+                onClick={() => { setError(null); save.mutate(); }}
+              >
+                {save.isPending ? 'Saving…' : 'Save changes'}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

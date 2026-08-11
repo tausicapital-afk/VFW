@@ -1,4 +1,4 @@
-import { Controller, Get, Module, Req, Res } from '@nestjs/common';
+import { Controller, Get, Module, Param, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { ConfigService } from '../config/config.service';
 import { Public } from '../common/auth.guard';
@@ -141,6 +141,52 @@ export class HealthController {
       socket: req.socket.remoteAddress,
       trustProxyHops: Number(process.env.TRUST_PROXY_HOPS ?? 0),
     };
+  }
+
+  /**
+   * A single component's status, as a real HTTP status code — for an external
+   * uptime monitor (UptimeRobot, BetterStack, …) that only ever looks at
+   * "200 or not". `GET /api/health`'s top-level `ok`/status code is
+   * deliberately always 200 for a live process regardless of a dependency
+   * outage (see the class comment on {@link health_} for why — Railway must
+   * not restart-loop the API over a mail blip), so a monitor pointed at that
+   * route can never catch e.g. email being down. This route exists so it can.
+   *
+   * Reads the same in-memory snapshot `health_()` does — it does NOT trigger a
+   * probe. See the class comment on {@link HealthService} for why the request
+   * path never probes live.
+   *
+   * UNCONFIGURED counts as healthy (200), same reasoning as {@link overallOf}:
+   * nothing was set up, so nothing can be down — a monitor should not page for
+   * a feature nobody enabled.
+   */
+  @Public()
+  @Get('health/component/:id')
+  component(@Param('id') id: string, @Res() res: Response): void {
+    res.setHeader('Cache-Control', 'no-store');
+
+    const spec = COMPONENTS.find((c) => c.id === id);
+    if (!spec) {
+      res.status(404).json({ error: `Unknown component "${id}"` });
+      return;
+    }
+
+    const result = this.health.snapshot().find((r) => r.component === spec.id);
+    if (!result) {
+      // No probe has landed yet (moments after a boot) — unknown, not a
+      // failure. A monitor should not page on this; the next cycle resolves it.
+      res.status(503).json({ component: spec.id, label: spec.label, status: 'UNKNOWN' });
+      return;
+    }
+
+    const healthy = result.status === 'OPERATIONAL' || result.status === 'UNCONFIGURED';
+    res.status(healthy ? 200 : 503).json({
+      component: result.component,
+      label: spec.label,
+      status: result.status,
+      latencyMs: result.latencyMs,
+      checkedAt: result.checkedAt.toISOString(),
+    });
   }
 }
 

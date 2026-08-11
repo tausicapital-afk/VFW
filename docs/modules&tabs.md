@@ -136,7 +136,7 @@ and the arithmetic it came from.
 
 | Tab | Who | What |
 | --- | --- | --- |
-| My pay | all roles | Your own statement: base, commission, gross — beside your full profile, the hours and sales it was derived from, and your lifetime earnings. Also where you submit the month for approval. |
+| My pay | all roles | Your own statement: base, commission, gross — beside your full profile, the hours and sales it was derived from, and your lifetime earnings. Also where you submit the month for approval, and where you download the month as a **payslip**. |
 | Payroll run | `payroll.viewAll` (ACCT, ADMIN) | Every active account for the month, with run totals, and a row that opens into that person's statement. |
 | Approvals | `payroll.approve` (ACCT, ADMIN) | The queue of submitted payroll invoices — edit the figures, then approve or reject. |
 
@@ -148,6 +148,13 @@ as a total to be taken on faith:
 - **Base** comes from the account's pay type — `SALARY` (a fixed monthly figure), `HOURLY` (the rate
   × the hours on their Attendance timesheet) or `COMMISSION_ONLY` (no base). Set in Administration →
   Users & roles.
+- **The pay basis is two settings, not one.** Alongside the pay type, `earnsCommission` says whether
+  the account is on commission at all. Crossed, they give the three arrangements people are hired
+  on: *commission only* (`COMMISSION_ONLY`), *salary only* (`SALARY`/`HOURLY` with commission off),
+  and *both*. `COMMISSION_ONLY` with commission off is refused — it is an account paid nothing.
+  Turning commission off applies where the rate is stamped onto the sale at creation, so it moves the
+  **next** sale and never rewrites one already on the books; a rep taken off commission is still paid
+  what they closed before the change.
 - **Commission** is the sum of `commissionAmount` on the sales they closed, counted in the month the
   sale was **approved**, consolidated to CAD. The rate is the one recorded on each sale when it was
   created, so changing someone's percentage today moves their next sale and not one already booked.
@@ -156,6 +163,35 @@ as a total to be taken on faith:
 
 The **statement** is derived on every read — nothing is stored. See `docs/roles-and-permissions.md` →
 *Payroll: derived, never stored* for why, and for the one place `MGR` sees less than Accounting.
+
+#### The payslip — `GET /api/payroll/payslip.pdf?month=&userId=`
+
+The same statement as a document: one person, one month, printable and keepable. It carries the
+period and the whole person (name, employee ID, role, title, department), the pay basis as one
+phrase, the earnings with each line's arithmetic beside it, the sales summary and attendance it was
+derived from, and — where the month has been claimed — the payroll invoice's status, reviewer and
+date.
+
+Three decisions are worth recording, because each had an obvious-looking alternative:
+
+- **It is not an export dataset.** `/api/export/:dataset` renders a *table* in csv/xlsx/pdf, and a
+  payslip is not a table; forcing it through would have produced a two-column Item/Value spreadsheet
+  nobody asked for. It follows `submissions/:id/invoice.pdf` instead — one record, one client-facing
+  artefact — and reuses the same **pdfkit** renderer, so no second PDF library entered the tree. This
+  is also why *Payroll → My pay* still has no `<ExportMenu>`: the month it came from exports from
+  *Payroll run*, and the single statement gets a document rather than a table.
+- **It owns no permission check.** The route carries `payroll.viewOwn` to reach the module and then
+  goes through `PayrollService.statementFor`, whose `subject()` already resolves whose month this is:
+  yours always, anyone else's only with `payroll.viewAll`. A second copy of that rule on a route that
+  hands out a *file* is exactly the copy that would drift.
+- **Every generation is audited** (`PAYSLIP_GENERATED`), including your own. A payslip is a file that
+  leaves the system and gets forwarded, and the question it eventually provokes is "who produced this
+  copy, of whose pay, for which month" — a trail that logged only somebody-else's downloads could not
+  answer it for the copy most likely to be in dispute.
+
+Not one figure on it is recomputed — a payslip that disagreed with the screen it was downloaded from
+would be the worst bug this module could have, because the printed copy is the one that gets argued
+from.
 
 #### Payroll invoices — the one thing here that *is* stored
 
@@ -232,7 +268,7 @@ roles can raise its own to ADMIN**, so this grant is effectively a grant of ever
 | Tab | What it does |
 | --- | --- |
 | Invitations & approvals | Issues invitation codes with a fixed role, revokes them, and reviews sign-ups pending approval. |
-| Users & roles | Lists staff accounts and changes each one's role, pay type and rate. |
+| Users & roles | Lists staff accounts and changes each one's role, pay basis (pay type plus whether they earn commission) and rates. |
 | Packages & pricing | Three cards: **Shows**, the package catalogue, and the add-on catalogue. New rows are created from the button on each card; package and show ids are derived from the brand (and city/season), and stay fixed once created because that is what submissions point at. |
 | Tax rates | Adds to and maintains the tax rates applied at pricing time. New profiles are created from the button on the card; the code is typed, not derived, because it is the key packages and cities point at. |
 | Settings | Discount approval threshold, invoice prefix and next invoice number (read-only, allocated transactionally), and the FX rates every report converts through. |
@@ -405,7 +441,7 @@ declare its columns exactly one way; there is no shape that satisfies both or ne
 | New submission, Submission detail, Contact detail | One record, not a table. A submission's client-facing artefact is its invoice, which is its own concern. |
 | Administration → Settings, Administration → Configuration | Forms, not tables — and Configuration holds secrets. |
 | Console → Settings, Account | Personal preferences and your own profile — forms, not tables. Your hours are exportable from Attendance. |
-| Payroll → My pay | One statement, not a table. The month it came from exports from *Payroll run*. |
+| Payroll → My pay | One statement, not a table. The month it came from exports from *Payroll run*, and the statement itself downloads as a **payslip** (`GET /api/payroll/payslip.pdf`) — a document rather than a dataset, for the reasons under *The payslip* above. |
 
 ### Not exported, but not obviously by design
 

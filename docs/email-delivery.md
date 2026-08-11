@@ -314,6 +314,42 @@ Do it in that order and the only gap is between the two steps. The token is the
 relay's whole perimeter; the mailbox password is in plaintext in `index.php`,
 which is the right place for it — that file is on your own box and not in git.
 
+### When the alert fires
+
+`GET /api/health` is deliberately never a non-200 for a dependency outage — its
+job is telling Railway "the process is up", not "everything downstream is
+healthy" (§10.2 of `architecture.md`; `health.controller.ts`). An external
+uptime monitor watching that route alone will never notice email going down.
+
+Point the monitor at **`GET /api/health/component/email`** instead. It reads
+the same in-memory status `/api/health` does — no extra probing, no extra load
+— and turns it into a real HTTP status a monitor can page on:
+
+| Response | Meaning |
+|---|---|
+| `200`, `status: "OPERATIONAL"` | Sending normally. |
+| `200`, `status: "UNCONFIGURED"` | No active mail account. Not an outage — nobody set one up. |
+| `503`, `status: "DEGRADED"` | Reaching the account, but slowly (past the threshold in `health.service.ts`). |
+| `503`, `status: "DOWN"` | Could not reach or authenticate. This is the page. |
+| `503`, `status: "UNKNOWN"` | No probe has landed yet — moments after a deploy. Wait one cycle before treating this as real. |
+
+The same shape exists for the other three components at
+`/api/health/component/{api,database,storage}`, if a monitor ever needs to
+watch one of those independently instead of relying on `/api/health`'s banner.
+
+When it pages for email specifically:
+
+1. Open `/api/health` (the HTML page) and check `checkedAt` on the email row —
+   samples are 15 minutes apart, so a page that already recovered can still read
+   stale for up to that long.
+2. Work the **Troubleshooting** table below against the actual error, which is
+   only visible in the `HealthProbe` table (this public endpoint never returns
+   it — see the class comment on `HealthController`) or by running a manual
+   **Send test** on the active account from *Administration → Configuration*.
+3. If the relay itself is the problem (not the mailbox behind it), the
+   Resend account prepared per §5 is the fallback — flip it active from the
+   same screen. That is a provider switch, not a code change or a redeploy.
+
 ### Troubleshooting
 
 | Symptom | Cause |

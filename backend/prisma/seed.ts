@@ -39,6 +39,9 @@ const GL_ACCOUNTS = [
   { code: '2310', name: 'Deferred Revenue — Future Season' },
 ];
 
+/** The vocabulary Shows draw their season from — see AdminService's Season CRUD. */
+const SEASONS = ['Fall/Winter 26', 'Spring/Summer 26', 'Spring/Summer 27'];
+
 const EVENTS = [
   { id: 'VFW-FW26', brand: 'VFW', name: 'Vancouver Fashion Week', season: 'Fall/Winter 26', cityId: 'VAN', venue: 'Chinese Cultural Centre', start: '2026-03-16', end: '2026-03-22' },
   { id: 'VKFW-FW26', brand: 'VKFW', name: 'Vancouver Kids Fashion Week', season: 'Fall/Winter 26', cityId: 'VAN', venue: 'Chinese Cultural Centre', start: '2026-03-14', end: '2026-03-15' },
@@ -159,18 +162,19 @@ function seedPassword(): string {
 
 const DEMO_PASSWORD = seedPassword();
 
-// Pay setup is seeded so the Payroll screen has all three shapes to show on a
-// fresh database rather than a column of zeros: two commission-only reps, an
-// hourly one, and salaried staff. It is demo data — real rates are set in
-// Administration -> Users & roles.
+// Pay setup is seeded so the Payroll screen has every arrangement to show on a
+// fresh database rather than a column of zeros. Both halves of the pay basis are
+// covered: two commission-only reps, two hourly reps who also earn commission,
+// and salaried staff who do not. It is demo data — real rates and bases are set
+// in Administration -> Users & roles.
 const USERS = [
   { employeeId: 'VFW-1001', name: 'Marielle Fontaine', email: 'marielle@vanfashionweek.com', phone: '+1 604 555 0142', role: Role.SALES, department: 'Sales', title: 'Senior Sales Representative', commissionPct: 8, target: 160000, payType: PayType.COMMISSION_ONLY, baseRate: 0, colour: '#2F6BFF' },
   { employeeId: 'VFW-1002', name: 'Diego Salazar', email: 'diego@vanfashionweek.com', phone: '+1 604 555 0177', role: Role.SALES, department: 'Sales', title: 'Sales Representative', commissionPct: 8, target: 38000, payType: PayType.HOURLY, baseRate: 32, colour: '#0C7A4D' },
   { employeeId: 'VFW-1003', name: 'Aiko Tanaka', email: 'aiko@vanfashionweek.com', phone: '+81 3 5555 0198', role: Role.SALES, department: 'International', title: 'International Sales', commissionPct: 10, target: 30000, payType: PayType.COMMISSION_ONLY, baseRate: 0, colour: '#6B4BC4' },
   { employeeId: 'VFW-1004', name: 'Priya Raman', email: 'priya@vanfashionweek.com', phone: '+1 604 555 0110', role: Role.SALES, department: 'Sales', title: 'Sales Representative', commissionPct: 8, target: 25000, payType: PayType.HOURLY, baseRate: 28, colour: '#A96C05' },
-  { employeeId: 'VFW-2001', name: 'Hannah Okafor', email: 'accounting@vanfashionweek.com', phone: '+1 604 555 0100', role: Role.ACCT, department: 'Accounting', title: 'Head of Accounting', commissionPct: 0, target: 0, payType: PayType.SALARY, baseRate: 7200, colour: '#0E0E11' },
-  { employeeId: 'VFW-3001', name: 'Marcus Bell', email: 'sales.director@vanfashionweek.com', phone: '+1 604 555 0101', role: Role.MGR, department: 'Sales', title: 'Sales Director', commissionPct: 0, target: 0, payType: PayType.SALARY, baseRate: 8500, colour: '#B3332A' },
-  { employeeId: 'VFW-9001', name: 'System Administrator', email: 'it@vanfashionweek.com', phone: '+1 604 555 0199', role: Role.ADMIN, department: 'Administration', title: 'Systems Administrator', commissionPct: 0, target: 0, payType: PayType.SALARY, baseRate: 6800, colour: '#B0A288' },
+  { employeeId: 'VFW-2001', name: 'Hannah Okafor', email: 'accounting@vanfashionweek.com', phone: '+1 604 555 0100', role: Role.ACCT, department: 'Accounting', title: 'Head of Accounting', commissionPct: 0, target: 0, payType: PayType.SALARY, baseRate: 7200, earnsCommission: false, colour: '#0E0E11' },
+  { employeeId: 'VFW-3001', name: 'Marcus Bell', email: 'sales.director@vanfashionweek.com', phone: '+1 604 555 0101', role: Role.MGR, department: 'Sales', title: 'Sales Director', commissionPct: 0, target: 0, payType: PayType.SALARY, baseRate: 8500, earnsCommission: false, colour: '#B3332A' },
+  { employeeId: 'VFW-9001', name: 'System Administrator', email: 'it@vanfashionweek.com', phone: '+1 604 555 0199', role: Role.ADMIN, department: 'Administration', title: 'Systems Administrator', commissionPct: 0, target: 0, payType: PayType.SALARY, baseRate: 6800, earnsCommission: false, colour: '#B0A288' },
 ];
 
 async function main() {
@@ -183,6 +187,9 @@ async function main() {
   }
   for (const c of CITIES) {
     await prisma.city.upsert({ where: { id: c.id }, update: c, create: c });
+  }
+  for (const label of SEASONS) {
+    await prisma.season.upsert({ where: { label }, update: {}, create: { label } });
   }
   for (const e of EVENTS) {
     const row = { ...e, start: new Date(e.start), end: new Date(e.end) };
@@ -240,6 +247,7 @@ async function main() {
   const counts = {
     taxes: await prisma.taxProfile.count(),
     cities: await prisma.city.count(),
+    seasons: await prisma.season.count(),
     events: await prisma.event.count(),
     packages: await prisma.package.count(),
     prices: await prisma.packagePrice.count(),

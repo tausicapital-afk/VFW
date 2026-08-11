@@ -14,6 +14,18 @@ const ROLE_LABEL: Record<Role, string> = {
 };
 
 /**
+ * The pay basis in one phrase. It is two fields on the account — how base pay is
+ * worked out, and whether commission is earned at all — and a file that made a
+ * reader cross-reference two columns to work out the arrangement would be a file
+ * read wrongly.
+ */
+const payBasis = (u: Pick<UserRow, 'payType' | 'earnsCommission'>): string => {
+  if (u.payType === 'COMMISSION_ONLY') return 'Commission only';
+  const base = u.payType === 'HOURLY' ? 'Hourly' : 'Salary';
+  return u.earnsCommission ? `${base} + commission` : base;
+};
+
+/**
  * The columns the Users & roles table shows, in its order. Shared with the
  * approvals export below: both tables are the same people in different states,
  * and a reviewer who exports one and then the other should not have to re-learn
@@ -26,7 +38,11 @@ const columns: ExportColumn<UserRow>[] = [
   { header: 'Department', value: (u) => u.department, width: 16 },
   { header: 'Phone', value: (u) => u.phone, width: 16, spreadsheetOnly: true },
   { header: 'Employee ID', value: (u) => u.employeeId, width: 12, spreadsheetOnly: true },
-  { header: 'Commission %', value: (u) => u.commissionPct, width: 12 },
+  { header: 'Pay basis', value: (u) => payBasis(u), width: 22, spreadsheetOnly: true },
+  // Blank rather than the stored percentage when they are not on commission. The
+  // rate on its own would say a salaried person earns 8% of everything they
+  // close, which is exactly the sentence somebody would act on.
+  { header: 'Commission %', value: (u) => (u.earnsCommission ? u.commissionPct : null), width: 12 },
   // Targets are held in CAD, the reporting currency — there is no per-user
   // currency to disagree with, so the number stands on its own.
   { header: 'Target (CAD)', value: (u) => u.target, money: true, width: 14 },

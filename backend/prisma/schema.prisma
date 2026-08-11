@@ -90,6 +90,28 @@ model User {
   // with — the same choice `target` makes above.
   payType       PayType    @default(COMMISSION_ONLY)
   baseRate      Decimal    @default(0) @db.Decimal(14, 2)
+  // Whether this person earns commission at all, which is the other half of the
+  // pay basis and deliberately NOT folded into PayType above. The two are
+  // orthogonal — base pay is worked out one way, commission is either earned or
+  // it is not — and crossing them would mean an enum with five members that has
+  // to grow again the moment somebody is hourly-plus-commission.
+  //
+  // Read with `payType`, it gives an administrator the three arrangements people
+  // are actually hired on:
+  //
+  //   commission only   COMMISSION_ONLY, earnsCommission true
+  //   salary only       SALARY or HOURLY, earnsCommission false
+  //   both              SALARY or HOURLY, earnsCommission true
+  //
+  // COMMISSION_ONLY with this false is the one combination that means "paid
+  // nothing", so it is refused where it is set rather than quietly paying zero.
+  //
+  // Like `commissionPct`, this decides the NEXT sale: a submission stamps the
+  // rate it was made at, so switching someone to salary-only stops commission
+  // accruing from here on and never rewrites what they have already earned.
+  // Defaults to true, which is what every account predating this field was
+  // being paid on.
+  earnsCommission Boolean  @default(true)
   colour        String     @default("#0E0E11")
   // Job title, as the person writes it ("Senior Sales Representative"). Free
   // text and self-edited, unlike `role`, which is the permission grant and stays
@@ -266,6 +288,20 @@ model Event {
   isTestData Boolean @default(false)
 
   @@index([brand])
+}
+
+// The vocabulary a show's `season` free-text field is drawn from ("Fall/Winter
+// 26"), so an admin maintains it in one place instead of retyping it — with
+// inevitable drift — on every show. Deliberately NOT a foreign key off Event:
+// a show still just copies the label into its own `season` column at creation
+// (see AdminService.createEvent), the same way a sale copies its package's
+// price. Renaming or deleting a season here changes what the New show form
+// offers from now on and never rewrites a show already on the books.
+model Season {
+  id        String   @id @default(cuid())
+  label     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model GlAccount {
@@ -1146,6 +1182,11 @@ model PayrollInvoice {
   commissionPct Decimal @db.Decimal(5, 2)
   commission    Decimal @db.Decimal(14, 2)
   gross         Decimal @db.Decimal(14, 2)
+  // Frozen alongside the rate so a zero commission on an old invoice can say
+  // WHICH zero it is: a rep who earned nothing this month, or someone who is
+  // not on commission at all. Without it, `commissionPct 8.00 / commission
+  // 0.00` on a salaried person's record reads like a bug for the rest of time.
+  earnsCommission Boolean @default(true)
 
   // An admin's reason for editing the figures before approval, or the
   // rejection reason. Not required at submit time — only when someone
