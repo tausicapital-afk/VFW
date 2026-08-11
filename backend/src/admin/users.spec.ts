@@ -447,35 +447,6 @@ describe('users & roles — edit and soft delete', () => {
     });
   });
 
-  /**
-   * The sales panel under a user's details. It reports the month, not the
-   * account's history, and it reports payroll's figures rather than its own —
-   * so what is worth holding here is that it answers at all for someone who has
-   * never sold anything, and that it does not answer for someone who is not
-   * there. The arithmetic itself is payroll.spec.ts's to defend.
-   */
-  describe('this month at a glance', () => {
-    it('answers for an account with no sales, rather than 404 or an empty body', async () => {
-      const u = await scratchUser({ commissionPct: '7.5', target: '50000' });
-
-      const res = await http(app).get(`/api/users/${u.id}/sales`).set('Cookie', admin).expect(200);
-
-      expect(res.body).toMatchObject({
-        month: new Date().toISOString().slice(0, 7),
-        commissionPct: '7.50',
-        target: '50000.00',
-        count: 0,
-        revenue: '0.00',
-        commission: '0.00',
-        clients: [],
-      });
-    });
-
-    it('404s on an account that does not exist', async () => {
-      await http(app).get('/api/users/not-a-real-id/sales').set('Cookie', admin).expect(404);
-    });
-  });
-
   describe('authorization', () => {
     it('is admin-only — a rep cannot edit or delete an account', async () => {
       const u = await scratchUser();
@@ -484,7 +455,6 @@ describe('users & roles — edit and soft delete', () => {
       await http(app).patch(`/api/users/${u.id}`).set('Cookie', rep).send({ role: 'ADMIN' }).expect(403);
       await http(app).delete(`/api/users/${u.id}`).set('Cookie', rep).expect(403);
       await http(app).get('/api/users').set('Cookie', rep).expect(403);
-      await http(app).get(`/api/users/${u.id}/sales`).set('Cookie', rep).expect(403);
     });
   });
 });

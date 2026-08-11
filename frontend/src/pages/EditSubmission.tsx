@@ -6,7 +6,6 @@ import { can } from '../lib/acl';
 import { api } from '../lib/api';
 import { money } from '../lib/format';
 import { discountPctOfPackage, discountPreview } from '../lib/pricing';
-import { SEASON_TABS, seasonLabel, seasonTab, type SeasonTab } from '../lib/season';
 import type { Catalog, Currency, DiscountType, Submission } from '../lib/types';
 import { Page } from '../shell/Shell';
 
@@ -52,7 +51,7 @@ export function EditSubmission() {
   const [company, setCompany] = useState('');
   const [email, setEmail] = useState('');
   const [country, setCountry] = useState('');
-  const [season, setSeason] = useState<SeasonTab>('FW');
+  const [season, setSeason] = useState('');
   const [eventId, setEventId] = useState('');
   const [packageId, setPackageId] = useState('');
   const [addonIds, setAddonIds] = useState<string[]>([]);
@@ -81,7 +80,7 @@ export function EditSubmission() {
     setCompany(sub.contact.company ?? '');
     setEmail(sub.contact.email ?? '');
     setCountry(sub.contact.country ?? '');
-    setSeason(seasonTab(sub.event.season));
+    setSeason(sub.event.season);
     setEventId(sub.event.id);
     setPackageId(sub.package.id);
     setAddonIds(sub.addons.map((a) => a.addonId));
@@ -106,17 +105,23 @@ export function EditSubmission() {
 
   const event = catalog?.events.find((e) => e.id === eventId);
 
-  // The Show list is narrowed to the chosen season tab.
+  // Defaults to the first season in the catalogue until seeded from the record
+  // or picked by hand.
+  const activeSeason = season || catalog?.seasons[0]?.label || '';
+
+  // The Show list is narrowed to the chosen season — drawn from the Seasons
+  // catalogue an admin maintains under Packages & pricing, the same vocabulary
+  // a show's own `season` is copied from when it is added there.
   const shows = useMemo(
-    () => catalog?.events.filter((ev) => seasonTab(ev.season) === season) ?? [],
-    [catalog, season],
+    () => catalog?.events.filter((ev) => ev.season === activeSeason) ?? [],
+    [catalog, activeSeason],
   );
 
   // Switching seasons drops a show that no longer belongs — and with it the
   // package and add-ons that were keyed off that show.
-  function chooseSeason(next: SeasonTab) {
+  function chooseSeason(next: string) {
     setSeason(next);
-    if (event && seasonTab(event.season) !== next) {
+    if (event && event.season !== next) {
       setEventId('');
       setPackageId('');
       setAddonIds([]);
@@ -321,19 +326,26 @@ export function EditSubmission() {
 
           <div className="sect">
             <div className="hd"><h3>Event</h3><span className="n">02</span></div>
-            <div className="tabs" style={{ marginBottom: 14 }}>
-              {SEASON_TABS.map((t) => (
-                <button
-                  key={t.key}
-                  type="button"
-                  className={'tab' + (season === t.key ? ' on' : '')}
-                  onClick={() => chooseSeason(t.key)}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
             <div className="fields">
+              <div className="f">
+                <label>Season <span className="req">*</span></label>
+                {catalog && catalog.seasons.length === 0 ? (
+                  <p className="sm mut" style={{ marginTop: 0 }}>
+                    No seasons yet — ask an admin to add one under Packages &amp; pricing.
+                  </p>
+                ) : (
+                  <select value={activeSeason} onChange={(e) => chooseSeason(e.target.value)}>
+                    {/* This sale's season may since have been renamed or deleted —
+                        kept as an extra option so seeding never silently switches it. */}
+                    {activeSeason && !catalog?.seasons.some((s) => s.label === activeSeason) && (
+                      <option value={activeSeason}>{activeSeason}</option>
+                    )}
+                    {catalog?.seasons.map((s) => (
+                      <option key={s.id} value={s.label}>{s.label}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
               <div className="f wide">
                 <label>Show <span className="req">*</span></label>
                 <select
@@ -347,9 +359,7 @@ export function EditSubmission() {
                 >
                   <option value="">Select a show…</option>
                   {shows.map((ev) => (
-                    <option key={ev.id} value={ev.id}>
-                      {ev.name} — {ev.city.name} · {seasonLabel(ev.season)}
-                    </option>
+                    <option key={ev.id} value={ev.id}>{ev.name} — {ev.city.name}</option>
                   ))}
                 </select>
                 {event && (

@@ -142,7 +142,9 @@ describe('contacts export', () => {
     litter.push(c.id);
 
     const csv = await pull(admin, `&q=${encodeURIComponent(c.brand)}`);
-    expect(csv).toContain('Brand,Designer,Company,Type,Email,Phone,Country');
+    // "Test data" sits second: a rehearsal contact inside a customer list has to
+    // be visible in the file, not only on the screen it was pulled from.
+    expect(csv).toContain('Brand,Test data,Designer,Company,Type,Email,Phone,Country');
     expect(csv).toContain('full@example.com');
     expect(csv).toContain('Full Co');
     expect(csv).toContain('Canada');

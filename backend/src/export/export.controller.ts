@@ -32,6 +32,7 @@ import { payrollDataset } from './datasets/payroll.dataset';
 import { qboLedgerDataset } from './datasets/qbo-ledger.dataset';
 import { reportDatasets } from './datasets/reports.dataset';
 import { submissionsDataset } from './datasets/submissions.dataset';
+import { userSalesDataset } from './datasets/user-sales.dataset';
 import { userApprovalsDataset, usersDataset } from './datasets/users.dataset';
 import { ExportQueryDto } from './dto';
 import { ExportRegistry } from './export.registry';
@@ -155,6 +156,7 @@ export class ExportModule {
     registry.register(attendanceDataset(attendance));
     registry.register(attendanceTeamDataset(attendance));
     registry.register(payrollDataset(payroll));
+    registry.register(userSalesDataset(payroll));
     // One per report — see reports.dataset.ts for why they are not one dataset
     // taking a `type`.
     for (const report of reportDatasets(reports)) registry.register(report);

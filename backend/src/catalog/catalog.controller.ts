@@ -11,15 +11,16 @@ export class CatalogController {
 
   @Get()
   async all() {
-    const [events, packages, addons, taxes, glAccounts, cities] = await Promise.all([
+    const [events, packages, addons, taxes, glAccounts, cities, seasons] = await Promise.all([
       this.prisma.event.findMany({ include: { city: true }, orderBy: { start: 'asc' } }),
       this.prisma.package.findMany({ include: { prices: true }, orderBy: { brand: 'asc' } }),
       this.prisma.addon.findMany({ orderBy: { brand: 'asc' } }),
       this.prisma.taxProfile.findMany(),
       this.prisma.glAccount.findMany({ orderBy: { code: 'asc' } }),
       this.prisma.city.findMany(),
+      this.prisma.season.findMany({ orderBy: { label: 'asc' } }),
     ]);
-    return { events, packages, addons, taxes, glAccounts, cities };
+    return { events, packages, addons, taxes, glAccounts, cities, seasons };
   }
 }
 

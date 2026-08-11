@@ -20,7 +20,6 @@ import {
 } from './dto';
 import { FeedbackController, FeedbackService } from '../feedback/feedback.controller';
 import { InternalController, InternalService } from '../internal/internal.controller';
-import { PayrollModule } from '../payroll/payroll.controller';
 
 /**
  * Administration. Every route here is `admin.manage` — ADMIN only.
@@ -83,13 +82,6 @@ export class AdminController {
   @Can('admin.manage')
   pendingUsers() {
     return this.admin.pendingUsers();
-  }
-
-  /** This month's sales, commission and clients for one account. */
-  @Get('users/:id/sales')
-  @Can('admin.manage')
-  userSales(@Param('id') id: string) {
-    return this.admin.userSales(id);
   }
 
   @Post('users/:id/approve')
@@ -232,10 +224,6 @@ export class AdminController {
 }
 
 @Module({
-  // For the sales panel on a user: Administration reads payroll's figures
-  // rather than recomputing them. The dependency only goes this way — payroll
-  // knows nothing about this module — so there is no cycle to break.
-  imports: [PayrollModule],
   controllers: [AdminController, FeedbackController, InternalController],
   providers: [AdminService, FeedbackService, InternalService],
   // ExportModule reads the same listings these controllers serve, so its

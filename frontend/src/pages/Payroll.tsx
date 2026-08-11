@@ -13,6 +13,7 @@ import type {
 import { Avatar } from '../shell/Avatar';
 import { ExportMenu } from '../shell/ExportMenu';
 import { Page, ROLE_LABEL } from '../shell/Shell';
+import { UserSalesCard } from './UserSalesCard';
 
 const INVOICE_PILL: Record<PayrollInvoiceStatus, string> = {
   SUBMITTED: 'PENDING', APPROVED: 'APPROVED', REJECTED: 'REJECTED',
@@ -78,10 +79,15 @@ export function Payroll() {
 // One person's statement
 // ---------------------------------------------------------------------------
 
-function MyPay({ userId }: { userId?: string } = {}) {
+/**
+ * `initialMonth` is what the run was showing when somebody opened this person:
+ * arriving at the current month after clicking a row in March's run would be the
+ * screen quietly answering a different question than the one that was asked.
+ */
+function MyPay({ userId, initialMonth }: { userId?: string; initialMonth?: string } = {}) {
   const qc = useQueryClient();
   const { user } = useAuth();
-  const [month, setMonth] = useState(() => monthKey(new Date()));
+  const [month, setMonth] = useState(() => initialMonth ?? monthKey(new Date()));
   const [payslipError, setPayslipError] = useState<string | null>(null);
   const mine = !userId || userId === user?.id;
 
@@ -149,10 +155,22 @@ function MyPay({ userId }: { userId?: string } = {}) {
       )}
 
       {sheet && (
-        <div className="split">
-          <Statement statement={sheet} month={month} />
-          <ProfileCard statement={sheet} />
-        </div>
+        <>
+          <div className="split">
+            <Statement statement={sheet} month={month} />
+            <ProfileCard statement={sheet} />
+          </div>
+
+          {/* The detail behind the commission line above: which sales made it,
+              and who they were sold to. Pinned to this screen's month rather
+              than stepping on its own — two month controls on one page would be
+              two answers to what is being shown. */}
+          <div className="card" style={{ marginTop: 16 }}>
+            <div className="bd">
+              <UserSalesCard userId={sheet.user.id} month={month} />
+            </div>
+          </div>
+        </>
       )}
     </>
   );
@@ -377,7 +395,7 @@ function Run() {
           <button className="btn sm" onClick={() => setOpen(null)}>‹ Back to the run</button>
           <b>{open.name}</b>
         </div>
-        <MyPay userId={open.id} />
+        <MyPay userId={open.id} initialMonth={month} />
       </>
     );
   }

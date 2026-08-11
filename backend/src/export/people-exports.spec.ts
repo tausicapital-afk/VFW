@@ -85,7 +85,7 @@ describe('people & ledger exports', () => {
 
   it('the ledger holds what was posted, not what is merely approved', async () => {
     const csv = await pull('qbo-ledger', acct);
-    expect(csv).toContain('Invoice,Ref,Customer');
+    expect(csv).toContain('Invoice,Ref,Test data,Customer');
 
     const exported = await prisma.submission.count({ where: { status: 'EXPORTED' } });
     expect(csv.trim().split('\n').length - 1).toBe(exported);

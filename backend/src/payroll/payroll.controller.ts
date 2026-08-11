@@ -26,6 +26,20 @@ export class PayrollController {
   }
 
   /**
+   * What one person sold in a month, and to whom — the panel that sits under
+   * their statement here and under their details in Administration.
+   *
+   * Declared before `GET /` for the same reason "run" is, and carrying the same
+   * `payroll.viewOwn`: the service resolves whose month this is and refuses
+   * anyone else's without `payroll.viewAll`.
+   */
+  @Get('sales')
+  @Can('payroll.viewOwn')
+  sales(@Query() query: PayrollQueryDto, @CurrentUser() user: AuthUser) {
+    return this.payroll.salesFor(query, user);
+  }
+
+  /**
    * The same statement as `GET /` below, as a document somebody can print, file
    * or forward. Carries `payroll.viewOwn` for exactly the reason that route
    * does: the service resolves whose month this is and refuses anyone else's

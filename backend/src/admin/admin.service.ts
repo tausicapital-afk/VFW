@@ -6,8 +6,6 @@ import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/auth.guard';
 import { EmailService } from '../common/email';
 import { ConfigService } from '../config/config.service';
-import { currentMonth } from '../attendance/attendance.service';
-import { PayrollService } from '../payroll/payroll.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CreateAddonDto,
@@ -118,8 +116,6 @@ export class AdminService {
     private readonly email: EmailService,
     /** The Test data switch — see ConfigService.testDataMode. */
     private readonly config: ConfigService,
-    /** Read-only here: the one definition of what a person sold in a month. */
-    private readonly payroll: PayrollService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -350,30 +346,10 @@ export class AdminService {
     };
   }
 
-  /**
-   * The sales side of an account, for the month in progress: what they closed,
-   * what it earned them, and who it was sold to.
-   *
-   * The figures are PayrollService's, not this service's own — see
-   * `monthSales`. Administration is where someone's commission rate is set, so
-   * it is the screen where a rate and the money it has actually produced most
-   * need to be legible together; it is not a second place that computes them.
-   */
-  async userSales(id: string) {
-    const user = await this.prisma.user.findFirst({
-      where: { id, deletedAt: null },
-      select: { id: true, name: true, commissionPct: true, target: true },
-    });
-    if (!user) throw new NotFoundException('User not found');
-
-    return {
-      // Echoed back so the panel can show the rate the money was earned under
-      // without assuming the form beside it is still showing a saved value.
-      commissionPct: user.commissionPct.toFixed(2),
-      target: user.target.toFixed(2),
-      ...(await this.payroll.monthSales(id, currentMonth())),
-    };
-  }
+  // The sales panel under a user's details is NOT served from here. It is
+  // `GET /api/payroll/sales`, because the figures are payroll's and the rule
+  // about who may read whose is payroll's too — an admin route would have been
+  // a second answer to both. See PayrollService.monthSales.
 
   async pendingUsers() {
     return {

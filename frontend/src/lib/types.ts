@@ -133,6 +133,7 @@ export interface Catalog {
   taxes: TaxProfile[];
   glAccounts: GlAccount[];
   cities: City[];
+  seasons: Season[];
 }
 
 export interface Contact extends TestFlagged {
@@ -474,8 +475,9 @@ export interface AdminUser extends User {
  * as payroll would pay it: dated by approval, not by submission.
  */
 export interface UserSales {
-  /** `2026-08` — the month the figures cover. */
+  /** `2026-08` — the month the figures cover. Any month back is fetchable. */
   month: string;
+  user: { id: string; name: string };
   /** The rate on the account now, which is what the NEXT sale will earn. */
   commissionPct: Money;
   target: Money;

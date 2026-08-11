@@ -1,12 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api } from '../lib/api';
-import { monthLabel } from '../lib/attendance';
 import { fmtDate, money } from '../lib/format';
 import { TestTag, useTestRow } from '../lib/testData';
 import type {
   AdminCatalogue, AdminUser, Currency, EventRow, Invitation, PayType, Role, Season, Settings,
-  UserSales, UserStatus,
+  UserStatus,
 } from '../lib/types';
 import { useAuth } from '../auth/AuthContext';
 import { ExportMenu } from '../shell/ExportMenu';
@@ -16,6 +15,7 @@ import { ExportMenu } from '../shell/ExportMenu';
 // order is the order the dropdowns here offer, since they are built from it.
 import { Page, ROLE_LABEL } from '../shell/Shell';
 import { ConfigTab } from './AdminConfig';
+import { UserSalesCard } from './UserSalesCard';
 
 const PAY_TYPE_LABEL: Record<PayType, string> = {
   SALARY: 'Salary (monthly)',
@@ -1034,7 +1034,13 @@ function UserDetailModal({
             <div className="r"><span>Joined</span><span>{fmtDate(user.createdAt)}</span></div>
           </div>
 
-          <UserSalesPanel userId={user.id} />
+          {/* Administration is where a commission rate is decided, and a rate is
+              an abstraction until you can see the money it has produced. The
+              card steps months on its own here — unlike Payroll, this modal has
+              no month of its own for it to follow. */}
+          <div style={{ marginTop: 22 }}>
+            <UserSalesCard userId={user.id} />
+          </div>
 
           {error && <div className="note bad" style={{ marginTop: 12 }}>{error}</div>}
         </div>
@@ -1071,140 +1077,6 @@ function UserDetailModal({
         </div>
       </div>
     </div>
-  );
-}
-
-/**
- * What this account actually sold, under the form that sets what it earns.
- *
- * Administration is where a commission rate is decided, and a rate is an
- * abstraction until you can see the money it produced — so the month sits
- * directly beneath it rather than only on Payroll, which answers the different
- * question of what someone is *paid*.
- *
- * The figures are payroll's own, fetched rather than recomputed: dated by
- * approval, converted to CAD through Settings' rates, commission struck at the
- * rate each sale carries. An admin who compared this against the Payroll screen
- * for the same month and found two answers would be right to trust neither.
- */
-function UserSalesPanel({ userId }: { userId: string }) {
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['users', userId, 'sales'],
-    queryFn: () => api.get<UserSales>(`/api/users/${userId}/sales`),
-  });
-
-  if (isLoading || !data) {
-    return (
-      <div className="sect" style={{ marginTop: 22 }}>
-        <div className="hd"><h3>This month</h3></div>
-        <div className="note">{error ? (error as Error).message : 'Loading…'}</div>
-      </div>
-    );
-  }
-
-  const cad = (v: string) => money(v, 'CAD');
-  const target = Number(data.target);
-  // Progress is against net revenue, which is what a target is set in and what
-  // commission is struck on — invoiced would flatter it by the tax on top.
-  const pct = target > 0 ? Math.round((Number(data.revenue) / target) * 100) : 0;
-  const unpaid = Number(data.commissionUnpaid);
-
-  return (
-    <>
-      <div className="sect" style={{ marginTop: 22 }}>
-        <div className="hd">
-          <h3>This month</h3>
-          <span className="n">{monthLabel(data.month)}</span>
-        </div>
-      </div>
-
-      {data.count === 0 ? (
-        <div className="note">
-          Nothing approved in {monthLabel(data.month)}. A sale counts here in the month
-          Accounting approved it, not the month it was submitted — so a deal still in the
-          queue will appear once it is decided.
-        </div>
-      ) : (
-        <>
-          <div className="kpis">
-            <div className="kpi">
-              <div className="lb">Sales closed</div>
-              <div className="vl">{data.count}</div>
-              <div className="dt">{cad(data.invoiced)} invoiced</div>
-            </div>
-            <div className="kpi accent">
-              <div className="lb">Net revenue</div>
-              <div className="vl">{cad(data.revenue)}</div>
-              <div className="dt">commission is struck on this</div>
-            </div>
-            <div className="kpi ok">
-              <div className="lb">Commission</div>
-              <div className="vl">{cad(data.commission)}</div>
-              <div className="dt">at {Number(data.commissionPct).toFixed(2)}%</div>
-            </div>
-          </div>
-
-          {target > 0 && (
-            <div style={{ marginTop: 14 }}>
-              <div className="rowflex" style={{ justifyContent: 'space-between', fontSize: 12.5 }}>
-                <span className="mut">Against a {cad(data.target)} target</span>
-                <span className="b">{pct}%</span>
-              </div>
-              <div className="bar" style={{ marginTop: 6 }}>
-                <i style={{ width: `${Math.min(pct, 100)}%` }} />
-              </div>
-            </div>
-          )}
-
-          <div className="totals" style={{ marginTop: 14 }}>
-            <div className="r"><span>Collected</span><span>{cad(data.collected)}</span></div>
-            <div className="r due"><span>Outstanding</span><span>{cad(data.outstanding)}</span></div>
-          </div>
-
-          {unpaid > 0 && (
-            <div className="note warn" style={{ marginTop: 14 }}>
-              <b>{cad(data.commissionUnpaid)}</b> of that commission is on invoices the client
-              has not settled. It is earned all the same — commission follows approval, not
-              payment — but it is money the company has not collected yet.
-            </div>
-          )}
-
-          <div className="sect" style={{ marginTop: 22, marginBottom: 0 }}>
-            <div className="hd">
-              <h3>Who it came from</h3>
-              <span className="n">{data.clients.length}</span>
-            </div>
-          </div>
-          <div className="tbl-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Client</th>
-                  <th className="num">Deals</th>
-                  <th className="num">Net</th>
-                  <th className="num">Collected</th>
-                  <th className="num">Outstanding</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.clients.map((c) => (
-                  <tr key={c.brand}>
-                    <td>
-                      <b>{c.brand}</b>
-                      <div className="sm mut">{c.designer}</div>
-                    </td>
-                    <td className="num">{c.deals}</td>
-                    <td className="num">{cad(c.revenue)}</td>
-                    <td className="num">{cad(c.collected)}</td>
-                    <td className="num">{cad(c.outstanding)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
-    </>
   );
 }
 

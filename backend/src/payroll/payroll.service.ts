@@ -578,16 +578,27 @@ export class PayrollService {
   /**
    * One account's month of sales, in CAD, and the clients it came from.
    *
-   * Administration opens this beside a user's details, so it is deliberately the
-   * same `salesByRep` the run above pays from rather than a fresh query with its
-   * own idea of what a sale is worth. An admin comparing this panel against the
-   * Payroll screen for the same month must not find two answers — the dating
-   * (approvedAt), the FX table and the commission are all one definition.
+   * Two screens read this — Payroll, under the statement, and Administration,
+   * under the user's details — and they read the same thing. It is deliberately
+   * the same `salesByRep` the run above pays from rather than a fresh query with
+   * its own idea of what a sale is worth: whoever compares the two screens for a
+   * month must not find two answers, so the dating (approvedAt), the FX table
+   * and the commission are one definition, in one place.
+   *
+   * Any month, not just the current one. The figures are derived on every read
+   * from sales that are already on the books, so an older month is simply an
+   * older range — there is no snapshot to have missed and nothing to backfill.
    *
    * Note what it is not: this is what the account *sold*, not what it will be
    * paid. Base pay, hours and the payroll invoice lifecycle stay on Payroll.
    */
   async monthSales(userId: string, month: string) {
+    const person = await this.prisma.user.findFirst({
+      where: { id: userId, deletedAt: null },
+      select: { id: true, name: true, commissionPct: true, target: true },
+    });
+    if (!person) throw new NotFoundException('User not found');
+
     const fx = await this.fxRates();
     const sales = (await this.salesByRep(monthRange(month), fx, userId)).get(userId);
 
@@ -605,6 +616,12 @@ export class PayrollService {
 
     return {
       month,
+      user: { id: person.id, name: person.name },
+      // The rate and target on the account NOW, which is what the next sale will
+      // earn — not what any of the sales below were struck at. Each of those
+      // carries its own rate; see the note on Submission.commissionPct.
+      commissionPct: person.commissionPct.toFixed(2),
+      target: person.target.toFixed(2),
       count: sales?.count ?? 0,
       revenue: (sales?.revenue ?? new Decimal(0)).toFixed(2),
       invoiced: (sales?.invoiced ?? new Decimal(0)).toFixed(2),
@@ -614,6 +631,17 @@ export class PayrollService {
       commissionUnpaid: (sales?.commissionUnpaid ?? new Decimal(0)).toFixed(2),
       clients,
     };
+  }
+
+  /**
+   * The same month, for whoever asked. `subject` is what decides whose: your own
+   * always, anyone else's only with `payroll.viewAll` — the identical rule the
+   * statement itself is resolved under, so the panel beneath a statement can
+   * never be readable when the statement above it is not.
+   */
+  async salesFor(query: PayrollQueryDto, actor: AuthUser) {
+    const userId = await this.subject(query.userId, actor);
+    return this.monthSales(userId, query.month ?? currentMonth());
   }
 
   /** Single-person convenience — used by the Profile screen. */
