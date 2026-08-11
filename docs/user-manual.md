@@ -25,15 +25,22 @@ Accounting, Sales Management and Administration see everyone's).
 
 | Role | Who this is |
 | --- | --- |
-| **Sales Representative** | The person who sells a package to a designer and owns the relationship with that account. |
-| **Intern** | A supervised trainee learning the sales role. Can draft and manage sales like a rep, but does not yet get the customer contact book or the feedback tools — those hold designers' personal contact details. |
+| **User** | The standard staff account: someone who sells a package to a designer and owns the relationship with that account, and anyone else who does day-to-day work in the console without needing one of the specialist roles below. |
+| **Intern** | A supervised trainee learning the sales role. Can draft and manage sales the same way a User can, but does not yet get the customer contact book or the feedback tools — those hold designers' personal contact details. |
 | **Accounting** | Reviews and approves sales, handles invoicing, payments, and the QuickBooks hand-off, and is a second administrator for the whole system. |
-| **Sales Manager** | Oversees the sales team's numbers and hours. Can see everything a rep can see, and more — but cannot create, approve, or export a sale, and cannot see anyone's pay. This role watches the business, it doesn't operate the money side of it. |
+| **Sales Manager** | Oversees the sales team's numbers and hours. Can see everything a User can see, and more — but cannot create, approve, or export a sale, and cannot see anyone's pay. This role watches the business, it doesn't operate the money side of it. |
 | **Administrator** | Full access, including everything Accounting can do, plus system configuration: user accounts, the product catalogue, and settings. |
 
 A few things worth understanding up front, because they explain a lot of what
 follows:
 
+- **"User" is the name of a role, not just "somebody using the console."**
+  Everyone who signs in is using the system; only the accounts on this
+  particular role are labelled **User**. It was called *Sales Representative*
+  until recently and was renamed because it had stopped being sales-only —
+  salespeople and other staff are both on it, and a person on this role who
+  never sells anything is perfectly normal. Nothing about what the role can do
+  changed with the name.
 - **Accounting and Administrator are equals.** Both can approve sales, manage
   the catalogue, and manage user accounts. Accounting holds this so that
   account recovery (for example, restoring a locked-out Administrator) never
@@ -50,9 +57,10 @@ follows:
   the same person who *approves* it — even an Administrator cannot approve
   their own submitted work.
 - **A role decides which screens you see; a second, separate rule decides
-  whose records you see on them.** A sales rep looking at Submissions sees
-  only their own deals; Accounting, Sales Management and Administration see
-  everyone's. This "row scoping" is called out explicitly wherever it applies.
+  whose records you see on them.** Someone on the User role looking at
+  Submissions sees only their own deals; Accounting, Sales Management and
+  Administration see everyone's. This "row scoping" is called out explicitly
+  wherever it applies.
 
 ---
 
@@ -72,9 +80,8 @@ your role.*
 This is how a sale gets entered into the system: choose the contact/designer,
 the show, a package, any add-ons, a discount if one applies, and a deposit.
 
-**Who can create a submission:** Sales Representatives, Interns, and
-Administrators. Accounting and Sales Managers do not create sales — they
-review them.
+**Who can create a submission:** Users, Interns, and Administrators.
+Accounting and Sales Managers do not create sales — they review them.
 
 **What happens when you submit:**
 
@@ -111,7 +118,7 @@ need to add it separately first.
 
 The list of every sale you're allowed to see, with a detail page for each one.
 
-| | Sales Rep / Intern | Accounting | Sales Manager | Administrator |
+| | User / Intern | Accounting | Sales Manager | Administrator |
 | --- | :-: | :-: | :-: | :-: |
 | See the list | Own sales only | Everyone's | Everyone's | Everyone's |
 | Edit a sale before approval | Own sales | Any | — | Any |
@@ -121,6 +128,16 @@ The list of every sale you're allowed to see, with a detail page for each one.
 | Send the invoice by email | — | Yes | — | Yes |
 | Record or undo a payment | Yes | Yes | Yes | Yes |
 | Void a sale (soft-delete) | — | Yes | — | Yes |
+
+**Opening a sale.** Clicking anywhere on a row (or pressing Enter on it) opens
+a quick-look panel over the list: the customer and designer, the show, package
+and rep, the dates it was submitted and approved, and the full money breakdown
+in the currency the sale was made in — package, add-ons, any discount, net
+revenue, tax, total, paid, balance and commission — plus the sales notes if any
+were left. It is read-only; **Open full record** takes you to the detail page
+where the sale is actually worked on. Escape or a click outside closes it. This
+is a faster way to check a figure than loading the whole record, and it works
+the same way on the Dashboard's submissions card and on the voided list.
 
 **Editing a sale, in plain terms.** Before a sale is approved, it belongs to
 whoever created it (or Accounting/Admin, who can fix anyone's mistake). The
@@ -139,9 +156,9 @@ before you save a change.
 
 **Payment plans (installments).** Anyone who can work a sale — not just
 Accounting — can set up a payment schedule and mark installments as paid. The
-thinking here: a sales rep is usually the one talking to the designer about
-payment, so they shouldn't have to route every payment update through
-Accounting. Two different actions are involved:
+thinking here: whoever sold the deal is usually the one talking to the
+designer about payment, so they shouldn't have to route every payment update
+through Accounting. Two different actions are involved:
 
 - **Scheduling a plan** just sets expectations — it does not move any money
   and can be adjusted freely.
@@ -163,15 +180,15 @@ audit trail and can be reversed.
 The customer book — every designer/brand you've sold to, searchable by brand,
 designer name, or company.
 
-**Who can see it:** Sales Reps, Accounting, Sales Managers, and
+**Who can see it:** Users, Accounting, Sales Managers, and
 Administrators. **Interns cannot** — the contact book holds designers'
 personal emails and phone numbers, and an intern is a supervised trainee who
 doesn't yet get access to that.
 
-**Who can add a contact directly:** Sales Reps, Accounting, and
+**Who can add a contact directly:** Users, Accounting, and
 Administrators (not Sales Managers, not Interns).
 
-A sales rep sees only the brands they've personally sold to or entered; other
+A User sees only the brands they've personally sold to or entered; other
 roles see everyone's. Opening a contact shows their **lifetime value** (the
 total of everything they've bought that was actually approved — a returned
 or rejected deal doesn't count) and their full history of sales with you.
@@ -188,7 +205,7 @@ A log of every email the system has sent or received on your behalf —
 verification codes, invitations, password resets, and invoices.
 
 **Everyone can open this screen**, but what you see depends on your role:
-Sales Reps and Interns see only mail connected to them; Accounting, Sales
+Users and Interns see only mail connected to them; Accounting, Sales
 Managers, and Administrators see the full company log. **Sending** an invoice
 by email is an accounting action (Accounting and Administrators only) and is
 done from the sale itself, not from this screen — this screen is where you
@@ -197,7 +214,7 @@ go afterward to confirm it actually sent.
 ### Approval queue
 
 Where Accounting and Administrators review sales that are waiting for
-sign-off. Sales Reps can also open this screen — to see where their own
+sign-off. Users can also open this screen — to see where their own
 submission currently sits — but cannot act on it.
 
 **Why reading and deciding are separate permissions:** the person who created
@@ -275,14 +292,23 @@ themself is recorded and clearly labeled as a correction, not a self-report.
 ### Payroll
 
 What you (or, if you have the right access, everyone) earned in a given
-month, broken down into base pay, commission, and the total.
+period, broken down into base pay, commission, and the total.
 
 | | Everyone | Accounting / Administrator |
 | --- | :-: | :-: |
 | See your own pay | Yes | Yes |
 | See everyone's pay | — | Yes |
-| Submit your month for approval | Yes | Yes |
+| Submit your period for approval | Yes | Yes |
 | Approve/reject submitted pay | — | Yes |
+
+**Choosing the period.** The screen opens on the current calendar month and the
+‹ › arrows step a month at a time, which is what most payroll runs are. **Custom
+range…** swaps those arrows for two date boxes so a period can be anything else:
+a biweekly cycle, someone's final two weeks before they leave, a one-off
+correction window. Everything on the screen follows the period you pick — the
+statement, the run, the sales panel, and the payslip you download. A period that
+happens to run from the 1st to the last of a month is still just called *August
+2026*; anything else is spelled out end to end.
 
 **Sales Managers do not see anyone's pay figures**, including their own
 team's — even though they *can* see the team's hours in Attendance. This is
@@ -300,20 +326,38 @@ answered to different people.
   statement says so beside the commission line rather than showing you a rate you
   aren't earning at.
 - **Commission** is the total commission on every sale you closed that was
-  *approved* that month (not just submitted) — using the commission rate
+  *approved* in that period (not just submitted) — using the commission rate
   that was locked in when each sale was made, so a rate change today never
-  moves money already earned.
+  moves money already earned. Coming off commission works the same way: it
+  stops your next sale earning any and never rewrites one already on the books.
 - The screen also shows how much of your commission is tied to invoices the
   client hasn't paid yet — this doesn't reduce what you're owed, it's just
   shown so nobody is surprised that some of their "earned" total is still
   outstanding.
 
-**Downloading a payslip.** The *Payslip (PDF)* button on the month you are
+**The sales behind the commission.** Under the statement is a *Sales* panel
+showing what that person actually sold in the period: how many deals, the net
+revenue commission is struck on, the commission itself, progress against their
+target, what has been collected against what is still outstanding, and a
+**Who it came from** table breaking the period down client by client.
+
+The panel has its own **Export** button — PDF, Excel or CSV — which hands over
+the client breakdown for whichever period is on screen. Every row repeats the
+period and the person, so several exports can be stacked into one sheet to build
+up a longer history. Whose figures you can export is decided the same way the
+screen decides: your own always, anyone else's only if you can already see their
+pay.
+
+The same panel appears on an account in Administration → Users & roles, from the
+same figures — so the two screens can never give different answers about what
+somebody sold.
+
+**Downloading a payslip.** The *Payslip (PDF)* button on the period you are
 looking at produces a one-page document you can print, file or send on. It
-shows the month and the person it is for, how they are paid, each earnings
+shows the period and the person it is for, how they are paid, each earnings
 line beside the arithmetic it came from (rate x hours, or the sales behind the
 commission), the attendance and sales the figures were derived from, and — if
-the month has been submitted for approval — its status, who reviewed it and
+the period has been submitted for approval — its status, who reviewed it and
 when. It is the same statement as the screen, never a second calculation, so
 the two can never disagree.
 
@@ -322,24 +366,34 @@ always, anyone else's only if you can already see their pay. Every payslip
 produced is recorded in the audit trail, including your own — a document that
 gets forwarded should be traceable to whoever produced it.
 
-**Submitting and approving pay.** Your monthly statement is calculated fresh
-every time you open it — nothing is saved until you actually submit it for
-approval. Once submitted, Accounting can review the figures, edit them if
-needed (always with a required written reason — the save button stays
-disabled until you type one), and then approve or reject. As with sale
-approvals, you cannot approve your own submission, no matter your role. Once
-approved, the amount counts toward your running lifetime earnings total,
-visible on this screen and on your Account page.
+**Submitting and approving pay.** Your statement is calculated fresh every time
+you open it — nothing is saved until you actually submit it for approval.
+Submitting freezes the figures for that exact period, so a timesheet or a sale
+corrected afterwards will not quietly move what you claimed; if the two drift
+apart, the screen says so and you can resubmit. Once submitted, Accounting can
+review the figures, edit them if needed (always with a required written reason
+— the save button stays disabled until you type one), and then approve or
+reject. As with sale approvals, you cannot approve your own submission, no
+matter your role. Once approved, the amount counts toward your running lifetime
+earnings total, visible on this screen and on your Account page.
+
+One submission exists per person per period, so resubmitting the same range
+replaces your earlier claim rather than adding a second one. Submitting a
+*different* range is a separate claim — overlapping periods are not detected
+for you, so agree the cycle with Accounting before switching off calendar
+months.
 
 ### Leaderboard
 
-Ranks sales reps by performance over a chosen period. Everyone can see it —
-showing everyone's numbers to everyone is the entire point of a leaderboard.
+Ranks active accounts on the **User** role by performance over a chosen
+period. Everyone can see it — showing everyone's numbers to everyone is the
+entire point of a leaderboard. (The screen still calls these accounts
+"representatives" in a couple of places; it means the same people.)
 
 Ranking is based on a score, not raw revenue, made up of: revenue against
 target, how many of your submissions get approved, how much of what you've
-sold has actually been collected, and repeat business from your customers. A
-rep who blows past their revenue target doesn't get extra credit for the
+sold has actually been collected, and repeat business from your customers.
+Someone who blows past their revenue target doesn't get extra credit for the
 excess — the revenue portion of the score caps at 100% of target, so
 consistently *collecting* what you sell and keeping customers coming back
 matter just as much as closing the sale in the first place.
@@ -353,7 +407,7 @@ tools (below) are for coaching, not for scoring.
 Star ratings and notes left by designers about their experience.
 
 **Who can see or record it:** Accounting, Sales Managers, and Administrators.
-Sales Reps and Interns cannot access this screen.
+Users and Interns cannot access this screen.
 
 Feedback is attached to the *designer/brand*, not to one specific sale — so
 feedback recorded on one deal will show up against every deal for that same
@@ -420,8 +474,8 @@ themselves further, so it's held only by the two most trusted roles.
 | Tab | What it's for |
 | --- | --- |
 | Invitations & approvals | Send an invitation to a new hire (with their role already fixed), cancel an invitation, and approve new sign-ups before they can log in. |
-| Users & roles | See every staff account and change someone's role, pay type, pay rate, and whether they earn commission (so a person can be on commission, on a salary, or on both). |
-| Packages & pricing | Manage the shows, the package catalogue, and the add-on catalogue that sales are built from. |
+| Users & roles | See every staff account and change someone's role, pay type, pay rate, and whether they earn commission (so a person can be on commission, on a salary, or on both). Opening an account also shows what they have sold and to whom — the same Sales panel Payroll shows, from the same figures. Here it steps a calendar month at a time (the custom-range picker lives on Payroll), so you can look back over an account's history from the screen where you set their rate. |
+| Packages & pricing | Manage the seasons, the shows, the package catalogue, and the add-on catalogue that sales are built from. Seasons are maintained here as a list ("Fall/Winter 26") so a show is picked from it rather than retyped — add one before adding the show that uses it. Renaming or removing a season only changes what the New show form offers next; shows already on the books keep the season they were created with. |
 | Tax rates | Manage the tax rates applied when a sale is priced. |
 | Settings | The discount threshold that triggers extra sign-off, invoice numbering, and the currency exchange rates used everywhere else in the system. |
 | Configuration | System-level settings that take effect immediately, without needing a technical deployment. |
