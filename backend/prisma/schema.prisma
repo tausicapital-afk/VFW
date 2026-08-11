@@ -1168,8 +1168,13 @@ model PayrollInvoice {
   id     String @id @default(cuid())
   userId String
   user   User   @relation("PayrollInvoiceSubject", fields: [userId], references: [id])
-  // 'YYYY-MM' — the same shape PayrollQueryDto/AttendanceQueryDto already use.
-  month  String
+  // The frozen period, as an inclusive date range — not always a calendar
+  // month. Payroll can be run for any custom window (a biweekly cycle,
+  // someone's last two weeks before leaving); a calendar month is simply the
+  // range that happens to start on the 1st and end on the last day, and the
+  // screens format it that way when it does. See PayrollService.periodRange.
+  periodStart DateTime @db.Date
+  periodEnd   DateTime @db.Date
 
   status PayrollInvoiceStatus @default(SUBMITTED)
 
@@ -1206,9 +1211,9 @@ model PayrollInvoice {
   // must not be reclassified by whatever the switch happens to be set to.
   isTestData Boolean @default(false)
 
-  // One invoice per person per month — resubmitting upserts this row rather
-  // than creating a second one.
-  @@unique([userId, month])
+  // One invoice per person per period — resubmitting the same range upserts
+  // this row rather than creating a second one.
+  @@unique([userId, periodStart, periodEnd])
   @@index([status])
   @@index([userId])
 }

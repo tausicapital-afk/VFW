@@ -349,7 +349,7 @@ export class AdminService {
   // The sales panel under a user's details is NOT served from here. It is
   // `GET /api/payroll/sales`, because the figures are payroll's and the rule
   // about who may read whose is payroll's too — an admin route would have been
-  // a second answer to both. See PayrollService.monthSales.
+  // a second answer to both. See PayrollService.periodSales.
 
   async pendingUsers() {
     return {

@@ -3,9 +3,10 @@ import { useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import { api } from '../lib/api';
 import { can } from '../lib/acl';
-import { monthKey, monthLabel, shiftMonth } from '../lib/attendance';
+import { dayKey } from '../lib/attendance';
 import { downloadFile } from '../lib/export';
 import { fmtDate, money } from '../lib/format';
+import { currentMonthPeriod, isCalendarMonth, periodLabel, shiftMonthPeriod } from '../lib/period';
 import { TestTag, useTestRow } from '../lib/testData';
 import type {
   PayrollInvoiceRow, PayrollInvoiceStatus, PayrollRun, PayrollSheet, PayrollStatement, PayType,
@@ -14,6 +15,9 @@ import { Avatar } from '../shell/Avatar';
 import { ExportMenu } from '../shell/ExportMenu';
 import { Page, ROLE_LABEL } from '../shell/Shell';
 import { UserSalesCard } from './UserSalesCard';
+
+/** Inclusive `YYYY-MM-DD` bounds — see lib/period.ts. */
+type Period = { from: string; to: string };
 
 const INVOICE_PILL: Record<PayrollInvoiceStatus, string> = {
   SUBMITTED: 'PENDING', APPROVED: 'APPROVED', REJECTED: 'REJECTED',
@@ -75,59 +79,120 @@ export function Payroll() {
   );
 }
 
+/**
+ * Steps a calendar month at a time by default — the common case, and the one
+ * every payroll period used to be — with a "Custom range" escape hatch onto
+ * two plain date inputs for anything else: a biweekly cycle, someone's last
+ * two weeks before leaving, a one-off correction window.
+ *
+ * "Custom" is a UI mode the person chose, not something derived from the
+ * value: picking two dates that happen to bound a calendar month must not
+ * silently flip the control back to the month stepper mid-edit.
+ */
+function PeriodPicker({ period, onChange }: { period: Period; onChange: (next: Period) => void }) {
+  const [custom, setCustom] = useState(() => !isCalendarMonth(period.from, period.to));
+
+  if (custom) {
+    return (
+      <>
+        <input
+          type="date"
+          value={period.from}
+          max={period.to || undefined}
+          onChange={(e) => onChange({ ...period, from: e.target.value })}
+        />
+        <span className="mut">–</span>
+        <input
+          type="date"
+          value={period.to}
+          min={period.from || undefined}
+          onChange={(e) => onChange({ ...period, to: e.target.value })}
+        />
+        <button
+          className="btn sm"
+          onClick={() => { setCustom(false); onChange(currentMonthPeriod()); }}
+        >
+          Back to months
+        </button>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <button className="btn sm" onClick={() => onChange(shiftMonthPeriod(period, -1))}>‹</button>
+      <b style={{ minWidth: 150, textAlign: 'center' }}>{periodLabel(period.from, period.to)}</b>
+      <button className="btn sm" onClick={() => onChange(shiftMonthPeriod(period, 1))}>›</button>
+      <button className="btn sm" title="Pick any date range" onClick={() => setCustom(true)}>
+        Custom range…
+      </button>
+    </>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // One person's statement
 // ---------------------------------------------------------------------------
 
 /**
- * `initialMonth` is what the run was showing when somebody opened this person:
- * arriving at the current month after clicking a row in March's run would be the
- * screen quietly answering a different question than the one that was asked.
+ * `initialPeriod` is what the run was showing when somebody opened this
+ * person: arriving at the current month after clicking a row in March's run
+ * would be the screen quietly answering a different question than the one
+ * that was asked.
  */
-function MyPay({ userId, initialMonth }: { userId?: string; initialMonth?: string } = {}) {
+function MyPay({ userId, initialPeriod }: { userId?: string; initialPeriod?: Period } = {}) {
   const qc = useQueryClient();
   const { user } = useAuth();
-  const [month, setMonth] = useState(() => initialMonth ?? monthKey(new Date()));
+  const [period, setPeriod] = useState<Period>(() => initialPeriod ?? currentMonthPeriod());
   const [payslipError, setPayslipError] = useState<string | null>(null);
   const mine = !userId || userId === user?.id;
+  const validRange = !!period.from && !!period.to && period.to >= period.from;
 
   const { data: sheet, error } = useQuery({
-    queryKey: ['payroll', month, userId ?? 'me'],
+    queryKey: ['payroll', period.from, period.to, userId ?? 'me'],
     queryFn: () =>
-      api.get<PayrollSheet>(`/api/payroll?month=${month}` + (userId ? `&userId=${userId}` : '')),
+      api.get<PayrollSheet>(
+        `/api/payroll?from=${period.from}&to=${period.to}` + (userId ? `&userId=${userId}` : ''),
+      ),
+    enabled: validRange,
   });
 
   const submit = useMutation({
-    mutationFn: () => api.post<PayrollInvoiceRow>('/api/payroll/submit', { month }),
+    mutationFn: () =>
+      api.post<PayrollInvoiceRow>('/api/payroll/submit', { from: period.from, to: period.to }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['payroll'] }),
   });
 
-  const future = month > monthKey(new Date());
+  const noun = isCalendarMonth(period.from, period.to) ? 'month' : 'period';
+  const future = period.to > dayKey(new Date());
   const invoice = sheet?.invoice ?? null;
   const staleSnapshot = invoice != null && invoice.gross !== sheet?.pay.gross;
 
   return (
     <>
       <div className="toolbar" style={{ marginBottom: 14 }}>
-        <button className="btn sm" onClick={() => setMonth((m) => shiftMonth(m, -1))}>‹</button>
-        <b style={{ minWidth: 150, textAlign: 'center' }}>{monthLabel(month)}</b>
-        <button className="btn sm" onClick={() => setMonth((m) => shiftMonth(m, 1))}>›</button>
+        <PeriodPicker period={period} onChange={setPeriod} />
         {invoice && (
           <span className={`pill ${INVOICE_PILL[invoice.status]}`}>{INVOICE_LABEL[invoice.status]}</span>
         )}
         <div className="sp" style={{ flex: 1 }} />
-        <PayslipButton month={month} userId={userId} disabled={!sheet} onError={setPayslipError} />
+        <PayslipButton period={period} userId={userId} disabled={!sheet} onError={setPayslipError} />
         {mine && (
           <button
             className="btn sm primary"
-            disabled={future || invoice?.status === 'APPROVED' || submit.isPending}
+            disabled={!validRange || future || invoice?.status === 'APPROVED' || submit.isPending}
             onClick={() => submit.mutate()}
           >
-            {submit.isPending ? 'Submitting…' : invoice ? 'Resubmit this month' : 'Submit this month'}
+            {submit.isPending ? 'Submitting…' : invoice ? `Resubmit this ${noun}` : `Submit this ${noun}`}
           </button>
         )}
       </div>
 
+      {!validRange && (
+        <div className="note" style={{ marginBottom: 14 }}>
+          Pick a start and an end date, with the end on or after the start.
+        </div>
+      )}
       {payslipError && (
         <div className="errbox" style={{ marginBottom: 12 }}>{payslipError}</div>
       )}
@@ -138,7 +203,7 @@ function MyPay({ userId, initialMonth }: { userId?: string; initialMonth?: strin
 
       {sheet && invoice && staleSnapshot && (
         <div className="note warn" style={{ marginBottom: 14 }}>
-          The submitted figure ({money(invoice.gross, 'CAD')}) no longer matches this month's live
+          The submitted figure ({money(invoice.gross, 'CAD')}) no longer matches this {noun}'s live
           statement below ({money(sheet.pay.gross, 'CAD')}) — an attendance day or a sale was
           corrected since it was submitted. {mine ? 'Resubmit to update it.' : ''}
         </div>
@@ -157,17 +222,17 @@ function MyPay({ userId, initialMonth }: { userId?: string; initialMonth?: strin
       {sheet && (
         <>
           <div className="split">
-            <Statement statement={sheet} month={month} />
+            <Statement statement={sheet} period={period} />
             <ProfileCard statement={sheet} />
           </div>
 
           {/* The detail behind the commission line above: which sales made it,
-              and who they were sold to. Pinned to this screen's month rather
-              than stepping on its own — two month controls on one page would be
-              two answers to what is being shown. */}
+              and who they were sold to. Pinned to this screen's period rather
+              than stepping on its own — two period controls on one page would
+              be two answers to what is being shown. */}
           <div className="card" style={{ marginTop: 16 }}>
             <div className="bd">
-              <UserSalesCard userId={sheet.user.id} month={month} />
+              <UserSalesCard userId={sheet.user.id} period={period} />
             </div>
           </div>
         </>
@@ -177,23 +242,23 @@ function MyPay({ userId, initialMonth }: { userId?: string; initialMonth?: strin
 }
 
 /**
- * Download this month as a payslip.
+ * Download this period as a payslip.
  *
  * Not an `<ExportMenu>`: that renders a *table* in three formats, and a payslip
- * is one person's month with the arithmetic shown beside each figure — the two
+ * is one person's period with the arithmetic shown beside each figure — the two
  * spreadsheet formats would be a two-column Item/Value sheet nobody asked for.
  * So it is a single button onto a single document, the way the invoice PDF on a
  * submission is, and it goes through `downloadFile` for the same reason that one
  * does: the bytes need the session cookie, so it cannot be a bare `<a href>`.
  *
  * The error surfaces to the caller rather than inside the button, because the
- * one that matters is a 403 on somebody else's month, and that belongs beside
+ * one that matters is a 403 on somebody else's pay, and that belongs beside
  * the statement it was refused for, not in a tooltip.
  */
 function PayslipButton({
-  month, userId, disabled, onError,
+  period, userId, disabled, onError,
 }: {
-  month: string;
+  period: Period;
   userId?: string;
   disabled?: boolean;
   onError: (message: string | null) => void;
@@ -206,9 +271,12 @@ function PayslipButton({
     try {
       // The server names the file (Content-Disposition); this is only the
       // fallback for a browser that cannot read the header.
+      const fallback = isCalendarMonth(period.from, period.to)
+        ? period.from.slice(0, 7)
+        : `${period.from}_${period.to}`;
       await downloadFile(
-        `/api/payroll/payslip.pdf?month=${month}` + (userId ? `&userId=${userId}` : ''),
-        `payslip-${month}.pdf`,
+        `/api/payroll/payslip.pdf?from=${period.from}&to=${period.to}` + (userId ? `&userId=${userId}` : ''),
+        `payslip-${fallback}.pdf`,
       );
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Could not build the payslip');
@@ -225,14 +293,14 @@ function PayslipButton({
 }
 
 /** The money, shown as arithmetic rather than as a total to be taken on faith. */
-function Statement({ statement, month }: { statement: PayrollStatement; month: string }) {
+function Statement({ statement, period }: { statement: PayrollStatement; period: Period }) {
   const { pay, sales, attendance } = statement;
   const unpaid = Number(pay.commissionUnpaid);
 
   return (
     <div className="card">
       <div className="hd">
-        <h3>{monthLabel(month)}</h3>
+        <h3>{periodLabel(period.from, period.to)}</h3>
         <div className="sp" style={{ flex: 1 }} />
         <span className={`pill ${pay.payType === 'COMMISSION_ONLY' ? 'DRAFT' : 'EXPORTED'}`}>
           {payBasis(pay.payType, pay.earnsCommission)}
@@ -380,12 +448,14 @@ function Kpi({ label, value, note, accent }: { label: string; value: string; not
 // ---------------------------------------------------------------------------
 
 function Run() {
-  const [month, setMonth] = useState(() => monthKey(new Date()));
+  const [period, setPeriod] = useState<Period>(() => currentMonthPeriod());
   const [open, setOpen] = useState<{ id: string; name: string } | null>(null);
+  const validRange = !!period.from && !!period.to && period.to >= period.from;
 
   const { data: run, error } = useQuery({
-    queryKey: ['payroll', 'run', month],
-    queryFn: () => api.get<PayrollRun>(`/api/payroll/run?month=${month}`),
+    queryKey: ['payroll', 'run', period.from, period.to],
+    queryFn: () => api.get<PayrollRun>(`/api/payroll/run?from=${period.from}&to=${period.to}`),
+    enabled: validRange,
   });
 
   if (open) {
@@ -395,7 +465,7 @@ function Run() {
           <button className="btn sm" onClick={() => setOpen(null)}>‹ Back to the run</button>
           <b>{open.name}</b>
         </div>
-        <MyPay userId={open.id} initialMonth={month} />
+        <MyPay userId={open.id} initialPeriod={period} />
       </>
     );
   }
@@ -403,13 +473,16 @@ function Run() {
   return (
     <>
       <div className="toolbar" style={{ marginBottom: 14 }}>
-        <button className="btn sm" onClick={() => setMonth((m) => shiftMonth(m, -1))}>‹</button>
-        <b style={{ minWidth: 150, textAlign: 'center' }}>{monthLabel(month)}</b>
-        <button className="btn sm" onClick={() => setMonth((m) => shiftMonth(m, 1))}>›</button>
+        <PeriodPicker period={period} onChange={setPeriod} />
         <div className="sp" style={{ flex: 1 }} />
-        <ExportMenu dataset="payroll" params={{ month }} />
+        <ExportMenu dataset="payroll" params={{ from: period.from, to: period.to }} />
       </div>
 
+      {!validRange && (
+        <div className="note" style={{ marginBottom: 14 }}>
+          Pick a start and an end date, with the end on or after the start.
+        </div>
+      )}
       {error && <div className="errbox" style={{ marginBottom: 12 }}>{(error as Error).message}</div>}
 
       {run && (
@@ -423,7 +496,7 @@ function Run() {
 
           <div className="card">
             <div className="hd">
-              <h3>Everyone, {monthLabel(month)}</h3>
+              <h3>Everyone, {periodLabel(period.from, period.to)}</h3>
               <div className="sp" style={{ flex: 1 }} />
               <span className="sm mut">All figures in CAD</span>
             </div>
@@ -489,7 +562,7 @@ function Run() {
           </div>
 
           <div className="note" style={{ marginTop: 14 }}>
-            Nothing here is stored — the month is worked out fresh from the sales, the timesheets and
+            Nothing here is stored — the period is worked out fresh from the sales, the timesheets and
             the pay setup each time it is opened. Correcting an attendance day or amending a sale is
             reflected immediately, so this is a view of the period rather than an approved run.
           </div>
@@ -541,7 +614,7 @@ function Approvals() {
             <table>
               <thead>
                 <tr>
-                  <th>Person</th><th>Month</th>
+                  <th>Person</th><th>Period</th>
                   <th style={{ textAlign: 'right' }}>Hours</th>
                   <th style={{ textAlign: 'right' }}>Base</th>
                   <th style={{ textAlign: 'right' }}>Commission</th>
@@ -561,7 +634,7 @@ function Approvals() {
                         </div>
                       </div>
                     </td>
-                    <td className="sm">{monthLabel(inv.month)}</td>
+                    <td className="sm">{periodLabel(inv.periodStart.slice(0, 10), inv.periodEnd.slice(0, 10))}</td>
                     <td style={{ textAlign: 'right' }}>{inv.hours}</td>
                     <td style={{ textAlign: 'right' }}>{money(inv.base, 'CAD')}</td>
                     <td style={{ textAlign: 'right' }}>{money(inv.commission, 'CAD')}</td>
@@ -605,6 +678,7 @@ function InvoiceActionModal({
   const [commission, setCommission] = useState(invoice.commission);
   const [note, setNote] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const label = periodLabel(invoice.periodStart.slice(0, 10), invoice.periodEnd.slice(0, 10));
 
   const run = useMutation({
     mutationFn: () => {
@@ -621,7 +695,7 @@ function InvoiceActionModal({
   });
 
   const title =
-    kind === 'edit' ? `Edit ${invoice.user?.name}'s payroll — ${monthLabel(invoice.month)}`
+    kind === 'edit' ? `Edit ${invoice.user?.name}'s payroll — ${label}`
     : kind === 'approve' ? `Approve ${invoice.user?.name}'s payroll`
     : `Reject ${invoice.user?.name}'s payroll`;
 
@@ -638,7 +712,7 @@ function InvoiceActionModal({
 
         <div className="bd">
           <div className="totals" style={{ marginBottom: 16 }}>
-            <div className="r"><span>Month</span><span>{monthLabel(invoice.month)}</span></div>
+            <div className="r"><span>Period</span><span>{label}</span></div>
             <div className="r"><span>Submitted gross</span><span>{money(invoice.gross, 'CAD')}</span></div>
           </div>
 
@@ -674,7 +748,7 @@ function InvoiceActionModal({
           )}
 
           {kind === 'approve' && (
-            <p className="sm mut">This locks the figures above and marks the month paid out.</p>
+            <p className="sm mut">This locks the figures above and marks the period paid out.</p>
           )}
 
           {error && <div className="note bad" style={{ marginTop: 12 }}>{error}</div>}

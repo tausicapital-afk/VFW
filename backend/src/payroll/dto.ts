@@ -2,13 +2,20 @@ import { Type } from 'class-transformer';
 import {
   IsNumber, IsOptional, IsString, Matches, MaxLength, Min, MinLength,
 } from 'class-validator';
-
-/** Same month shape the attendance screen uses — payroll runs on its hours. */
-export const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+import { DATE_RE } from '../attendance/dto';
 
 export class PayrollQueryDto {
-  @IsOptional() @Matches(MONTH_RE, { message: 'month must look like 2026-07' })
-  month?: string;
+  /**
+   * The period to read, as an inclusive date range — not always a calendar
+   * month. Both or neither: the service defaults to the calendar month in
+   * progress when both are omitted, and refuses a lone `from` or `to` as the
+   * screen bug it would be.
+   */
+  @IsOptional() @Matches(DATE_RE, { message: 'from must look like 2026-08-01' })
+  from?: string;
+
+  @IsOptional() @Matches(DATE_RE, { message: 'to must look like 2026-08-31' })
+  to?: string;
 
   /**
    * Whose pay. Omitted means your own — the only value a caller without
@@ -19,12 +26,17 @@ export class PayrollQueryDto {
   userId?: string;
 }
 
-/** Submitting your own month's statement as a payroll invoice. Always yourself
- *  — there is no userId here, the same rule attendance's ClockDto/mark path
- *  follows for a self-report. */
+/** Submitting your own period's statement as a payroll invoice. Always
+ *  yourself — there is no userId here, the same rule attendance's
+ *  ClockDto/mark path follows for a self-report. Both bounds are required: a
+ *  submission freezes an explicit range, never an implicit "whatever period
+ *  the screen happened to be showing". */
 export class SubmitPayrollDto {
-  @Matches(MONTH_RE, { message: 'month must look like 2026-07' })
-  month: string;
+  @Matches(DATE_RE, { message: 'from must look like 2026-08-01' })
+  from: string;
+
+  @Matches(DATE_RE, { message: 'to must look like 2026-08-31' })
+  to: string;
 }
 
 /**

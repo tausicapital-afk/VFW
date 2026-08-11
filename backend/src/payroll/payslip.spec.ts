@@ -40,9 +40,11 @@ const SALES = 'marielle@vanfashionweek.com';
 const OTHER_SALES = 'diego@vanfashionweek.com';
 
 // A month of its own, far from anything the rest of the suite touches — and in
-// the *past*, because one of these tests submits the month as a payroll invoice
-// and `submitMine` rightly refuses a month that has not happened yet.
+// the *past*, because one of these tests submits the period as a payroll
+// invoice and `submitMine` rightly refuses one that has not finished yet.
 const MONTH = '2019-03';
+const FROM = '2019-03-01';
+const TO = '2019-03-31';
 const IN_MONTH = new Date('2019-03-11T12:00:00Z');
 
 const isPdf = (b: Buffer) => b.length > 800 && b.subarray(0, 5).toString('latin1') === '%PDF-';
@@ -152,7 +154,9 @@ describe('payslip', () => {
     await prisma.attendanceEntry.deleteMany({
       where: { date: { gte: new Date('2019-03-01'), lt: new Date('2019-04-01') } },
     });
-    await prisma.payrollInvoice.deleteMany({ where: { month: MONTH } });
+    await prisma.payrollInvoice.deleteMany({
+      where: { periodStart: new Date(`${FROM}T00:00:00Z`), periodEnd: new Date(`${TO}T00:00:00Z`) },
+    });
     await prisma.auditEntry.deleteMany({ where: { action: 'PAYSLIP_GENERATED' } });
     await setPay('COMMISSION_ONLY', '0');
   });
@@ -166,7 +170,7 @@ describe('payslip', () => {
   it('gives every role their own payslip', async () => {
     for (const cookie of [sales, mgr, acct, admin]) {
       const res = await rawBody(
-        http(app).get(`/api/payroll/payslip.pdf?month=${MONTH}`).set('Cookie', cookie),
+        http(app).get(`/api/payroll/payslip.pdf?from=${FROM}&to=${TO}`).set('Cookie', cookie),
       ).expect(200);
       expect(res.headers['content-type']).toContain('application/pdf');
       expect(isPdf(res.body as Buffer)).toBe(true);
@@ -178,14 +182,14 @@ describe('payslip', () => {
 
   it("refuses a rep someone else's payslip", async () => {
     await http(app)
-      .get(`/api/payroll/payslip.pdf?month=${MONTH}&userId=${otherId}`)
+      .get(`/api/payroll/payslip.pdf?from=${FROM}&to=${TO}&userId=${otherId}`)
       .set('Cookie', sales)
       .expect(403);
   });
 
   it("refuses a sales manager the team's payslips, though they may read the same people's hours", async () => {
     await http(app)
-      .get(`/api/payroll/payslip.pdf?month=${MONTH}&userId=${salesId}`)
+      .get(`/api/payroll/payslip.pdf?from=${FROM}&to=${TO}&userId=${salesId}`)
       .set('Cookie', mgr)
       .expect(403);
     await http(app).get(`/api/attendance/team?month=${MONTH}`).set('Cookie', mgr).expect(200);
@@ -195,27 +199,32 @@ describe('payslip', () => {
     for (const cookie of [acct, admin]) {
       const res = await rawBody(
         http(app)
-          .get(`/api/payroll/payslip.pdf?month=${MONTH}&userId=${salesId}`)
+          .get(`/api/payroll/payslip.pdf?from=${FROM}&to=${TO}&userId=${salesId}`)
           .set('Cookie', cookie),
       ).expect(200);
       expect(isPdf(res.body as Buffer)).toBe(true);
     }
   });
 
-  it('names the file after the person and the month, not just "payslip"', async () => {
+  it('names the file after the person and the period, not just "payslip"', async () => {
     const res = await http(app)
-      .get(`/api/payroll/payslip.pdf?month=${MONTH}&userId=${salesId}`)
+      .get(`/api/payroll/payslip.pdf?from=${FROM}&to=${TO}&userId=${salesId}`)
       .set('Cookie', acct)
       .expect(200);
     // VFW-1001 is Marielle's employee id in the seed. A download that collided
-    // with last month's is a download somebody silently overwrites.
+    // with an earlier one is a download somebody silently overwrites. FROM–TO
+    // is exactly one calendar month, so the file keeps the shorter '2019-03' slug.
     expect(res.headers['content-disposition']).toBe(
       `attachment; filename="payslip-vfw-1001-${MONTH}.pdf"`,
     );
   });
 
-  it('rejects a malformed month rather than quietly returning the current one', async () => {
-    await http(app).get('/api/payroll/payslip.pdf?month=April').set('Cookie', sales).expect(400);
+  it('rejects a malformed period rather than quietly returning the current month', async () => {
+    await http(app).get(`/api/payroll/payslip.pdf?from=April&to=${TO}`).set('Cookie', sales).expect(400);
+  });
+
+  it('refuses a lone `to` with no `from`', async () => {
+    await http(app).get(`/api/payroll/payslip.pdf?to=${TO}`).set('Cookie', sales).expect(400);
   });
 
   // --- The figures ----------------------------------------------------------
@@ -228,13 +237,14 @@ describe('payslip', () => {
     await sale({ taxable: '5000', commissionAmount: '400', payStatus: 'UNPAID' });
 
     const screen = (
-      await http(app).get(`/api/payroll?month=${MONTH}`).set('Cookie', sales).expect(200)
+      await http(app).get(`/api/payroll?from=${FROM}&to=${TO}`).set('Cookie', sales).expect(200)
     ).body;
-    const { data } = await payroll.payslip({ month: MONTH }, salesActor);
+    const { data } = await payroll.payslip({ from: FROM, to: TO }, salesActor);
 
     // Not a second assertion of the arithmetic — a proof that the document and
     // the screen are the same numbers. The maths is pinned in payroll.spec.ts.
-    expect(data.month).toBe(screen.month);
+    expect(data.period.from).toBe(screen.from);
+    expect(data.period.to).toBe(screen.to);
     expect(data.pay.base).toBe(screen.pay.base);
     expect(data.pay.baseHours).toBe(screen.pay.baseHours);
     expect(data.pay.commission).toBe(screen.pay.commission);
@@ -259,7 +269,7 @@ describe('payslip', () => {
   });
 
   it('carries the whole person, which is half of what a payslip is for', async () => {
-    const { data } = await payroll.payslip({ month: MONTH }, salesActor);
+    const { data } = await payroll.payslip({ from: FROM, to: TO }, salesActor);
 
     expect(data.person.name).toBe('Marielle Fontaine');
     expect(data.person.employeeId).toBe('VFW-1001');
@@ -272,7 +282,7 @@ describe('payslip', () => {
   it('states the pay basis honestly when somebody is not on commission', async () => {
     await setPay('SALARY', '5000.00', false);
 
-    const { data } = await payroll.payslip({ month: MONTH }, salesActor);
+    const { data } = await payroll.payslip({ from: FROM, to: TO }, salesActor);
 
     // The rate stays on the account so an admin gets it back on the way in; a
     // payslip must not let that read as money owed.
@@ -283,27 +293,28 @@ describe('payslip', () => {
     expect(isPdf(await buildPayslipPdf(data))).toBe(true);
   });
 
-  // --- The payroll invoice for the month ------------------------------------
+  // --- The payroll invoice for the period ------------------------------------
 
-  it("reports the month's payroll invoice, its reviewer and the date", async () => {
+  it("reports the period's payroll invoice, its reviewer and the date", async () => {
     await setPay('SALARY', '4000.00');
     await http(app)
       .post('/api/payroll/submit')
       .set('Cookie', sales)
-      .send({ month: MONTH })
+      .send({ from: FROM, to: TO })
       .expect(201);
 
+    const expectedStart = new Date(`${FROM}T00:00:00Z`).toISOString();
     const pending = (
       await http(app).get('/api/payroll/invoices/pending').set('Cookie', acct).expect(200)
-    ).body as { id: string; month: string }[];
-    const mine = pending.find((i) => i.month === MONTH);
+    ).body as { id: string; periodStart: string }[];
+    const mine = pending.find((i) => i.periodStart === expectedStart);
     expect(mine).toBeDefined();
     await http(app)
       .post(`/api/payroll/invoices/${mine!.id}/approve`)
       .set('Cookie', acct)
       .expect(201);
 
-    const { data } = await payroll.payslip({ month: MONTH, userId: salesId }, acctActor);
+    const { data } = await payroll.payslip({ from: FROM, to: TO, userId: salesId }, acctActor);
 
     expect(data.invoice).not.toBeNull();
     expect(data.invoice!.status).toBe('APPROVED');
@@ -316,20 +327,20 @@ describe('payslip', () => {
     expect(data.invoice!.gross).toBe('4000.00');
   });
 
-  it('says so plainly when no invoice has been submitted for the month', async () => {
-    const { data } = await payroll.payslip({ month: MONTH }, salesActor);
+  it('says so plainly when no invoice has been submitted for the period', async () => {
+    const { data } = await payroll.payslip({ from: FROM, to: TO }, salesActor);
     expect(data.invoice).toBeNull();
   });
 
   // --- The trail ------------------------------------------------------------
 
   it('audits the generation, including when it is your own', async () => {
-    await payroll.payslip({ month: MONTH }, salesActor);
+    await payroll.payslip({ from: FROM, to: TO }, salesActor);
 
     const entries = await prisma.auditEntry.findMany({ where: { action: 'PAYSLIP_GENERATED' } });
     expect(entries).toHaveLength(1);
     expect(entries[0].actorId).toBe(salesId);
-    expect(entries[0].payload).toMatchObject({ month: MONTH, userId: salesId, self: true });
+    expect(entries[0].payload).toMatchObject({ from: FROM, to: TO, userId: salesId, self: true });
   });
 
   // --- The renderer, on its own ---------------------------------------------
@@ -337,7 +348,7 @@ describe('payslip', () => {
   it('renders the awkward shapes without throwing', async () => {
     const base: PayslipPdfData = {
       companyName: 'VFW Management Inc.',
-      month: MONTH,
+      period: { from: FROM, to: TO },
       issuedAt: new Date('2019-04-01T12:00:00Z'),
       currency: 'CAD',
       person: {

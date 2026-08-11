@@ -469,14 +469,16 @@ export interface AdminUser extends User {
 }
 
 /**
- * What one account sold this month, shown under their details in Administration.
+ * What one account sold in a period, shown under their details in
+ * Administration.
  *
- * Every figure is CAD and comes from payroll's own aggregate, so it is the month
- * as payroll would pay it: dated by approval, not by submission.
+ * Every figure is CAD and comes from payroll's own aggregate, so it is the
+ * period as payroll would pay it: dated by approval, not by submission.
  */
 export interface UserSales {
-  /** `2026-08` — the month the figures cover. Any month back is fetchable. */
-  month: string;
+  /** Inclusive `YYYY-MM-DD` bounds. Any period back is fetchable. */
+  from: string;
+  to: string;
   user: { id: string; name: string };
   /** The rate on the account now, which is what the NEXT sale will earn. */
   commissionPct: Money;
@@ -536,7 +538,7 @@ export interface PayrollStatement {
     base: Money;
     /**
      * Whether this person is on commission at all — which is what tells a zero
-     * below apart from a month with no sales. It does not zero the figure: a
+     * below apart from a period with no sales. It does not zero the figure: a
      * sale carries the rate it was struck at, so commission earned before the
      * basis changed is still owed.
      */
@@ -550,18 +552,20 @@ export interface PayrollStatement {
 
 export type PayrollInvoiceStatus = 'SUBMITTED' | 'APPROVED' | 'REJECTED';
 
-/** One person's submitted month — a frozen snapshot, not the live statement. */
+/** One person's submitted period — a frozen snapshot, not the live statement.
+ *  Not always a calendar month; see PayrollSheet. */
 export interface PayrollInvoiceRow extends TestFlagged {
   id: string;
   userId: string;
-  month: string;
+  periodStart: string;
+  periodEnd: string;
   status: PayrollInvoiceStatus;
   payType: PayType;
   baseRate: Money;
   hours: Money;
   base: Money;
   commissionPct: Money;
-  /** The pay basis as it stood when the month was frozen. */
+  /** The pay basis as it stood when the period was frozen. */
   earnsCommission: boolean;
   commission: Money;
   gross: Money;
@@ -572,16 +576,23 @@ export interface PayrollInvoiceRow extends TestFlagged {
   user?: { id: string; name: string; colour: string; role: Role; avatarUrl: string | null };
 }
 
-/** One person's month. `self` decides whether the screen says "you" or a name. */
+/**
+ * One person's period. Inclusive `YYYY-MM-DD` bounds — a calendar month is
+ * just the range that happens to run from the 1st to the last day; the screen
+ * can equally show any custom range. `self` decides whether the screen says
+ * "you" or a name.
+ */
 export interface PayrollSheet extends PayrollStatement {
-  month: string;
+  from: string;
+  to: string;
   self: boolean;
-  /** This month's submitted invoice, or null if nothing has been submitted yet. */
+  /** This period's submitted invoice, or null if nothing has been submitted yet. */
   invoice: PayrollInvoiceRow | null;
 }
 
 export interface PayrollRun {
-  month: string;
+  from: string;
+  to: string;
   rows: PayrollStatement[];
   totals: {
     people: number;

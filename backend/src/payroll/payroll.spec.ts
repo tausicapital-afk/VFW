@@ -25,6 +25,8 @@ const OTHER_SALES = 'diego@vanfashionweek.com';
 
 // A month far from anything else the suite touches.
 const MONTH = '2032-05';
+const FROM = '2032-05-01';
+const TO = '2032-05-31';
 const IN_MONTH = new Date('2032-05-14T12:00:00Z');
 const NEXT_MONTH = new Date('2032-06-14T12:00:00Z');
 
@@ -93,7 +95,7 @@ describe('payroll', () => {
 
   const statement = async (cookie: string, userId?: string) => {
     const res = await http(app)
-      .get(`/api/payroll?month=${MONTH}` + (userId ? `&userId=${userId}` : ''))
+      .get(`/api/payroll?from=${FROM}&to=${TO}` + (userId ? `&userId=${userId}` : ''))
       .set('Cookie', cookie)
       .expect(200);
     return res.body;
@@ -238,13 +240,13 @@ describe('payroll', () => {
 
   it('gives every role their own statement', async () => {
     for (const cookie of [sales, mgr, acct, admin]) {
-      await http(app).get(`/api/payroll?month=${MONTH}`).set('Cookie', cookie).expect(200);
+      await http(app).get(`/api/payroll?from=${FROM}&to=${TO}`).set('Cookie', cookie).expect(200);
     }
   });
 
   it("refuses a rep someone else's pay", async () => {
     await http(app)
-      .get(`/api/payroll?month=${MONTH}&userId=${otherId}`)
+      .get(`/api/payroll?from=${FROM}&to=${TO}&userId=${otherId}`)
       .set('Cookie', sales)
       .expect(403);
   });
@@ -252,9 +254,9 @@ describe('payroll', () => {
   it('refuses a sales manager the run, and the team’s individual pay', async () => {
     // A manager reads the team's hours (attendance.viewTeam) but not their
     // salaries — the one place the two modules deliberately diverge.
-    await http(app).get(`/api/payroll/run?month=${MONTH}`).set('Cookie', mgr).expect(403);
+    await http(app).get(`/api/payroll/run?from=${FROM}&to=${TO}`).set('Cookie', mgr).expect(403);
     await http(app)
-      .get(`/api/payroll?month=${MONTH}&userId=${salesId}`)
+      .get(`/api/payroll?from=${FROM}&to=${TO}&userId=${salesId}`)
       .set('Cookie', mgr)
       .expect(403);
     // But the same manager can still see the team's attendance.
@@ -263,7 +265,7 @@ describe('payroll', () => {
 
   it('gives Accounting and Admin the whole run', async () => {
     for (const cookie of [acct, admin]) {
-      await http(app).get(`/api/payroll/run?month=${MONTH}`).set('Cookie', cookie).expect(200);
+      await http(app).get(`/api/payroll/run?from=${FROM}&to=${TO}`).set('Cookie', cookie).expect(200);
     }
   });
 
@@ -274,7 +276,7 @@ describe('payroll', () => {
     await sale({ approvedAt: IN_MONTH, taxable: '10000', commissionAmount: '800' });
 
     const res = await http(app)
-      .get(`/api/payroll/run?month=${MONTH}`)
+      .get(`/api/payroll/run?from=${FROM}&to=${TO}`)
       .set('Cookie', acct)
       .expect(200);
 
@@ -313,22 +315,22 @@ describe('payroll', () => {
    * `GET /api/payroll/sales` — the panel under a statement, and the same panel
    * under a user's details in Administration. One endpoint for both, so the two
    * screens cannot disagree; these tests are what holds it to the *statement's*
-   * definition of the month rather than growing its own.
+   * definition of the period rather than growing its own.
    */
-  describe('the sales behind a month', () => {
+  describe('the sales behind a period', () => {
     const salesPanel = async (cookie: string, q: string, code = 200) => {
       const res = await http(app).get(`/api/payroll/sales?${q}`).set('Cookie', cookie).expect(code);
       return res.body;
     };
 
-    it('breaks the month down by client, biggest first', async () => {
+    it('breaks the period down by client, biggest first', async () => {
       const [first, second] = await prisma.contact.findMany({ take: 2, orderBy: { brand: 'asc' } });
 
       await sale({ approvedAt: IN_MONTH, taxable: '4000', commissionAmount: '320', contactId: first.id });
       await sale({ approvedAt: IN_MONTH, taxable: '1000', commissionAmount: '80', contactId: first.id });
       await sale({ approvedAt: IN_MONTH, taxable: '9000', commissionAmount: '720', contactId: second.id });
 
-      const body = await salesPanel(sales, `month=${MONTH}`);
+      const body = await salesPanel(sales, `from=${FROM}&to=${TO}`);
 
       expect(body.count).toBe(3);
       expect(body.revenue).toBe('14000.00');
@@ -341,12 +343,12 @@ describe('payroll', () => {
       expect(body.clients[1]).toMatchObject({ brand: first.brand, deals: 2, revenue: '5000.00' });
     });
 
-    it('agrees with the statement it sits under, month for month', async () => {
+    it('agrees with the statement it sits under, period for period', async () => {
       await sale({ approvedAt: IN_MONTH, taxable: '10000', commissionAmount: '800' });
       await sale({ approvedAt: NEXT_MONTH, taxable: '50000', commissionAmount: '4000' });
 
       const sheet = await statement(sales);
-      const panel = await salesPanel(sales, `month=${MONTH}`);
+      const panel = await salesPanel(sales, `from=${FROM}&to=${TO}`);
 
       expect(panel.count).toBe(sheet.sales.count);
       expect(panel.revenue).toBe(sheet.sales.revenue);
@@ -354,71 +356,78 @@ describe('payroll', () => {
 
       // And the month next door is genuinely reachable, with its own figures —
       // this is what lets the screens step back through a full history.
-      const next = await salesPanel(sales, 'month=2032-06');
-      expect(next.month).toBe('2032-06');
+      const next = await salesPanel(sales, 'from=2032-06-01&to=2032-06-30');
+      expect(next.from).toBe('2032-06-01');
+      expect(next.to).toBe('2032-06-30');
       expect(next.revenue).toBe('50000.00');
     });
 
-    it('reports an empty month rather than refusing it', async () => {
-      const body = await salesPanel(sales, 'month=2032-11');
+    it('reports an empty period rather than refusing it', async () => {
+      const body = await salesPanel(sales, 'from=2032-11-01&to=2032-11-30');
 
-      expect(body).toMatchObject({ month: '2032-11', count: 0, revenue: '0.00', clients: [] });
+      expect(body).toMatchObject({
+        from: '2032-11-01', to: '2032-11-30', count: 0, revenue: '0.00', clients: [],
+      });
       // The rate on the account still comes back — the panel shows what the next
-      // sale would earn even when the month itself is empty.
+      // sale would earn even when the period itself is empty.
       expect(body.commissionPct).toBe('8.00');
     });
 
-    it('refuses a month that is not a month', async () => {
-      await salesPanel(sales, 'month=May', 400);
+    it('refuses a period whose bounds are not real dates', async () => {
+      await salesPanel(sales, 'from=May&to=2032-05-31', 400);
+    });
+
+    it('refuses a lone `from` with no `to`', async () => {
+      await salesPanel(sales, `from=${FROM}`, 400);
     });
 
     it("is your own by default, and somebody else's only with payroll.viewAll", async () => {
       await sale({ approvedAt: IN_MONTH, taxable: '10000', commissionAmount: '800' });
 
       // Marielle, asking for nobody in particular, gets herself.
-      const own = await salesPanel(sales, `month=${MONTH}`);
+      const own = await salesPanel(sales, `from=${FROM}&to=${TO}`);
       expect(own.user.id).toBe(salesId);
 
       // A manager may read the team's hours but not what they sold for.
-      await salesPanel(mgr, `month=${MONTH}&userId=${salesId}`, 403);
-      await salesPanel(sales, `month=${MONTH}&userId=${otherId}`, 403);
+      await salesPanel(mgr, `from=${FROM}&to=${TO}&userId=${salesId}`, 403);
+      await salesPanel(sales, `from=${FROM}&to=${TO}&userId=${otherId}`, 403);
 
       for (const cookie of [acct, admin]) {
-        const body = await salesPanel(cookie, `month=${MONTH}&userId=${salesId}`);
+        const body = await salesPanel(cookie, `from=${FROM}&to=${TO}&userId=${salesId}`);
         expect(body.user.id).toBe(salesId);
         expect(body.revenue).toBe('10000.00');
       }
     });
 
     it('404s on an account that is not there', async () => {
-      await salesPanel(admin, `month=${MONTH}&userId=not-a-real-id`, 404);
+      await salesPanel(admin, `from=${FROM}&to=${TO}&userId=not-a-real-id`, 404);
     });
   });
 
   // --- Export --------------------------------------------------------------
 
-  it('exports one month of sales by client, under the same scoping as the screen', async () => {
+  it('exports one period of sales by client, under the same scoping as the screen', async () => {
     const contact = await prisma.contact.findFirstOrThrow();
     await sale({ approvedAt: IN_MONTH, taxable: '10000', commissionAmount: '800', contactId: contact.id });
 
     // Your own needs no extra permission — it is the panel you were already reading.
     const file = await http(app)
-      .get(`/api/export/user-sales?format=csv&month=${MONTH}`)
+      .get(`/api/export/user-sales?format=csv&from=${FROM}&to=${TO}`)
       .set('Cookie', sales)
       .expect(200);
     expect(file.text).toContain('Net revenue (CAD)');
     expect(file.text).toContain(contact.brand);
-    // Every row says whose month and which one, so several can be stacked.
-    expect(file.text).toContain(MONTH);
+    // Every row says whose period and which one, so several can be stacked.
+    expect(file.text).toContain(FROM);
     expect(file.text).toContain('Marielle Fontaine');
 
     // Somebody else's is refused exactly where the screen would refuse it.
     await http(app)
-      .get(`/api/export/user-sales?format=csv&month=${MONTH}&userId=${otherId}`)
+      .get(`/api/export/user-sales?format=csv&from=${FROM}&to=${TO}&userId=${otherId}`)
       .set('Cookie', sales)
       .expect(403);
     await http(app)
-      .get(`/api/export/user-sales?format=csv&month=${MONTH}&userId=${salesId}`)
+      .get(`/api/export/user-sales?format=csv&from=${FROM}&to=${TO}&userId=${salesId}`)
       .set('Cookie', acct)
       .expect(200);
   });
@@ -427,18 +436,18 @@ describe('payroll', () => {
     await setPay('SALARY', '4000.00');
 
     const file = await http(app)
-      .get(`/api/export/payroll?format=csv&month=${MONTH}`)
+      .get(`/api/export/payroll?format=csv&from=${FROM}&to=${TO}`)
       .set('Cookie', acct)
       .expect(200);
     expect(file.text).toContain('Marielle Fontaine');
     expect(file.text).toContain('Gross (CAD)');
 
     await http(app)
-      .get(`/api/export/payroll?format=csv&month=${MONTH}`)
+      .get(`/api/export/payroll?format=csv&from=${FROM}&to=${TO}`)
       .set('Cookie', sales)
       .expect(403);
     await http(app)
-      .get(`/api/export/payroll?format=csv&month=${MONTH}`)
+      .get(`/api/export/payroll?format=csv&from=${FROM}&to=${TO}`)
       .set('Cookie', mgr)
       .expect(403);
   });

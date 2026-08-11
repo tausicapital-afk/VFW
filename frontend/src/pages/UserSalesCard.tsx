@@ -1,45 +1,50 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api } from '../lib/api';
-import { monthKey, monthLabel, shiftMonth } from '../lib/attendance';
+import { dayKey } from '../lib/attendance';
 import { money } from '../lib/format';
+import { currentMonthPeriod, periodLabel, shiftMonthPeriod } from '../lib/period';
 import type { UserSales } from '../lib/types';
 import { ExportMenu } from '../shell/ExportMenu';
 
 const cad = (v: string) => money(v, 'CAD');
 
+/** Inclusive `YYYY-MM-DD` bounds — see lib/period.ts. */
+type Period = { from: string; to: string };
+
 /**
- * What one person sold in a month, and to whom.
+ * What one person sold in a period, and to whom.
  *
  * Rendered in two places on purpose, from one endpoint: under a payroll
  * statement, where it is the detail behind the commission line, and under a
  * user's details in Administration, where it is the money a commission rate has
- * actually produced. Anyone who opened both for the same month and found two
+ * actually produced. Anyone who opened both for the same period and found two
  * different answers would be right to trust neither, so there is one component
  * and one query rather than a panel per screen.
  *
- * Pass `month` to pin it to a month the surrounding screen already steps through
- * — Payroll owns a month selector for the whole statement, and a second one
- * inside it would be two controls disagreeing about what is on the page. Leave
- * it out and the card steps months itself, which is what the Administration
- * modal needs: it has no month of its own.
+ * Pass `period` to pin it to whatever the surrounding screen already steps
+ * through — Payroll owns a period selector for the whole statement, and a
+ * second one inside it would be two controls disagreeing about what is on the
+ * page. Leave it out and the card steps calendar months itself, which is what
+ * the Administration modal needs: it has no period of its own.
  *
- * Any month back is reachable either way. Nothing here is stored — the figures
- * are derived from sales already on the books — so history is just an older
- * range, and the export button hands over whichever month is on screen.
+ * Any period back is reachable either way. Nothing here is stored — the
+ * figures are derived from sales already on the books — so history is just an
+ * older range, and the export button hands over whichever period is on screen.
  */
-export function UserSalesCard({ userId, month: pinned }: { userId: string; month?: string }) {
-  const [own, setOwn] = useState(() => monthKey(new Date()));
-  const month = pinned ?? own;
+export function UserSalesCard({ userId, period: pinned }: { userId: string; period?: Period }) {
+  const [own, setOwn] = useState<Period>(() => currentMonthPeriod());
+  const period = pinned ?? own;
   const steps = pinned === undefined;
-  // A sale is dated by its approval, which cannot happen in a month that has not
-  // arrived — so forward from here is always an empty screen, and the button
-  // that leads there is disabled rather than left to disappoint.
-  const atLatest = month >= monthKey(new Date());
+  // A sale is dated by its approval, which cannot happen in a period that has
+  // not arrived — so stepping forward from here is always an empty screen, and
+  // the button that leads there is disabled rather than left to disappoint.
+  const atLatest = period.to >= dayKey(new Date());
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['payroll', 'sales', userId, month],
-    queryFn: () => api.get<UserSales>(`/api/payroll/sales?userId=${userId}&month=${month}`),
+    queryKey: ['payroll', 'sales', userId, period.from, period.to],
+    queryFn: () =>
+      api.get<UserSales>(`/api/payroll/sales?userId=${userId}&from=${period.from}&to=${period.to}`),
   });
 
   const target = Number(data?.target ?? 0);
@@ -55,28 +60,32 @@ export function UserSalesCard({ userId, month: pinned }: { userId: string; month
           <h3>Sales</h3>
           {steps ? (
             <>
-              <button className="btn sm" title="Previous month" onClick={() => setOwn((m) => shiftMonth(m, -1))}>
+              <button
+                className="btn sm"
+                title="Previous month"
+                onClick={() => setOwn((p) => shiftMonthPeriod(p, -1))}
+              >
                 ‹
               </button>
               <span className="n" style={{ minWidth: 118, textAlign: 'center' }}>
-                {monthLabel(month)}
+                {periodLabel(period.from, period.to)}
               </span>
               <button
                 className="btn sm"
                 title={atLatest ? 'No months after this one yet' : 'Next month'}
                 disabled={atLatest}
-                onClick={() => setOwn((m) => shiftMonth(m, 1))}
+                onClick={() => setOwn((p) => shiftMonthPeriod(p, 1))}
               >
                 ›
               </button>
             </>
           ) : (
-            <span className="n">{monthLabel(month)}</span>
+            <span className="n">{periodLabel(period.from, period.to)}</span>
           )}
           <div className="sp" style={{ flex: 1 }} />
           <ExportMenu
             dataset="user-sales"
-            params={{ userId, month }}
+            params={{ userId, from: period.from, to: period.to }}
             disabled={!data?.clients.length}
           />
         </div>
@@ -88,9 +97,9 @@ export function UserSalesCard({ userId, month: pinned }: { userId: string; month
         <div className="note">Loading…</div>
       ) : data.count === 0 ? (
         <div className="note">
-          Nothing approved in {monthLabel(month)}. A sale counts here in the month Accounting
-          approved it, not the month it was submitted — so a deal still in the queue will appear
-          once it is decided.
+          Nothing approved in {periodLabel(period.from, period.to)}. A sale counts here in the
+          period Accounting approved it, not the period it was submitted — so a deal still in the
+          queue will appear once it is decided.
         </div>
       ) : (
         <>

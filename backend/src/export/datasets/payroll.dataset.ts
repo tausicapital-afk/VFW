@@ -70,7 +70,7 @@ const columns: ExportColumn<PayrollRow>[] = [
 ];
 
 /**
- * The month's payroll run, as the screen shows it.
+ * The period's payroll run, as the screen shows it.
  *
  * Carries `payroll.viewAll` rather than relying on `load` to scope the rows: a
  * run is every account by definition, so there is nothing for a row scope to
@@ -83,7 +83,7 @@ export function payrollDataset(payroll: PayrollService): ExportDataset<PayrollRo
     title: 'Payroll',
     filename: 'payroll',
     permission: 'payroll.viewAll',
-    load: async (user, filters) => (await payroll.run({ month: filters.month }, user)).rows,
+    load: async (user, filters) => (await payroll.run({ from: filters.from, to: filters.to }, user)).rows,
     columns,
   };
 }

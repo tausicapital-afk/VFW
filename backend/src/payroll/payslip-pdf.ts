@@ -1,7 +1,7 @@
 import PDFDocument from 'pdfkit';
 
 /**
- * One person's month, rendered as a payslip they can print, keep or forward.
+ * One person's pay period, rendered as a payslip they can print, keep or forward.
  *
  * Deliberately decoupled from Prisma and from PayrollService, exactly as
  * `submissions/invoice-pdf.ts` is: the service maps a statement onto this flat
@@ -29,8 +29,8 @@ export type PayslipInvoiceStatus = 'SUBMITTED' | 'APPROVED' | 'REJECTED';
 
 export interface PayslipPdfData {
   companyName: string;
-  /** 'YYYY-MM' — the period this document is for, and the only period on it. */
-  month: string;
+  /** The inclusive date range this document is for, and the only one on it. */
+  period: { from: string; to: string };
   issuedAt: Date;
   /** The reporting currency. Payroll consolidates to one; there is no per-person currency. */
   currency: string;
@@ -70,7 +70,7 @@ export interface PayslipPdfData {
     gross: string;
   };
 
-  /** This month's payroll invoice, if one has been submitted. */
+  /** This period's payroll invoice, if one has been submitted. */
   invoice: {
     status: PayslipInvoiceStatus;
     submittedAt: Date;
@@ -127,15 +127,45 @@ function money(currency: string, value: string): string {
 const date = (d: Date) =>
   new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: 'short', day: 'numeric' }).format(d);
 
-/** '2026-07' → 'July 2026'. Pinned to UTC so the month never slips by a day. */
-function monthName(month: string): string {
-  const [y, m] = month.split('-').map(Number);
-  if (!y || !m) return month;
+/** Whether `from`/`to` is exactly the 1st through the last day of one month —
+ *  the range every payroll period was, before a custom one could be anything
+ *  else. Restated from PayrollService's own `isCalendarMonth`: this file stays
+ *  free of that module's imports, the same trade its other duplicated wording
+ *  (`payBasis`) already makes. */
+function isCalendarMonth(from: string, to: string): boolean {
+  if (!from.endsWith('-01')) return false;
+  const [y, m] = from.slice(0, 7).split('-').map(Number);
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return to === `${from.slice(0, 7)}-${String(lastDay).padStart(2, '0')}`;
+}
+
+function shortDate(iso: string, withYear: boolean): string {
+  const [y, m, d] = iso.split('-').map(Number);
   return new Intl.DateTimeFormat('en-CA', {
-    month: 'long',
-    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    ...(withYear ? { year: 'numeric' as const } : {}),
     timeZone: 'UTC',
-  }).format(new Date(Date.UTC(y, m - 1, 1)));
+  }).format(new Date(Date.UTC(y, m - 1, d)));
+}
+
+/**
+ * 'August 2026' when the period is exactly that calendar month — which is
+ * what every payslip used to say, so a plain month still reads exactly as it
+ * always did. A genuinely custom range spells out both ends: 'Aug 1 – Aug 15,
+ * 2026', or 'Dec 28, 2026 – Jan 3, 2027' across a year boundary.
+ */
+function periodLabel(from: string, to: string): string {
+  if (isCalendarMonth(from, to)) {
+    const [y, m] = from.split('-').map(Number);
+    return new Intl.DateTimeFormat('en-CA', {
+      month: 'long',
+      year: 'numeric',
+      timeZone: 'UTC',
+    }).format(new Date(Date.UTC(y, m - 1, 1)));
+  }
+  const sameYear = from.slice(0, 4) === to.slice(0, 4);
+  return `${shortDate(from, !sameYear)} – ${shortDate(to, true)}`;
 }
 
 /**
@@ -227,7 +257,7 @@ export function buildPayslipPdf(d: PayslipPdfData): Promise<Buffer> {
 
   doc.font('Helvetica-Bold').fontSize(16).fillColor(INK).text('PAYSLIP', left, 48, { width, align: 'right' });
   doc.font('Helvetica').fontSize(10).fillColor(MUTED);
-  doc.text(monthName(d.month), left, doc.y + 2, { width, align: 'right' });
+  doc.text(periodLabel(d.period.from, d.period.to), left, doc.y + 2, { width, align: 'right' });
   doc.text(`Issued ${date(d.issuedAt)}`, left, doc.y, { width, align: 'right' });
 
   let y = Math.max(doc.y, 112) + 10;
@@ -257,7 +287,7 @@ export function buildPayslipPdf(d: PayslipPdfData): Promise<Buffer> {
     .font('Helvetica')
     .fontSize(10)
     .fillColor(MUTED)
-    .text(`Pay period ${monthName(d.month)}`, left + half + 16, doc.y + 1, { width: half, align: 'right' });
+    .text(`Pay period ${periodLabel(d.period.from, d.period.to)}`, left + half + 16, doc.y + 1, { width: half, align: 'right' });
 
   y = Math.max(leftBottom, doc.y) + 12;
 
@@ -326,7 +356,7 @@ export function buildPayslipPdf(d: PayslipPdfData): Promise<Buffer> {
     ? Number(d.pay.commission) > 0
       ? 'Not on commission — this is what was stamped onto sales closed while they were'
       : 'Not on commission'
-    : `${d.sales.count} sale${d.sales.count === 1 ? '' : 's'} approved this month · ` +
+    : `${d.sales.count} sale${d.sales.count === 1 ? '' : 's'} approved this period · ` +
       `${cash(d.sales.revenue)} net revenue, at the rate recorded on each sale`;
   earning('Commission', commissionDerivation, cash(d.pay.commission));
 
@@ -358,14 +388,14 @@ export function buildPayslipPdf(d: PayslipPdfData): Promise<Buffer> {
     y,
   );
 
-  // --- The payroll invoice, if this month has been claimed ------------------
+  // --- The payroll invoice, if this period has been claimed -----------------
   //
   // The statement above is derived on every read; the invoice is the claim made
   // against it, and it is frozen. Printing both is the point — if the two
   // disagree, a timesheet or a sale moved after the claim was made, and that is
   // precisely what somebody querying their pay has to be able to see.
   if (d.invoice) {
-    y = section('Payroll invoice for this month', y + 2);
+    y = section('Payroll invoice for this period', y + 2);
     y = grid(
       [
         { label: 'Status', value: INVOICE_LABEL[d.invoice.status] },
@@ -392,7 +422,7 @@ export function buildPayslipPdf(d: PayslipPdfData): Promise<Buffer> {
         .fontSize(8.5)
         .fillColor(MUTED)
         .text(
-          `The claim was frozen at ${cash(d.invoice.gross)} and this month now works out at ` +
+          `The claim was frozen at ${cash(d.invoice.gross)} and this period now works out at ` +
             `${cash(d.pay.gross)} — an attendance day or a sale was corrected after it was submitted.`,
           left,
           y,
@@ -421,10 +451,10 @@ export function buildPayslipPdf(d: PayslipPdfData): Promise<Buffer> {
     .fillColor(MUTED)
     .text(
       d.invoice?.status === 'APPROVED'
-        ? `This month was approved on ${d.invoice.reviewedAt ? date(d.invoice.reviewedAt) : 'record'}. ` +
+        ? `This period was approved on ${d.invoice.reviewedAt ? date(d.invoice.reviewedAt) : 'record'}. ` +
             'The figures above are re-derived from the timesheet and the sales ledger each time this is ' +
             'produced and may have moved since; the approved claim is the figure that was paid.'
-        : 'Not an approved payroll run. This month is worked out fresh from the pay setup, the timesheet ' +
+        : 'Not an approved payroll run. This period is worked out fresh from the pay setup, the timesheet ' +
             'and the sales ledger every time it is opened, so correcting an attendance day or amending a ' +
             'sale changes it.',
       left,

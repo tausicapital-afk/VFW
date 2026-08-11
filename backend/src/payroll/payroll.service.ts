@@ -10,9 +10,52 @@ import { ConfigService } from '../config/config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { avatarUrl } from '../profile/avatar';
-import { currentMonth, monthRange, summarise } from '../attendance/attendance.service';
+import { currentMonth, dayKey, parseDay, summarise } from '../attendance/attendance.service';
 import { buildPayslipPdf, type PayslipPdfData } from './payslip-pdf';
 import { EditPayrollInvoiceDto, PayrollQueryDto, RejectPayrollInvoiceDto, SubmitPayrollDto } from './dto';
+
+/**
+ * Inclusive `from`/`to` → the half-open range Prisma's date columns need.
+ * `to` is a whole day, so the exclusive upper bound is the day after it.
+ */
+function periodRange(from: string, to: string): { gte: Date; lt: Date } {
+  const gte = parseDay(from);
+  const end = parseDay(to);
+  if (end < gte) throw new BadRequestException('A period cannot end before it starts');
+  return { gte, lt: new Date(end.getTime() + 24 * 60 * 60 * 1000) };
+}
+
+/** The calendar month a caller who named no period almost certainly meant,
+ *  spelled as the inclusive range every other period is. */
+function defaultPeriod(now = new Date()): { from: string; to: string } {
+  const month = currentMonth(now);
+  const [y, m] = month.split('-').map(Number);
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return { from: `${month}-01`, to: `${month}-${String(lastDay).padStart(2, '0')}` };
+}
+
+/**
+ * A period is both bounds or neither. Defaults to the current calendar month
+ * when the caller named none — the same default `GET /api/payroll` has always
+ * had — and refuses a lone `from` or `to` as the screen bug it would be rather
+ * than guessing which end was meant.
+ */
+function resolvePeriod(query: { from?: string; to?: string }): { from: string; to: string } {
+  if (query.from && query.to) return { from: query.from, to: query.to };
+  if (query.from || query.to) {
+    throw new BadRequestException('A period needs both a start date and an end date');
+  }
+  return defaultPeriod();
+}
+
+/** Whether `from`/`to` is exactly the 1st through the last day of one month —
+ *  the range every period was, before a custom one could be anything else. */
+function isCalendarMonth(from: string, to: string): boolean {
+  if (!from.endsWith('-01')) return false;
+  const [y, m] = from.slice(0, 7).split('-').map(Number);
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return to === `${from.slice(0, 7)}-${String(lastDay).padStart(2, '0')}`;
+}
 
 /**
  * The whole person, which is what a payroll statement needs. Every other screen
@@ -363,11 +406,11 @@ export class PayrollService {
     };
   }
 
-  /** One person's statement for the month. */
+  /** One person's statement for the period. */
   async statementFor(query: PayrollQueryDto, actor: AuthUser) {
     const userId = await this.subject(query.userId, actor);
-    const month = query.month ?? currentMonth();
-    const range = monthRange(month);
+    const { from, to } = resolvePeriod(query);
+    const range = periodRange(from, to);
 
     const person = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -379,14 +422,18 @@ export class PayrollService {
     const sales = (await this.salesByRep(range, fx)).get(userId);
     const attendance = (await this.attendanceByUser(range, [userId])).get(userId);
     const lifetime = (await this.lifetimeEarnedByUser([userId])).get(userId);
-    // This month's payroll invoice, if one has been submitted — lets the screen
-    // show a status pill and compare the frozen snapshot against the live figure.
+    // This period's payroll invoice, if one has been submitted — lets the
+    // screen show a status pill and compare the frozen snapshot against the
+    // live figure.
     const invoice = await this.prisma.payrollInvoice.findUnique({
-      where: { userId_month: { userId, month } },
+      where: {
+        userId_periodStart_periodEnd: { userId, periodStart: parseDay(from), periodEnd: parseDay(to) },
+      },
     });
 
     return {
-      month,
+      from,
+      to,
       self: userId === actor.id,
       invoice,
       ...(await this.statement(person, sales, attendance, lifetime)),
@@ -431,7 +478,7 @@ export class PayrollService {
 
     const data: PayslipPdfData = {
       companyName: settings.company,
-      month: sheet.month,
+      period: { from: sheet.from, to: sheet.to },
       issuedAt: new Date(),
       // Payroll consolidates everything to CAD before it totals anything, so the
       // document states one currency rather than implying a per-person one.
@@ -491,33 +538,39 @@ export class PayrollService {
     await this.audit.log({
       actorId: actor.id,
       action: 'PAYSLIP_GENERATED',
-      detail: `Payslip generated for ${sheet.user.name} — ${sheet.month}`,
+      detail: `Payslip generated for ${sheet.user.name} — ${sheet.from} to ${sheet.to}`,
       payload: {
-        month: sheet.month,
+        from: sheet.from,
+        to: sheet.to,
         userId: sheet.user.id,
         self: sheet.self,
         gross: sheet.pay.gross,
       },
     });
 
-    // Named after the person and the month, not after "payslip": these end up in
-    // one folder, and a download that collides with last month's is a download
-    // somebody silently overwrites.
+    // Named after the person and the period, not after "payslip": these end up
+    // in one folder, and a download that collides with an earlier one is a
+    // download somebody silently overwrites. A period that is exactly a
+    // calendar month keeps the old, shorter '2026-08' slug; a genuinely custom
+    // range spells out both ends.
     const who = (sheet.user.employeeId ?? sheet.user.name)
       .normalize('NFKD')
       .replace(/[^\w-]+/g, '-')
       .replace(/^-+|-+$/g, '')
       .toLowerCase();
+    const period = isCalendarMonth(sheet.from, sheet.to)
+      ? sheet.from.slice(0, 7)
+      : `${sheet.from}_${sheet.to}`;
 
     return {
       buffer: await buildPayslipPdf(data),
-      filename: `payslip-${who || 'employee'}-${sheet.month}.pdf`,
+      filename: `payslip-${who || 'employee'}-${period}.pdf`,
       data,
     };
   }
 
   /**
-   * Everyone's month, one statement each, plus the run total.
+   * Everyone's period, one statement each, plus the run total.
    *
    * Includes accounts that earned nothing — a payroll run that silently omitted
    * someone is the failure mode that matters here, and it is the one nobody
@@ -528,8 +581,8 @@ export class PayrollService {
       throw new ForbiddenException('Your role cannot view the payroll run');
     }
 
-    const month = query.month ?? currentMonth();
-    const range = monthRange(month);
+    const { from, to } = resolvePeriod(query);
+    const range = periodRange(from, to);
 
     const people = await this.prisma.user.findMany({
       where: { deletedAt: null, hidden: false, status: UserStatus.ACTIVE },
@@ -552,7 +605,8 @@ export class PayrollService {
       rows.reduce((sum, row) => sum.plus(new Decimal(pick(row))), new Decimal(0)).toFixed(2);
 
     return {
-      month,
+      from,
+      to,
       rows,
       totals: {
         people: rows.length,
@@ -576,23 +630,23 @@ export class PayrollService {
   }
 
   /**
-   * One account's month of sales, in CAD, and the clients it came from.
+   * One account's period of sales, in CAD, and the clients it came from.
    *
    * Two screens read this — Payroll, under the statement, and Administration,
    * under the user's details — and they read the same thing. It is deliberately
    * the same `salesByRep` the run above pays from rather than a fresh query with
    * its own idea of what a sale is worth: whoever compares the two screens for a
-   * month must not find two answers, so the dating (approvedAt), the FX table
+   * period must not find two answers, so the dating (approvedAt), the FX table
    * and the commission are one definition, in one place.
    *
-   * Any month, not just the current one. The figures are derived on every read
-   * from sales that are already on the books, so an older month is simply an
-   * older range — there is no snapshot to have missed and nothing to backfill.
+   * Any period, not just the current month. The figures are derived on every
+   * read from sales that are already on the books, so an older period is simply
+   * an older range — there is no snapshot to have missed and nothing to backfill.
    *
    * Note what it is not: this is what the account *sold*, not what it will be
    * paid. Base pay, hours and the payroll invoice lifecycle stay on Payroll.
    */
-  async monthSales(userId: string, month: string) {
+  async periodSales(userId: string, from: string, to: string) {
     const person = await this.prisma.user.findFirst({
       where: { id: userId, deletedAt: null },
       select: { id: true, name: true, commissionPct: true, target: true },
@@ -600,7 +654,7 @@ export class PayrollService {
     if (!person) throw new NotFoundException('User not found');
 
     const fx = await this.fxRates();
-    const sales = (await this.salesByRep(monthRange(month), fx, userId)).get(userId);
+    const sales = (await this.salesByRep(periodRange(from, to), fx, userId)).get(userId);
 
     const clients = [...(sales?.clients.values() ?? [])]
       .sort((a, b) => b.revenue.comparedTo(a.revenue) || b.deals - a.deals)
@@ -615,7 +669,8 @@ export class PayrollService {
       }));
 
     return {
-      month,
+      from,
+      to,
       user: { id: person.id, name: person.name },
       // The rate and target on the account NOW, which is what the next sale will
       // earn — not what any of the sales below were struck at. Each of those
@@ -634,14 +689,15 @@ export class PayrollService {
   }
 
   /**
-   * The same month, for whoever asked. `subject` is what decides whose: your own
-   * always, anyone else's only with `payroll.viewAll` — the identical rule the
-   * statement itself is resolved under, so the panel beneath a statement can
-   * never be readable when the statement above it is not.
+   * The same period, for whoever asked. `subject` is what decides whose: your
+   * own always, anyone else's only with `payroll.viewAll` — the identical rule
+   * the statement itself is resolved under, so the panel beneath a statement
+   * can never be readable when the statement above it is not.
    */
   async salesFor(query: PayrollQueryDto, actor: AuthUser) {
     const userId = await this.subject(query.userId, actor);
-    return this.monthSales(userId, query.month ?? currentMonth());
+    const { from, to } = resolvePeriod(query);
+    return this.periodSales(userId, from, to);
   }
 
   /** Single-person convenience — used by the Profile screen. */
@@ -657,27 +713,31 @@ export class PayrollService {
   // ---------------------------------------------------------------------------
 
   /**
-   * Submitting your own month as a payroll invoice. Idempotent: resubmitting a
-   * SUBMITTED or REJECTED month upserts the same row with a fresh snapshot and
-   * clears any previous review; an already-APPROVED month is a decided, frozen
-   * record and refuses a second submission the same way an approved Submission
-   * refuses a plain resubmit — an admin edits it directly instead.
+   * Submitting your own period as a payroll invoice. Idempotent: resubmitting a
+   * SUBMITTED or REJECTED period upserts the same row with a fresh snapshot and
+   * clears any previous review; an already-APPROVED period is a decided,
+   * frozen record and refuses a second submission the same way an approved
+   * Submission refuses a plain resubmit — an admin edits it directly instead.
    */
   async submitMine(dto: SubmitPayrollDto, actor: AuthUser) {
-    if (dto.month > currentMonth()) {
-      throw new BadRequestException('You cannot submit payroll for a month that has not happened yet');
+    periodRange(dto.from, dto.to); // validates the bounds before anything else runs
+    if (dto.to > dayKey(new Date())) {
+      throw new BadRequestException('You cannot submit payroll for a period that has not finished yet');
     }
 
+    const periodStart = parseDay(dto.from);
+    const periodEnd = parseDay(dto.to);
+
     const existing = await this.prisma.payrollInvoice.findUnique({
-      where: { userId_month: { userId: actor.id, month: dto.month } },
+      where: { userId_periodStart_periodEnd: { userId: actor.id, periodStart, periodEnd } },
     });
     if (existing?.status === PayrollInvoiceStatus.APPROVED) {
       throw new BadRequestException(
-        `${dto.month} has already been approved — an admin can edit it directly if it needs to change`,
+        'This period has already been approved — an admin can edit it directly if it needs to change',
       );
     }
 
-    const sheet = await this.statementFor({ month: dto.month }, actor);
+    const sheet = await this.statementFor({ from: dto.from, to: dto.to }, actor);
 
     return this.prisma.$transaction(async (tx) => {
       const snapshot = {
@@ -691,13 +751,14 @@ export class PayrollService {
         gross: sheet.pay.gross,
       };
       const invoice = await tx.payrollInvoice.upsert({
-        where: { userId_month: { userId: actor.id, month: dto.month } },
+        where: { userId_periodStart_periodEnd: { userId: actor.id, periodStart, periodEnd } },
         // The flag is set on the first submit only, and left alone on the
-        // resubmission branch below: a real month someone resubmits during a
-        // demo is still a real month, and it is the one people get paid from.
+        // resubmission branch below: a real period someone resubmits during a
+        // demo is still a real period, and it is the one people get paid from.
         create: {
           userId: actor.id,
-          month: dto.month,
+          periodStart,
+          periodEnd,
           status: PayrollInvoiceStatus.SUBMITTED,
           isTestData: this.config.testDataMode,
           ...snapshot,
@@ -716,8 +777,8 @@ export class PayrollService {
         {
           actorId: actor.id,
           action: 'PAYROLL_SUBMITTED',
-          detail: `Payroll submitted for ${dto.month}`,
-          payload: { month: dto.month, gross: invoice.gross.toString() },
+          detail: `Payroll submitted for ${dto.from} to ${dto.to}`,
+          payload: { from: dto.from, to: dto.to, gross: invoice.gross.toString() },
         },
         tx,
       );
@@ -725,11 +786,11 @@ export class PayrollService {
     });
   }
 
-  /** Your own submission history, newest month first. */
+  /** Your own submission history, most recent period first. */
   async mine(actor: AuthUser) {
     return this.prisma.payrollInvoice.findMany({
       where: { userId: actor.id },
-      orderBy: { month: 'desc' },
+      orderBy: { periodStart: 'desc' },
     });
   }
 
@@ -781,9 +842,10 @@ export class PayrollService {
         {
           actorId: actor.id,
           action: 'PAYROLL_INVOICE_EDITED',
-          detail: `Payroll figures edited for ${invoice.month}: ${dto.note}`,
+          detail: `Payroll figures edited for ${dayKey(invoice.periodStart)} to ${dayKey(invoice.periodEnd)}: ${dto.note}`,
           payload: {
-            month: invoice.month,
+            from: dayKey(invoice.periodStart),
+            to: dayKey(invoice.periodEnd),
             userId: invoice.userId,
             before: {
               base: invoice.base.toString(),
@@ -818,8 +880,13 @@ export class PayrollService {
         {
           actorId: actor.id,
           action: 'PAYROLL_APPROVED',
-          detail: `Payroll approved for ${invoice.month}`,
-          payload: { month: invoice.month, userId: invoice.userId, gross: invoice.gross.toString() },
+          detail: `Payroll approved for ${dayKey(invoice.periodStart)} to ${dayKey(invoice.periodEnd)}`,
+          payload: {
+            from: dayKey(invoice.periodStart),
+            to: dayKey(invoice.periodEnd),
+            userId: invoice.userId,
+            gross: invoice.gross.toString(),
+          },
         },
         tx,
       );
@@ -846,8 +913,8 @@ export class PayrollService {
         {
           actorId: actor.id,
           action: 'PAYROLL_REJECTED',
-          detail: `Payroll rejected for ${invoice.month}: ${dto.reason}`,
-          payload: { month: invoice.month, userId: invoice.userId },
+          detail: `Payroll rejected for ${dayKey(invoice.periodStart)} to ${dayKey(invoice.periodEnd)}: ${dto.reason}`,
+          payload: { from: dayKey(invoice.periodStart), to: dayKey(invoice.periodEnd), userId: invoice.userId },
         },
         tx,
       );
