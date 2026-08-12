@@ -19,6 +19,31 @@ export const PUBLIC_KEY = 'vfw:public';
 /** Opt an endpoint out of authentication entirely (login, health). */
 export const Public = () => SetMetadata(PUBLIC_KEY, true);
 
+/**
+ * Set by the mobile app on every request (see vfw-console-mobile's
+ * src/api/client.ts). The browser SPA never sends this — it authenticates
+ * with the httpOnly cookie alone and has no reason to identify itself.
+ */
+export const MOBILE_CLIENT_HEADER = 'x-client';
+
+export function isMobileClient(req: Request): boolean {
+  return req.headers[MOBILE_CLIENT_HEADER] === 'mobile';
+}
+
+/**
+ * A bare React Native client has no shared cookie jar with the API's
+ * origin the way a browser does, so it authenticates with the session JWT
+ * as a plain bearer token instead of the httpOnly cookie. Same token, same
+ * `verifySession()` below either way — a mobile session is exactly as
+ * revocable (tokenVersion, active-account check) as a browser one.
+ */
+function extractBearerToken(req: Request): string | undefined {
+  const header = req.headers.authorization;
+  if (!header) return undefined;
+  const [scheme, token] = header.split(' ');
+  return scheme?.toLowerCase() === 'bearer' && token ? token : undefined;
+}
+
 export const PERMISSION_KEY = 'vfw:permission';
 /** Require an ACL permission. Authentication is implied. */
 export const Can = (permission: Permission) => SetMetadata(PERMISSION_KEY, permission);
@@ -92,9 +117,11 @@ export async function verifySession(
 }
 
 /**
- * One guard for both concerns: it verifies the session cookie, then checks the
- * ACL permission the route declared. Applied globally, so an endpoint is
- * locked down unless it is explicitly marked @Public().
+ * One guard for both concerns: it verifies the session — cookie for the
+ * browser SPA, `Authorization: Bearer` for the mobile app (see
+ * extractBearerToken above) — then checks the ACL permission the route
+ * declared. Applied globally, so an endpoint is locked down unless it is
+ * explicitly marked @Public().
  */
 @Injectable()
 export class AuthGuard implements CanActivate {
@@ -118,7 +145,8 @@ export class AuthGuard implements CanActivate {
     if (isPublic) return true;
 
     const req = ctx.switchToHttp().getRequest<Request & { user?: AuthUser }>();
-    const payload = await verifySession(this.jwt, this.prisma, req.cookies?.[SESSION_COOKIE]);
+    const token = req.cookies?.[SESSION_COOKIE] ?? extractBearerToken(req);
+    const payload = await verifySession(this.jwt, this.prisma, token);
     req.user = payload;
 
     const permission = this.reflector.getAllAndOverride<Permission>(PERMISSION_KEY, [

@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Post, Req, Res } from '@nestjs/common';
 import { Request, Response } from 'express';
-import { AuthUser, CurrentUser, Public } from '../common/auth.guard';
+import { AuthUser, CurrentUser, Public, isMobileClient } from '../common/auth.guard';
 import { SESSION_COOKIE, sessionCookie } from '../common/cookie';
 import { AuthService } from './auth.service';
 import { ForgotDto, LoginDto, ResendOtpDto, ResetDto, SignupDto, VerifyOtpDto } from './dto';
@@ -22,10 +22,15 @@ export class AuthController {
     const { token, user } = await this.auth.login(dto.email, dto.password, ctx);
 
     // httpOnly, so a script on the page can never read the session. The SPA
-    // sends it automatically via credentials:"include".
+    // sends it automatically via credentials:"include". Set unconditionally —
+    // harmless for the mobile app too, which never reads cookies.
     res.cookie(SESSION_COOKIE, token, sessionCookie((dto.remember ? 30 : 1) * DAY_MS));
 
-    return { user };
+    // The mobile app has no cookie jar shared with the API's origin, so it
+    // authenticates with this same JWT as a bearer token instead (see
+    // AuthGuard.canActivate). Only handed back when asked for — the browser
+    // SPA never sends X-Client, so its response shape is unchanged.
+    return { user, ...(isMobileClient(req) ? { token } : {}) };
   }
 
   @Post('logout')
@@ -60,11 +65,16 @@ export class AuthController {
    */
   @Public()
   @Post('verify-otp')
-  async verifyOtp(@Body() dto: VerifyOtpDto, @Res({ passthrough: true }) res: Response) {
+  async verifyOtp(
+    @Body() dto: VerifyOtpDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const { token, user } = await this.auth.verifyOtp(dto);
     // A freshly verified session lasts a day, like a login without "remember me".
     res.cookie(SESSION_COOKIE, token, sessionCookie(DAY_MS));
-    return { user };
+    // See login() above — same additive bearer token for the mobile app.
+    return { user, ...(isMobileClient(req) ? { token } : {}) };
   }
 
   @Public()

@@ -49,10 +49,13 @@ type AuthedSocket = Socket & { data: { user?: AuthUser } };
  * The real-time surface. Mounted at `/api/socket.io` so it rides through the
  * same nginx front door as the REST API (see frontend/nginx.conf.template).
  *
- * Authentication is the SAME session cookie the REST API uses, verified with the
+ * Authentication is the SAME session the REST API uses, verified with the
  * shared `verifySession` helper on the handshake — a global HTTP guard cannot
- * reach a WebSocket handshake, so this is where the door is. `cors.credentials`
- * is on so the browser sends the cookie during the upgrade.
+ * reach a WebSocket handshake, so this is where the door is. The browser SPA
+ * sends the session cookie (`cors.credentials` is on so it rides the
+ * upgrade); the mobile app has no cookie jar, so it puts the same JWT in the
+ * handshake's `auth.token` instead (socket.io-client's `io(url, { auth: {
+ * token } })`) — same fallback order as AuthGuard.canActivate.
  *
  * Presence is in-memory: one process, one map of who is connected. That is
  * correct for a single backend instance; scaling past one needs the socket.io
@@ -119,7 +122,10 @@ export class MessagingGateway
   async handleConnection(socket: AuthedSocket) {
     let user: AuthUser;
     try {
-      const token = readCookie(socket.handshake.headers.cookie, SESSION_COOKIE);
+      const authToken = socket.handshake.auth?.token;
+      const token =
+        readCookie(socket.handshake.headers.cookie, SESSION_COOKIE) ??
+        (typeof authToken === 'string' ? authToken : undefined);
       user = await verifySession(this.jwt, this.prisma, token);
     } catch {
       // No valid session — nothing on the other end is entitled to anything.

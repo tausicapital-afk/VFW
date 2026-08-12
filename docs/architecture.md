@@ -256,6 +256,52 @@ Closing it is three things:
 `TRUST_PROXY_HOPS` must be re-measured with `GET /api/health/ip` when (2) lands:
 the change removes a hop from the chain, and a stale count is its own bug.
 
+### The mobile app authenticates with a bearer token, not the cookie
+
+`vfw-console-mobile` (`D:\mobile\vfw-console-mobile`, see its `docs/plan.md`)
+is a bare React Native client, not a browser — it has no cookie jar shared
+with the API's origin, so the httpOnly session cookie above doesn't reach it.
+Rather than fork the login flow, the same session JWT is handed back as a
+plain bearer token, **additively**, only when asked for:
+
+- The mobile app sends `X-Client: mobile` on every request
+  (`vfw-console-mobile/src/api/client.ts`).
+- `POST /api/auth/login` and `POST /api/auth/verify-otp` still set the
+  `vfw_session` cookie unconditionally (harmless for mobile, which never
+  reads it), and now also return `{ user, token }` — instead of just
+  `{ user }` — whenever `isMobileClient(req)` is true
+  (`backend/src/common/auth.guard.ts`). The browser SPA never sends the
+  header, so its response shape is byte-for-byte unchanged.
+- `AuthGuard.canActivate` resolves the session token from
+  `req.cookies[SESSION_COOKIE] ?? extractBearerToken(req)` — the cookie wins
+  if both are somehow present, but in practice each client only ever sends
+  one. Either way it's the exact same `verifySession()` call, so a bearer
+  session is exactly as revocable (tokenVersion, active-account re-check) as
+  a cookie one — there is no second, weaker auth path.
+- `MessagingGateway.handleConnection` (the WebSocket handshake) applies the
+  same fallback: the session cookie header, or — if absent —
+  `socket.handshake.auth.token`, which is where socket.io-client's
+  `io(url, { auth: { token } })` puts it.
+
+**There is still only one session JWT, not an access/refresh pair.** It
+lives up to 30 days ("remember me") or 1 day otherwise, same as the cookie's
+`maxAge`, and there is no `/api/auth/refresh` endpoint. The mobile app
+re-validates a stored token against `GET /api/auth/me` on launch and drops
+it (back to the login screen) on any 401 — see `vfw-console-mobile/src/lib/
+session.ts`. Whether that needs to become a real refresh flow is an open
+question, not a decision — see that repo's `docs/plan.md` §6.
+
+**Mobile should point at the frontend's public URL, not the backend's.**
+The single-public-front-door goal in §5's "one thing still worth doing"
+above — closing the backend's own Railway domain so the frontend's nginx
+proxy is the only public entry point — still holds for mobile. `frontend/
+nginx.conf.template`'s `/api/` block passes the `Authorization` header
+through untouched (`proxy_pass_request_headers on`), so mobile hitting
+`https://<frontend-domain>/api/...` works exactly like hitting the backend
+directly, without reopening the second front door. In local dev, where there
+is no nginx in front of anything, mobile points at the backend's own
+`localhost` port instead — see `vfw-console-mobile/.env.example`.
+
 ---
 
 ## 6. Layout
