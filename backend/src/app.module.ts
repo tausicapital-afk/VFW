@@ -27,6 +27,7 @@ import { PrismaModule } from './prisma/prisma.service';
 import { PayrollModule } from './payroll/payroll.controller';
 import { ProfileModule } from './profile/profile.controller';
 import { FxModule } from './fx/fx.controller';
+import { QboModule } from './qbo/qbo.controller';
 import { ReportsModule } from './reports/reports.controller';
 import { StorageModule } from './storage/storage.service';
 import { SubmissionsModule } from './submissions/submissions.controller';
@@ -66,6 +67,7 @@ import { TestDataModule } from './testdata/test-data.controller';
     PayrollModule,
     TestDataModule,
     ExportModule,
+    QboModule,
   ],
   controllers: [AuthController],
   providers: [

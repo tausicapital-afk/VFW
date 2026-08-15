@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { fmtDate, money } from '../lib/format';
 import { TestTag, useTestRow } from '../lib/testData';
@@ -72,8 +73,16 @@ const TABS = [
 
 type TabKey = (typeof TABS)[number][0];
 
+const TAB_KEYS = new Set<string>(TABS.map(([key]) => key));
+
 export function Admin() {
-  const [tab, setTab] = useState<TabKey>('invites');
+  // Query param wins on first render only — a redirect back from an external
+  // flow (e.g. the QuickBooks OAuth callback lands on /admin?tab=config) needs
+  // to open on the right tab; after that, clicking around is plain local state
+  // and the URL is not kept in sync with it.
+  const [searchParams] = useSearchParams();
+  const fromUrl = searchParams.get('tab');
+  const [tab, setTab] = useState<TabKey>(TAB_KEYS.has(fromUrl ?? '') ? (fromUrl as TabKey) : 'invites');
 
   return (
     <Page crumb="System" title="Administration">

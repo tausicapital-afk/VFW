@@ -160,6 +160,9 @@ model User {
   payrollInvoicesSubmitted PayrollInvoice[] @relation("PayrollInvoiceSubject")
   payrollInvoicesReviewed  PayrollInvoice[] @relation("PayrollInvoiceReviewer")
 
+  qboConnections      QboConnection[]
+  qboMappingsUpdated  QboMapping[]
+
   @@index([role, status])
 }
 
@@ -516,6 +519,16 @@ model Submission {
   returnNote   String?
   exportedAt   DateTime?
   qbDocNumber  String?
+  // The real QuickBooks object id (Invoice.Id / SalesReceipt.Id) once posted —
+  // qbDocNumber is the human-facing DocNumber, this is what a future lookup or
+  // amendment would address. Null for anything exported before the live
+  // connection existed, or while it stays stubbed (no connection configured).
+  qboInvoiceId String?
+  // The live push's failure message, if the last attempt did not reach
+  // QuickBooks. Export does NOT move APPROVED -> EXPORTED on failure — the
+  // record stays APPROVED so accounting sees it as still needing action, and
+  // this field carries why. Cleared on the next successful export.
+  qboSyncError String?
   // Unique, because it is now hand-editable as well as allocated. While the only
   // way to get one was `allocateInvoice` — a row-locked increment — uniqueness was
   // a property of how it was produced. Once a person can type it, the database has
@@ -740,7 +753,6 @@ model Settings {
   nextSubmissionSeq   Int      @default(1001)
   // Discounts above this percentage need explicit accounting sign-off.
   discountApprovalPct Decimal  @default(15) @db.Decimal(5, 2)
-  qbRealmId           String?
   // FX rates to CAD, the reporting currency. Held here so Accounting can
   // update them without a deploy.
   fxRates             Json     @default("{\"CAD\":1,\"USD\":1.37,\"GBP\":1.74,\"EUR\":1.49,\"JPY\":0.0092}")
@@ -845,6 +857,76 @@ model MailAccount {
   // the same mailbox, reached two different ways).
   @@unique([provider, host, username, fromAddress])
   @@index([isActive])
+}
+
+// ---------------------------------------------------------------------------
+// QuickBooks Online — the OAuth connection and the mapping from VFW's own
+// codes to QuickBooks' object ids.
+//
+// A single row (id fixed at 1, same convention as Settings): one QBO company
+// connected at a time, matching "one book" the rest of the schema assumes.
+// `accessToken`/`refreshToken` are AES-256-GCM ciphertext, same as MailAccount's
+// password and ConfigSetting's secrets — see config.crypto.ts. The access token
+// is short-lived (Intuit: ~1 hour) and refreshed automatically; the refresh
+// token is long-lived but expires after 100 days of *inactivity*, which is why
+// `refreshTokenExpiresAt` is tracked separately — past it, the connection is
+// dead and an admin must reconnect from the console, not something code can
+// recover from.
+// ---------------------------------------------------------------------------
+model QboConnection {
+  id Int @id @default(1)
+
+  // sandbox | production. Which Intuit API host this connection talks to —
+  // decided at connect time by the QBO_ENVIRONMENT config field, stored here too
+  // so a later config change doesn't retroactively reinterpret a live token.
+  environment String
+
+  // The QBO company id ("realm") this connection is authorized against. Every
+  // Accounting API call is scoped under /v3/company/{realmId}/... Replaces the
+  // old Settings.qbRealmId placeholder, which an admin would have had to type
+  // in by hand — this one is populated by the OAuth callback itself.
+  realmId     String
+  companyName String?
+
+  accessToken           String
+  accessTokenExpiresAt  DateTime
+  refreshToken          String
+  refreshTokenExpiresAt DateTime
+
+  connectedAt   DateTime @default(now())
+  connectedById String?
+  connectedBy   User?    @relation(fields: [connectedById], references: [id])
+
+  updatedAt DateTime @updatedAt
+}
+
+enum QboMappingKind {
+  TAX
+  GL
+  DEPARTMENT
+}
+
+// A local VFW code has no relationship to a QuickBooks object id — "HST-ON" and
+// a QBO TaxCode are two different companies' vocabularies. Rather than guess or
+// hardcode a correspondence, an admin maps each local code to a real QBO object
+// once (picked from a live browse of that QBO company's Accounts/TaxCodes/
+// Classes — see QboMappingService.browse), and export refuses to post a line
+// whose code has no mapping rather than posting it against the wrong account.
+model QboMapping {
+  id          String         @id @default(cuid())
+  kind        QboMappingKind
+  // TaxProfile.code, GlAccount.code, or Submission.department, depending on kind.
+  localCode   String
+  qboId       String
+  // Captured at mapping time purely so the admin screen can show a name instead
+  // of a bare id without a live QBO call on every page load. Not authoritative —
+  // qboId is what export actually sends.
+  qboLabel    String
+  updatedAt   DateTime       @updatedAt
+  updatedById String?
+  updatedBy   User?          @relation(fields: [updatedById], references: [id])
+
+  @@unique([kind, localCode])
 }
 
 // ---------------------------------------------------------------------------

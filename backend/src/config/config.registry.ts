@@ -45,7 +45,7 @@ export interface ConfigField {
 }
 
 export interface ConfigGroup {
-  id: 'email' | 'storage' | 'data';
+  id: 'email' | 'storage' | 'quickbooks' | 'data';
   title: string;
   blurb: string;
   /** Keys that must all resolve to a value for the group to be usable. */
@@ -137,6 +137,41 @@ export const CONFIG_GROUPS: ConfigGroup[] = [
         type: 'text',
         required: true,
         help: 'The bucket documents are stored in.',
+      },
+    ],
+  },
+  {
+    id: 'quickbooks',
+    title: 'QuickBooks Online',
+    blurb:
+      'The Intuit app credentials that let this console connect to QuickBooks Online. Set these ' +
+      'first, then use the Connect button below to authorize a specific QuickBooks company — the ' +
+      'credentials here identify the app, not a company connection by themselves.',
+    requiredKeys: ['QBO_CLIENT_ID', 'QBO_CLIENT_SECRET'],
+    fields: [
+      {
+        key: 'QBO_ENVIRONMENT',
+        label: 'Environment',
+        type: 'select',
+        options: ['sandbox', 'production'],
+        help:
+          'Sandbox talks to a test QuickBooks company for trying this out safely; production posts ' +
+          'to the real book. Switching this does not move an existing connection — reconnect after ' +
+          'changing it.',
+      },
+      {
+        key: 'QBO_CLIENT_ID',
+        label: 'Client ID',
+        type: 'text',
+        required: true,
+        help: 'From the app you registered at developer.intuit.com — the sandbox and production keys are different.',
+      },
+      {
+        key: 'QBO_CLIENT_SECRET',
+        label: 'Client secret',
+        type: 'secret',
+        required: true,
+        help: 'The secret half of the same app credential. Stored encrypted; leave blank to keep the current one.',
       },
     ],
   },

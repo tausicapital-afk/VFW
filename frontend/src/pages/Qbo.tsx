@@ -1,18 +1,23 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
+import { useAuth } from '../auth/AuthContext';
 import { api } from '../lib/api';
+import { can } from '../lib/acl';
 import { fmtDate, money } from '../lib/format';
 import { TestTag, useTestRow } from '../lib/testData';
-import type { Submission } from '../lib/types';
+import type { QboScreenStatus, Submission } from '../lib/types';
 import { ExportMenu } from '../shell/ExportMenu';
 import { Page } from '../shell/Shell';
 
 /**
- * The QuickBooks payload is an export *format*, not a change of record — it is
- * built here, on the client, from the same submission the server already priced.
- * Posting it (POST /api/submissions/:id/export) is the part that mutates state:
- * it moves APPROVED -> EXPORTED and stores the QBO document number. The OAuth
- * transport is out of scope and stubbed server-side.
+ * An *estimate* of the QuickBooks payload, built here on the client from the
+ * same submission the server already priced, so the modal has something to
+ * show before posting. It is not what actually gets sent once QuickBooks is
+ * connected: the real post (POST /api/submissions/:id/export) resolves each
+ * line's Customer/Item/tax/department against QuickBooks itself — a real
+ * object id, not the id/code shown here — via QboExportService server-side.
+ * Without a connection, export still moves APPROVED -> EXPORTED and records
+ * this as the invoice number, but nothing reaches QuickBooks.
  */
 function qboPayload(s: Submission, docType: string): Record<string, unknown> {
   const lines: Record<string, unknown>[] = [
@@ -72,16 +77,22 @@ function qboPayload(s: Submission, docType: string): Record<string, unknown> {
 }
 
 export function Qbo() {
+  const { user } = useAuth();
   const testRow = useTestRow();
   const { data, isLoading } = useQuery({
     queryKey: ['submissions'],
     queryFn: () => api.get<Submission[]>('/api/submissions'),
+  });
+  const { data: qboStatus } = useQuery({
+    queryKey: ['qbo', 'status'],
+    queryFn: () => api.get<QboScreenStatus>('/api/qbo/status'),
   });
 
   const [exporting, setExporting] = useState<Submission | null>(null);
 
   const ready = (data ?? []).filter((s) => s.status === 'APPROVED');
   const done = (data ?? []).filter((s) => s.status === 'EXPORTED');
+  const failed = ready.filter((s) => s.qboSyncError);
 
   const readyTable = (rows: Submission[], exported: boolean) =>
     rows.length ? (
@@ -101,13 +112,17 @@ export function Qbo() {
                 <td><b>{s.contact.brand}</b></td>
                 <td className="num">{money(s.total, s.currency)}</td>
                 <td className="sm">
-                  {exported
-                    ? fmtDate(s.exportedAt)
-                    : <span className="pill APPROVED">Ready</span>}
+                  {exported ? (
+                    fmtDate(s.exportedAt)
+                  ) : s.qboSyncError ? (
+                    <span className="pill REJECTED" title={s.qboSyncError}>Failed</span>
+                  ) : (
+                    <span className="pill APPROVED">Ready</span>
+                  )}
                 </td>
                 <td>
                   <button className="btn sm" onClick={() => setExporting(s)}>
-                    {exported ? 'View' : 'Export'}
+                    {exported ? 'View' : s.qboSyncError ? 'Retry' : 'Export'}
                   </button>
                 </td>
               </tr>
@@ -137,11 +152,25 @@ export function Qbo() {
         </div>
       </div>
 
-      <div className="note" style={{ marginBottom: 16 }}>
-        Only approved submissions can be exported. The payload preview is the JSON body that would
-        be posted to the QBO <span className="mono">invoice</span> or{' '}
-        <span className="mono">salesreceipt</span> endpoint — the OAuth transport is stubbed.
-      </div>
+      {qboStatus && !qboStatus.connected && (
+        <div className="note warn" style={{ marginBottom: 16 }}>
+          <b>QuickBooks is not connected.</b> Exporting still moves a submission to Exported and
+          allocates an invoice number, but nothing is posted to QuickBooks until a company is
+          connected.
+          {can('admin.manage', user?.role) && (
+            <> <a href="/admin?tab=config">Connect it under Administration → Configuration.</a></>
+          )}
+        </div>
+      )}
+      {qboStatus?.connected && (
+        <div className="note" style={{ marginBottom: 16 }}>
+          Connected to <b>{qboStatus.companyName || 'QuickBooks'}</b> ({qboStatus.environment}).
+          {failed.length > 0 && (
+            <> <b>{failed.length}</b> approved submission{failed.length === 1 ? '' : 's'} failed to
+              post last time — open one below to see why and retry.</>
+          )}
+        </div>
+      )}
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="hd"><h3>Ready to export</h3></div>
@@ -210,20 +239,27 @@ function ExportModal({ sub, onClose }: { sub: Submission; onClose: () => void })
               Exported as <b>{sub.qbDocNumber}</b> on {fmtDate(sub.exportedAt)}.
             </div>
           ) : (
-            <div className="fields" style={{ marginBottom: 12 }}>
-              <div className="f">
-                <label>Document type</label>
-                <select value={docType} onChange={(e) => setDocType(e.target.value)}>
-                  <option>Invoice</option>
-                  <option>Sales Receipt</option>
-                </select>
-                <div className="help">
-                  {sub.payStatus === 'PAID'
-                    ? 'Paid in full — a sales receipt is the usual choice.'
-                    : 'Balance outstanding — an invoice keeps the receivable open.'}
+            <>
+              {sub.qboSyncError && (
+                <div className="note bad" style={{ marginBottom: 12 }}>
+                  <b>Last attempt failed:</b> {sub.qboSyncError}
+                </div>
+              )}
+              <div className="fields" style={{ marginBottom: 12 }}>
+                <div className="f">
+                  <label>Document type</label>
+                  <select value={docType} onChange={(e) => setDocType(e.target.value)}>
+                    <option>Invoice</option>
+                    <option>Sales Receipt</option>
+                  </select>
+                  <div className="help">
+                    {sub.payStatus === 'PAID'
+                      ? 'Paid in full — a sales receipt is the usual choice.'
+                      : 'Balance outstanding — an invoice keeps the receivable open.'}
+                  </div>
                 </div>
               </div>
-            </div>
+            </>
           )}
           <div className="sm mut" style={{ marginBottom: 6 }}>Payload preview</div>
           <pre className="code" style={{ maxHeight: 320, overflow: 'auto' }}>
@@ -239,7 +275,7 @@ function ExportModal({ sub, onClose }: { sub: Submission; onClose: () => void })
               disabled={run.isPending}
               onClick={() => { setError(null); run.mutate(); }}
             >
-              {run.isPending ? 'Posting…' : 'Post & mark exported'}
+              {run.isPending ? 'Posting…' : sub.qboSyncError ? 'Retry export' : 'Post & mark exported'}
             </button>
           )}
         </div>

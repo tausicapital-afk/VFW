@@ -3,6 +3,7 @@ import type { Response } from 'express';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser, Can, CurrentUser } from '../common/auth.guard';
 import { PricingService } from '../pricing/pricing.service';
+import { QboModule } from '../qbo/qbo.controller';
 import {
   ApproveDto,
   CreateSubmissionDto,
@@ -168,6 +169,7 @@ export class SubmissionsController {
   // InstallmentsController is registered after SubmissionsController, but the
   // two cannot collide: every instalment route carries an extra path segment, so
   // `:id` never swallows it.
+  imports: [QboModule],
   controllers: [SubmissionsController, InstallmentsController],
   providers: [SubmissionsService, InstallmentsService, PricingService],
   // Exported so ContactsService can reuse scopeFor() rather than reinventing it.

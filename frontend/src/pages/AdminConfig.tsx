@@ -1,9 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
+import { fmtDate } from '../lib/format';
 import type {
-  ConfigField, ConfigGroup, ConfigState, ConfigTestResult, EnvPanelRow,
+  AdminCatalogue, ConfigField, ConfigGroup, ConfigState, ConfigTestResult, EnvPanelRow,
   MailAccount, MailAccountInput, MailAccountsState,
+  QboBrowseOption, QboMapping, QboMappingKind, QboStatus,
   TestDataMarkResult, TestDataSummary,
 } from '../lib/types';
 
@@ -50,6 +53,12 @@ export function ConfigTab() {
               rows are and this decides what old ones were, and reading one
               without the other leaves you thinking the switch did nothing. */}
           {g.id === 'data' && <TestDataCard />}
+          {/* Same reasoning as the test-data backfill above: the connection
+              card and the mappings it unlocks belong directly under the
+              credential fields that make them possible, not in a card of
+              their own elsewhere on the page. */}
+          {g.id === 'quickbooks' && <QboConnectionCard />}
+          {g.id === 'quickbooks' && <QboMappingsCard />}
         </div>
       ))}
 
@@ -382,6 +391,292 @@ function MailAccountForm({
           {isNew ? 'Add account' : 'Save changes'}
         </button>
         <button className="btn" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// QuickBooks Online — the connection itself, then the mappings it unlocks.
+//
+// The Client ID/secret/environment fields render for free from the generic
+// group loop above (group id 'quickbooks'); those only identify the Intuit
+// app. This card is the actual company connection, which needs its own UI
+// because it isn't a form field — it's a redirect to Intuit's consent screen
+// and back. The redirect back lands on /admin?tab=config&qbo=connected|error,
+// which Admin.tsx reads to pick this tab and this card reads to show the
+// outcome once.
+// ---------------------------------------------------------------------------
+
+function QboConnectionCard() {
+  const qc = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { data } = useQuery({
+    queryKey: ['admin', 'qbo', 'status'],
+    queryFn: () => api.get<QboStatus>('/api/admin/qbo/status'),
+  });
+
+  const callbackResult = searchParams.get('qbo');
+  const callbackMessage = searchParams.get('qboMessage');
+
+  // The callback already changed the connection server-side by the time the
+  // browser lands back here — refetch once rather than trusting a cache that
+  // predates the redirect.
+  useEffect(() => {
+    if (callbackResult) void qc.invalidateQueries({ queryKey: ['admin', 'qbo', 'status'] });
+  }, [callbackResult, qc]);
+
+  const dismissCallback = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('qbo');
+    next.delete('qboMessage');
+    setSearchParams(next, { replace: true });
+  };
+
+  const disconnect = useMutation({
+    mutationFn: () => api.post<QboStatus>('/api/admin/qbo/disconnect'),
+    onSuccess: (s) => qc.setQueryData(['admin', 'qbo', 'status'], s),
+  });
+
+  if (!data) return null;
+
+  return (
+    <div className="card" style={{ marginBottom: 16 }}>
+      <div className="hd">
+        <h3>Connection</h3>
+        <div className="sp" style={{ flex: 1 }} />
+        <span className={'pill ' + (data.connected && !data.refreshTokenExpired ? 'APPROVED' : 'RETURNED')}>
+          {data.connected ? (data.refreshTokenExpired ? 'Expired' : 'Connected') : 'Not connected'}
+        </span>
+      </div>
+      <div className="bd">
+        {callbackResult === 'connected' && (
+          <div className="note good rowflex" style={{ marginTop: 0, marginBottom: 12, gap: 8 }}>
+            <span style={{ flex: 1 }}>Connected to QuickBooks Online.</span>
+            <button className="btn sm" onClick={dismissCallback}>Dismiss</button>
+          </div>
+        )}
+        {callbackResult === 'error' && (
+          <div className="note bad rowflex" style={{ marginTop: 0, marginBottom: 12, gap: 8 }}>
+            <span style={{ flex: 1 }}>{callbackMessage || 'Could not connect to QuickBooks.'}</span>
+            <button className="btn sm" onClick={dismissCallback}>Dismiss</button>
+          </div>
+        )}
+
+        {data.connected ? (
+          <>
+            <p className="sm" style={{ marginTop: 0 }}>
+              <b>{data.companyName || data.realmId}</b>{' '}
+              <span className="mut">· {data.environment}</span>
+            </p>
+            <p className="sm mut">Connected {data.connectedAt ? fmtDate(data.connectedAt) : '—'}.</p>
+            {data.refreshTokenExpired && (
+              <div className="note bad" style={{ marginTop: 8 }}>
+                This connection has expired — QuickBooks connections go stale after 100 days
+                unused. Reconnect below; exports fall back to recording locally without posting
+                until you do.
+              </div>
+            )}
+          </>
+        ) : (
+          <p className="sm mut" style={{ marginTop: 0 }}>
+            Not connected. Exports still move a submission to <b>Exported</b> and allocate an
+            invoice number, but nothing is posted to QuickBooks until a company is connected here.
+          </p>
+        )}
+      </div>
+      <div className="ft">
+        {data.connected && (
+          <button
+            className="btn"
+            disabled={disconnect.isPending}
+            onClick={() => {
+              if (confirm('Disconnect QuickBooks? Exports go back to recording locally, without posting, until you reconnect.')) {
+                disconnect.mutate();
+              }
+            }}
+          >
+            {disconnect.isPending ? 'Disconnecting…' : 'Disconnect'}
+          </button>
+        )}
+        {/* A plain link, not a mutation: this has to leave the SPA entirely for
+            Intuit's consent screen, then come back via the server-side
+            redirect above — not something a fetch-based click handler does. */}
+        <a className="btn primary" href="/api/admin/qbo/connect">
+          {data.connected ? 'Reconnect' : 'Connect to QuickBooks'}
+        </a>
+      </div>
+    </div>
+  );
+}
+
+const QBO_KIND_LABEL: Record<QboMappingKind, string> = {
+  TAX: 'Tax profiles', GL: 'GL accounts', DEPARTMENT: 'Departments',
+};
+const QBO_KIND_HELP: Record<QboMappingKind, string> = {
+  TAX: 'Which QuickBooks tax code an invoice posts under, per VFW tax profile.',
+  GL: 'Which QuickBooks income account a new catalogue item is created under, per VFW GL account.',
+  DEPARTMENT: 'Which QuickBooks location an invoice is tagged with, per VFW department.',
+};
+// Mirrors Admin.tsx's DEPARTMENTS — kept as its own small copy rather than a
+// cross-file import, since importing it back would make this file and
+// Admin.tsx import each other.
+const QBO_DEPARTMENTS = [
+  'Sales', 'Accounting', 'Marketing', 'Production', 'Media', 'International', 'Administration',
+];
+
+/**
+ * The local-code -> QuickBooks-object mappings export needs before it will
+ * post a line — see QboMapping in schema.prisma for why these can't be
+ * inferred. Local codes come from VFW's own catalogue (tax profiles, GL
+ * accounts) or the fixed department list, so a mapping can't point at a code
+ * that doesn't exist; the QuickBooks side is a live browse of the connected
+ * company so it can't point at a QBO object that doesn't exist either.
+ */
+function QboMappingsCard() {
+  const qc = useQueryClient();
+  const mappingsKey = ['admin', 'qbo', 'mappings'];
+
+  const { data: status } = useQuery({
+    queryKey: ['admin', 'qbo', 'status'],
+    queryFn: () => api.get<QboStatus>('/api/admin/qbo/status'),
+  });
+  const { data: mappings } = useQuery({
+    queryKey: mappingsKey,
+    queryFn: () => api.get<QboMapping[]>('/api/admin/qbo/mappings'),
+  });
+  const { data: catalogue } = useQuery({
+    queryKey: ['admin', 'catalogue'],
+    queryFn: () => api.get<AdminCatalogue>('/api/admin/catalogue'),
+  });
+
+  const [kind, setKind] = useState<QboMappingKind>('TAX');
+  const [localCode, setLocalCode] = useState('');
+  const [qboId, setQboId] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const { data: options } = useQuery({
+    queryKey: ['admin', 'qbo', 'browse', kind],
+    queryFn: () => api.get<QboBrowseOption[]>(`/api/admin/qbo/browse/${kind}`),
+    enabled: Boolean(status?.connected),
+  });
+
+  const localOptions: { code: string; label: string }[] =
+    kind === 'TAX'
+      ? (catalogue?.taxes ?? []).map((t) => ({ code: t.code, label: `${t.code} — ${t.label}` }))
+      : kind === 'GL'
+        ? (catalogue?.glAccounts ?? []).map((g) => ({ code: g.code, label: `${g.code} — ${g.name}` }))
+        : QBO_DEPARTMENTS.map((d) => ({ code: d, label: d }));
+
+  const save = useMutation({
+    mutationFn: () => {
+      const opt = options?.find((o) => o.id === qboId);
+      if (!opt) throw new Error('Choose a QuickBooks object to map to.');
+      return api.post<QboMapping>('/api/admin/qbo/mappings', {
+        kind, localCode, qboId: opt.id, qboLabel: opt.name,
+      });
+    },
+    onSuccess: () => {
+      setLocalCode(''); setQboId(''); setError(null);
+      void qc.invalidateQueries({ queryKey: mappingsKey });
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
+  const remove = useMutation({
+    mutationFn: (id: string) => api.del(`/api/admin/qbo/mappings/${id}`),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: mappingsKey }),
+  });
+
+  if (!status?.connected) {
+    return (
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="hd"><h3>Mappings</h3></div>
+        <div className="bd">
+          <p className="sm mut" style={{ marginTop: 0, marginBottom: 0 }}>
+            Connect QuickBooks above to map tax profiles, GL accounts and departments — the picker
+            below reads the connected company's live chart of accounts.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card" style={{ marginBottom: 16 }}>
+      <div className="hd"><h3>Mappings</h3></div>
+      <div className="bd">
+        <p className="sm mut" style={{ marginTop: 0 }}>
+          Export refuses to post a line whose tax profile, GL account or department has no mapping
+          here — a clear error beats money landing in the wrong QuickBooks account.
+        </p>
+
+        {(Object.keys(QBO_KIND_LABEL) as QboMappingKind[]).map((k) => {
+          const rows = (mappings ?? []).filter((m) => m.kind === k);
+          if (!rows.length) return null;
+          return (
+            <div key={k} style={{ marginBottom: 16 }}>
+              <div className="b" style={{ marginBottom: 4 }}>{QBO_KIND_LABEL[k]}</div>
+              <div className="tbl-wrap">
+                <table>
+                  <thead><tr><th>VFW code</th><th>QuickBooks</th><th /></tr></thead>
+                  <tbody>
+                    {rows.map((m) => (
+                      <tr key={m.id}>
+                        <td className="mono sm">{m.localCode}</td>
+                        <td>{m.qboLabel}</td>
+                        <td>
+                          <button className="btn sm" onClick={() => remove.mutate(m.id)}>Remove</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })}
+
+        <div className="fields">
+          <div className="f">
+            <label>Kind</label>
+            <select
+              value={kind}
+              onChange={(e) => { setKind(e.target.value as QboMappingKind); setLocalCode(''); setQboId(''); }}
+            >
+              <option value="TAX">Tax profile</option>
+              <option value="GL">GL account</option>
+              <option value="DEPARTMENT">Department</option>
+            </select>
+            <div className="help">{QBO_KIND_HELP[kind]}</div>
+          </div>
+          <div className="f">
+            <label>VFW {kind === 'TAX' ? 'tax profile' : kind === 'GL' ? 'GL account' : 'department'}</label>
+            <select value={localCode} onChange={(e) => setLocalCode(e.target.value)}>
+              <option value="">—</option>
+              {localOptions.map((o) => <option key={o.code} value={o.code}>{o.label}</option>)}
+            </select>
+          </div>
+          <div className="f wide">
+            <label>QuickBooks {kind === 'TAX' ? 'tax code' : kind === 'GL' ? 'account' : 'location'}</label>
+            <select value={qboId} onChange={(e) => setQboId(e.target.value)}>
+              <option value="">—</option>
+              {options?.map((o) => (
+                <option key={o.id} value={o.id}>{o.name}{o.subType ? ` (${o.subType})` : ''}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        {error && <div className="note bad" style={{ marginTop: 12 }}>{error}</div>}
+      </div>
+      <div className="ft">
+        <button
+          className="btn primary"
+          disabled={!localCode || !qboId || save.isPending}
+          onClick={() => save.mutate()}
+        >
+          {save.isPending ? 'Saving…' : 'Add mapping'}
+        </button>
       </div>
     </div>
   );

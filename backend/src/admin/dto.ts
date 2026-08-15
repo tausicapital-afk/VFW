@@ -494,11 +494,6 @@ export class UpdateSettingsDto {
   @IsString()
   discountApprovalPct?: string;
 
-  @IsOptional()
-  @IsString()
-  @MaxLength(60)
-  qbRealmId?: string;
-
   /** Rates to CAD, the reporting currency. Keyed by currency code. */
   @IsOptional()
   fxRates?: Record<string, number>;

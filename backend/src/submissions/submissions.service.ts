@@ -12,6 +12,8 @@ import { can } from '../common/acl';
 import { ConfigService } from '../config/config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PricingService } from '../pricing/pricing.service';
+import { QboConnectionService } from '../qbo/qbo-connection.service';
+import { QboExportService } from '../qbo/qbo-export.service';
 import { buildInvoicePdf, type InvoicePdfData } from './invoice-pdf';
 import {
   ApproveDto,
@@ -61,6 +63,8 @@ export class SubmissionsService {
     // right side of it. SystemConfigModule is @Global, so this arrives without
     // SubmissionsModule importing anything.
     private readonly config: ConfigService,
+    private readonly qboConnection: QboConnectionService,
+    private readonly qboExport: QboExportService,
   ) {}
 
   /**
@@ -1084,15 +1088,38 @@ export class SubmissionsService {
 
   /**
    * QuickBooks export. Synchronous by design — no Redis, no job queue until
-   * retries are actually needed. The QBO OAuth transport is out of scope and
-   * stubbed: this moves the record APPROVED -> EXPORTED, allocates an invoice
-   * number if one is missing, stores the QBO document number and audits it.
+   * retries are actually needed (see docs/architecture.md §9).
+   *
+   * Split into three phases rather than one transaction:
+   *  1. Validate + allocate an invoice number — a short DB transaction, same
+   *     row-locked increment as {@link allocateInvoice} anywhere else it's used.
+   *  2. Post to QuickBooks, if a company is connected — several sequential
+   *     HTTP calls (customer/item lookups, the post itself) that must never
+   *     run inside an open Postgres transaction.
+   *  3. Record the result — a second short transaction.
+   *
+   * A live push that fails leaves the submission APPROVED (never EXPORTED)
+   * with `qboSyncError` set, so accounting sees it still needs action instead
+   * of the record silently drifting from what QuickBooks actually holds. A
+   * retry reuses the invoice number already allocated in step 1 rather than
+   * minting a second one.
+   *
+   * Without a QuickBooks connection configured, this falls back to the
+   * original stub behaviour — moves APPROVED -> EXPORTED and stores the
+   * invoice number as the doc number — so the console keeps working exactly
+   * as before QuickBooks is ever connected.
    */
   async export(id: string, dto: ExportDto, user: AuthUser) {
-    return this.prisma.$transaction(async (tx) => {
+    const prepared = await this.prisma.$transaction(async (tx) => {
       const submission = await tx.submission.findUnique({
         where: { id },
-        include: { city: true },
+        include: {
+          city: true,
+          contact: true,
+          event: true,
+          package: true,
+          addons: { include: { addon: true } },
+        },
       });
       if (!submission) throw new NotFoundException('Submission not found');
       if (submission.status !== SubmissionStatus.APPROVED) {
@@ -1101,36 +1128,101 @@ export class SubmissionsService {
         );
       }
 
-      const invoiceNo =
-        submission.invoiceNo ?? (await this.allocateInvoice(tx, submission.city.name));
-      const docType =
-        dto.docType ?? (submission.payStatus === 'PAID' ? 'Sales Receipt' : 'Invoice');
-      const settings = await tx.settings.findUniqueOrThrow({ where: { id: 1 } });
-
-      // The transport is stubbed — no HTTP call to QuickBooks is made here.
-      const updated = await tx.submission.update({
+      if (submission.invoiceNo) return submission;
+      const invoiceNo = await this.allocateInvoice(tx, submission.city.name);
+      return tx.submission.update({
         where: { id },
-        data: {
-          status: SubmissionStatus.EXPORTED,
-          exportedAt: new Date(),
-          invoiceNo,
-          qbDocNumber: invoiceNo,
+        data: { invoiceNo },
+        include: {
+          city: true,
+          contact: true,
+          event: true,
+          package: true,
+          addons: { include: { addon: true } },
         },
-        include: DETAIL,
       });
-
-      await this.audit.log(
-        {
-          submissionId: id,
-          actorId: user.id,
-          action: 'EXPORTED',
-          detail: `Posted to QuickBooks Online as ${docType} ${invoiceNo}`,
-          payload: { docType, qbDocNumber: invoiceNo, realm: settings.qbRealmId ?? '(stub)' },
-        },
-        tx,
-      );
-      return updated;
     });
+
+    const docType = dto.docType ?? (prepared.payStatus === 'PAID' ? 'Sales Receipt' : 'Invoice');
+    const invoiceNo = prepared.invoiceNo!;
+
+    if (!(await this.qboConnection.isConnected())) {
+      return this.prisma.$transaction(async (tx) => {
+        const updated = await tx.submission.update({
+          where: { id },
+          data: {
+            status: SubmissionStatus.EXPORTED,
+            exportedAt: new Date(),
+            qbDocNumber: invoiceNo,
+            qboSyncError: null,
+          },
+          include: DETAIL,
+        });
+        await this.audit.log(
+          {
+            submissionId: id,
+            actorId: user.id,
+            action: 'EXPORTED',
+            detail: `Posted to QuickBooks Online as ${docType} ${invoiceNo} (stub — no QuickBooks connection configured)`,
+            payload: { docType, qbDocNumber: invoiceNo, realm: '(stub)' },
+          },
+          tx,
+        );
+        return updated;
+      });
+    }
+
+    // A demo sale posted to a real QuickBooks company and then reconciled
+    // against is exactly the failure the isTestData flag exists to prevent
+    // (see qbo-ledger.dataset.ts). Sandbox is where test submissions are
+    // supposed to go; production never sees them, connection or no.
+    if (prepared.isTestData) {
+      const status = await this.qboConnection.status();
+      if (status.environment === 'production') {
+        throw new BadRequestException(
+          'This is test data and cannot be posted to the connected production QuickBooks company. Connect a sandbox company (Administration → Configuration → QuickBooks) to export test submissions.',
+        );
+      }
+    }
+
+    try {
+      const result = await this.qboExport.postSubmission(prepared, docType, invoiceNo);
+      return await this.prisma.$transaction(async (tx) => {
+        const updated = await tx.submission.update({
+          where: { id },
+          data: {
+            status: SubmissionStatus.EXPORTED,
+            exportedAt: new Date(),
+            qbDocNumber: result.docNumber,
+            qboInvoiceId: result.qboId,
+            qboSyncError: null,
+          },
+          include: DETAIL,
+        });
+        await this.audit.log(
+          {
+            submissionId: id,
+            actorId: user.id,
+            action: 'EXPORTED',
+            detail: `Posted to QuickBooks Online as ${docType} ${result.docNumber}`,
+            payload: { docType, qbDocNumber: result.docNumber, qboInvoiceId: result.qboId },
+          },
+          tx,
+        );
+        return updated;
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'QuickBooks rejected the export';
+      await this.prisma.submission.update({ where: { id }, data: { qboSyncError: message } });
+      await this.audit.log({
+        submissionId: id,
+        actorId: user.id,
+        action: 'EXPORT_FAILED',
+        detail: `QuickBooks export failed: ${message}`,
+        payload: { docType },
+      });
+      throw new BadRequestException(message);
+    }
   }
 
   /**

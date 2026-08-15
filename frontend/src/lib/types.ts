@@ -241,6 +241,9 @@ export interface Submission extends TestFlagged {
   department: string | null;
   invoiceNo: string | null;
   qbDocNumber: string | null;
+  qboInvoiceId: string | null;
+  /** The last live QuickBooks push's failure message, if any. See qbo-export.service.ts. */
+  qboSyncError: string | null;
   voidedFrom: SubmissionStatus | null;
   voidedAt: string | null;
   rejectReason: string | null;
@@ -628,7 +631,6 @@ export interface Settings {
   gfcInvoicePrefix: string;
   nextGfcInvoiceSeq: number;
   discountApprovalPct: Money;
-  qbRealmId: string | null;
   fxRates: Record<string, number>;
   scoreWeights: ScoreWeights;
 }
@@ -717,7 +719,7 @@ export interface ConfigField {
 }
 
 export interface ConfigGroup {
-  id: 'email' | 'storage' | 'data';
+  id: 'email' | 'storage' | 'quickbooks' | 'data';
   title: string;
   blurb: string;
   /** null when the group requires nothing — draw no status pill. */
@@ -743,6 +745,47 @@ export interface ConfigTestResult {
   ok: boolean;
   error?: string;
   sentTo?: string;
+}
+
+// ---------------------------------------------------------------------------
+// QuickBooks Online — the OAuth connection and the local-code -> QBO-object
+// mappings (Administration → Configuration → QuickBooks).
+// ---------------------------------------------------------------------------
+
+/** Full detail, for the admin connection card. GET /api/admin/qbo/status. */
+export interface QboStatus {
+  connected: boolean;
+  environment?: 'sandbox' | 'production';
+  realmId?: string;
+  companyName?: string | null;
+  connectedAt?: string;
+  accessTokenExpiresAt?: string;
+  refreshTokenExpiresAt?: string;
+  refreshTokenExpired?: boolean;
+}
+
+/** The safe subset any ACCT/ADMIN sees on the QuickBooks screen itself. GET /api/qbo/status. */
+export interface QboScreenStatus {
+  connected: boolean;
+  environment?: 'sandbox' | 'production';
+  companyName?: string | null;
+}
+
+export type QboMappingKind = 'TAX' | 'GL' | 'DEPARTMENT';
+
+export interface QboMapping {
+  id: string;
+  kind: QboMappingKind;
+  localCode: string;
+  qboId: string;
+  qboLabel: string;
+  updatedAt: string;
+}
+
+export interface QboBrowseOption {
+  id: string;
+  name: string;
+  subType?: string;
 }
 
 // ---------------------------------------------------------------------------
