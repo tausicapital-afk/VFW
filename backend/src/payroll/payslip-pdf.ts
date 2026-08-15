@@ -1,4 +1,4 @@
-import PDFDocument from 'pdfkit';
+import { drawLogo, formatDate, formatMoney, INK, LINE, MUTED, newPdfDoc } from '../common/pdf-template';
 
 /**
  * One person's pay period, rendered as a payslip they can print, keep or forward.
@@ -9,6 +9,8 @@ import PDFDocument from 'pdfkit';
  * exercised with a plain object — including the awkward shapes (no sales, no
  * timesheet, no submitted invoice) that are tedious to arrange in a database.
  * Uses only PDFKit's built-in Helvetica, so it needs no font files on disk.
+ * Shares its colours, money formatting and page boilerplate with the invoice
+ * via `common/pdf-template.ts`.
  *
  * Every figure arrives here as an already-normalised two-decimal string. That is
  * not laziness about types — it is the point. The pay arithmetic happens once,
@@ -106,26 +108,8 @@ const INVOICE_LABEL: Record<PayslipInvoiceStatus, string> = {
   REJECTED: 'Rejected',
 };
 
-const INK = '#111827';
-const MUTED = '#6b7280';
-const LINE = '#e5e7eb';
-
-function money(currency: string, value: string): string {
-  const n = Number(value);
-  try {
-    return new Intl.NumberFormat('en-CA', {
-      style: 'currency',
-      currency,
-      currencyDisplay: 'narrowSymbol',
-    }).format(Number.isFinite(n) ? n : 0);
-  } catch {
-    // An unknown ISO code should never crash a payslip; fall back to a plain figure.
-    return `${currency} ${(Number.isFinite(n) ? n : 0).toFixed(2)}`;
-  }
-}
-
-const date = (d: Date) =>
-  new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: 'short', day: 'numeric' }).format(d);
+const money = formatMoney;
+const date = formatDate;
 
 /** Whether `from`/`to` is exactly the 1st through the last day of one month —
  *  the range every payroll period was, before a custom one could be anything
@@ -192,13 +176,7 @@ export function buildPayslipPdf(d: PayslipPdfData): Promise<Buffer> {
   // payslip is meant to be one page and the layout below is sized for that, but
   // a long rejection reason can still push it over, and a footer stamped at a
   // fixed height on page one would then sit in the middle of the text.
-  const doc = new PDFDocument({ size: 'A4', margin: 48, bufferPages: true });
-  const done = new Promise<Buffer>((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    doc.on('data', (c: Buffer) => chunks.push(c));
-    doc.on('end', () => resolve(Buffer.concat(chunks)));
-    doc.on('error', reject);
-  });
+  const { doc, done } = newPdfDoc({ bufferPages: true });
 
   const left = doc.page.margins.left;
   const right = doc.page.width - doc.page.margins.right;
@@ -252,15 +230,24 @@ export function buildPayslipPdf(d: PayslipPdfData): Promise<Buffer> {
   };
 
   // --- Header: company on the left, what this document is on the right ------
-  doc.fillColor(INK).font('Helvetica-Bold').fontSize(20).text(d.companyName, left, 48, { width: width * 0.6 });
-  doc.font('Helvetica').fontSize(10).fillColor(MUTED).text('Payroll statement', left, doc.y + 2, { width: width * 0.6 });
+  //
+  // Payroll has no per-brand split the way invoices do (SALES.brand chooses
+  // VFW vs GFC) — it is one company's statement — so the mark is always drawn
+  // here, unlike the invoice where it is conditional on `d.brand`.
+  const headTop = 48;
+  const logoW = drawLogo(doc, left, headTop, 34);
+  const textLeft = left + logoW;
+  const leftColW = width * 0.6 - logoW;
+  doc.fillColor(INK).font('Helvetica-Bold').fontSize(20).text(d.companyName, textLeft, headTop, { width: leftColW });
+  doc.font('Helvetica').fontSize(10).fillColor(MUTED).text('Payroll statement', textLeft, doc.y + 2, { width: leftColW });
+  const headerLeftBottom = doc.y;
 
-  doc.font('Helvetica-Bold').fontSize(16).fillColor(INK).text('PAYSLIP', left, 48, { width, align: 'right' });
+  doc.font('Helvetica-Bold').fontSize(16).fillColor(INK).text('PAYSLIP', left, headTop, { width, align: 'right' });
   doc.font('Helvetica').fontSize(10).fillColor(MUTED);
   doc.text(periodLabel(d.period.from, d.period.to), left, doc.y + 2, { width, align: 'right' });
   doc.text(`Issued ${date(d.issuedAt)}`, left, doc.y, { width, align: 'right' });
 
-  let y = Math.max(doc.y, 112) + 10;
+  let y = Math.max(doc.y, headerLeftBottom, 112) + 10;
   rule(y);
   y += 16;
 

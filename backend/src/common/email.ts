@@ -5,6 +5,7 @@ import type { Transporter } from 'nodemailer';
 import { ConfigService } from '../config/config.service';
 import { MailAccountService, SendingAccount } from '../config/mail-account.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { VFW_LOGO_DATA_URI } from './brand-logo';
 
 /**
  * Outbound email — one transport, one global template, and one fallback:
@@ -169,6 +170,25 @@ function codeBlock(code: string): string {
 }
 
 /**
+ * The mark, inlined as base64 rather than a hosted `<img src>`. This system
+ * sends through three different providers (SMTP, Resend, the PHP relay — see
+ * `deliver` below) and inlining is the one approach all three carry for free:
+ * it lives entirely inside `mail.html`, so there is nothing provider-specific
+ * to wire up. Renders as an empty cell when no logo shipped with this deploy
+ * (see `brand-logo.ts`) rather than a broken-image icon.
+ */
+function logoCell(): string {
+  if (!VFW_LOGO_DATA_URI) return '';
+  return (
+    `<td style="vertical-align:middle;padding-right:12px;">` +
+    `<table role="presentation" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;">` +
+    `<tr><td style="padding:4px;line-height:0;">` +
+    `<img src="${VFW_LOGO_DATA_URI}" width="32" height="32" alt="" style="display:block;border-radius:6px;">` +
+    `</td></tr></table></td>`
+  );
+}
+
+/**
  * The one shell every message shares. `bodyHtml` is trusted, pre-built HTML from
  * the builders below (never raw user input); anything user-derived must already
  * have been through {@link esc} before it reaches here.
@@ -196,9 +216,14 @@ function layout(opts: { title: string; preheader: string; bodyHtml: string }): s
            style="width:600px;max-width:100%;background:#ffffff;border-radius:16px;overflow:hidden;
                   box-shadow:0 1px 3px rgba(16,24,32,.08);">
       <!-- header -->
-      <tr><td style="background:${colour};padding:26px 32px;">
-        <span style="font-family:Arial,Helvetica,sans-serif;font-size:20px;font-weight:800;
-                     letter-spacing:.4px;color:#ffffff;">${name}</span>
+      <tr><td style="background:${colour};padding:22px 32px;">
+        <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+          ${logoCell()}
+          <td style="vertical-align:middle;">
+            <span style="font-family:Arial,Helvetica,sans-serif;font-size:20px;font-weight:800;
+                         letter-spacing:.4px;color:#ffffff;">${name}</span>
+          </td>
+        </tr></table>
       </td></tr>
       <!-- body -->
       <tr><td style="padding:34px 32px 12px;font-family:Arial,Helvetica,sans-serif;

@@ -1,11 +1,12 @@
-import PDFDocument from 'pdfkit';
+import { drawLogo, formatDate, formatMoney, INK, LINE, MUTED, newPdfDoc, rule } from '../common/pdf-template';
 
 /**
  * A single invoice, rendered to a PDF the customer can be sent. Deliberately
  * decoupled from Prisma: the service maps a submission onto this flat shape, so
  * the layout code never reaches back into the ORM and can be unit-tested with a
  * plain object. Uses only PDFKit's built-in Helvetica, so it needs no font files
- * on disk — important in a slim production container.
+ * on disk — important in a slim production container. Shares its colours, money
+ * formatting and page boilerplate with the payslip via `common/pdf-template.ts`.
  */
 export interface InvoicePdfData {
   brand: 'VFW' | 'GFC';
@@ -43,49 +44,32 @@ const BRAND_NAME: Record<InvoicePdfData['brand'], string> = {
   GFC: 'Global Fashion Collective',
 };
 
-const INK = '#111827';
-const MUTED = '#6b7280';
-const LINE = '#e5e7eb';
-const ACCENT = '#111827';
-
-function money(currency: string, value: string): string {
-  const n = Number(value);
-  try {
-    return new Intl.NumberFormat('en-CA', {
-      style: 'currency',
-      currency,
-      currencyDisplay: 'narrowSymbol',
-    }).format(Number.isFinite(n) ? n : 0);
-  } catch {
-    // An unknown ISO code should never crash an invoice; fall back to a plain figure.
-    return `${currency} ${(Number.isFinite(n) ? n : 0).toFixed(2)}`;
-  }
-}
-
-const date = (d: Date) =>
-  new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: 'short', day: 'numeric' }).format(d);
+const ACCENT = INK;
+const money = formatMoney;
+const date = formatDate;
 
 export function buildInvoicePdf(d: InvoicePdfData): Promise<Buffer> {
-  const doc = new PDFDocument({ size: 'A4', margin: 48 });
-  const done = new Promise<Buffer>((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    doc.on('data', (c: Buffer) => chunks.push(c));
-    doc.on('end', () => resolve(Buffer.concat(chunks)));
-    doc.on('error', reject);
-  });
+  const { doc, done } = newPdfDoc();
 
   const left = doc.page.margins.left;
   const right = doc.page.width - doc.page.margins.right;
   const width = right - left;
 
   // --- Header: brand block on the left, document meta on the right ---------
-  doc.fillColor(INK).font('Helvetica-Bold').fontSize(22).text(d.brand, left, 48);
+  //
+  // The mark is only drawn for a VFW-branded document — a GFC invoice getting
+  // the VFW logo would misidentify who is billing whom, and there is no GFC
+  // asset shipped to draw instead, so that brand stays text-only.
+  const headTop = 48;
+  const textLeft = left + (d.brand === 'VFW' ? drawLogo(doc, left, headTop, 34) : 0);
+  doc.fillColor(INK).font('Helvetica-Bold').fontSize(22).text(d.brand, textLeft, headTop);
   doc
     .font('Helvetica')
     .fontSize(10)
     .fillColor(MUTED)
-    .text(BRAND_NAME[d.brand], left, doc.y + 2)
+    .text(BRAND_NAME[d.brand], textLeft, doc.y + 2)
     .text(d.companyName, { continued: false });
+  const leftBottom = doc.y;
 
   const metaTop = 48;
   doc
@@ -101,8 +85,8 @@ export function buildInvoicePdf(d: InvoicePdfData): Promise<Buffer> {
     .text(`Issued ${date(d.issuedAt)}`, { width, align: 'right' });
 
   // Divider.
-  const dividerY = Math.max(doc.y, 120) + 8;
-  doc.moveTo(left, dividerY).lineTo(right, dividerY).strokeColor(LINE).lineWidth(1).stroke();
+  const dividerY = Math.max(doc.y, leftBottom, 120) + 8;
+  rule(doc, left, right, dividerY);
 
   // --- Bill-to + show details, two columns --------------------------------
   const colTop = dividerY + 16;
