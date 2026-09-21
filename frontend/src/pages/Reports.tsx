@@ -1,7 +1,16 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { api } from '../lib/api';
+import {
+  isSavedFilterValid,
+  loadSavedFilters,
+  persistSavedFilters,
+  removeSavedFilter,
+  upsertSavedFilter,
+  type SavedFilter,
+} from '../lib/savedFilters';
 import type { Catalog, ReportCell, ReportCol, ReportTable, ReportType } from '../lib/types';
+import { ConfirmModal } from '../shell/ConfirmModal';
 import { ExportMenu } from '../shell/ExportMenu';
 import { Page } from '../shell/Shell';
 
@@ -124,11 +133,49 @@ export function Reports() {
   const [key, setKey] = useState('revenue');
   const [period, setPeriod] = useState<Period>({});
 
+  // Saved filters live in localStorage only — see lib/savedFilters.ts. Loaded
+  // once on mount; every save/delete below re-reads the whole list from state
+  // rather than localStorage, since this screen is the only writer of it.
+  const [savedFilters, setSavedFilters] = useState<SavedFilter[]>(loadSavedFilters);
+  const [selectedSaved, setSelectedSaved] = useState('');
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+
   const { data: types } = useQuery({
     queryKey: ['report-types'],
     queryFn: () => api.get<ReportType[]>('/api/reports/types'),
     staleTime: Infinity,
   });
+
+  // null while the catalog is still loading, so a saved view isn't shown
+  // greyed-out for a moment just because its report type hasn't arrived yet.
+  const validReportKeys = useMemo(() => (types ? types.map((t) => t.key) : null), [types]);
+
+  const applySaved = (name: string) => {
+    setSelectedSaved(name);
+    if (!name) return;
+    const f = savedFilters.find((sf) => sf.name === name);
+    if (!f) return;
+    if (validReportKeys && !isSavedFilterValid(f, validReportKeys)) return;
+    setKey(f.reportKey);
+    setPeriod(f.period);
+  };
+
+  const saveCurrentView = (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const next = upsertSavedFilter(savedFilters, trimmed, key, period);
+    persistSavedFilters(next);
+    setSavedFilters(next);
+    setSelectedSaved(trimmed);
+  };
+
+  const deleteSavedView = (name: string) => {
+    const next = removeSavedFilter(savedFilters, name);
+    persistSavedFilters(next);
+    setSavedFilters(next);
+    setSelectedSaved((cur) => (cur === name ? '' : cur));
+  };
 
   const qs = query(period, { type: key });
   const { data: table, isLoading, error } = useQuery({
@@ -152,6 +199,32 @@ export function Reports() {
 
       <div className="toolbar">
         <PeriodFilters period={period} onChange={setPeriod} />
+      </div>
+
+      <div className="toolbar">
+        <select
+          value={selectedSaved}
+          onChange={(e) => applySaved(e.target.value)}
+          aria-label="Saved views"
+        >
+          <option value="">Saved views…</option>
+          {savedFilters.map((f) => {
+            const valid = !validReportKeys || isSavedFilterValid(f, validReportKeys);
+            return (
+              <option key={f.name} value={f.name} disabled={!valid}>
+                {f.name}{valid ? '' : ' (report type removed)'}
+              </option>
+            );
+          })}
+        </select>
+        <button className="btn sm" onClick={() => setSaveOpen(true)}>Save current view</button>
+        {selectedSaved && (
+          <button className="btn sm" onClick={() => setDeleteTarget(selectedSaved)}>
+            Delete
+          </button>
+        )}
+        <span className="sp" />
+        <span className="sm mut">Saved views live in this browser only — they won&apos;t follow you to another device.</span>
       </div>
 
       <div className="card">
@@ -208,6 +281,35 @@ export function Reports() {
         Consolidated columns are converted to CAD by the server using the FX rates in Settings,
         before they are summed. CSV opens directly in Excel; JSON matches the internal data model.
       </div>
+
+      {saveOpen && (
+        <ConfirmModal
+          title="Save current view"
+          message="Saves the report type and the period/event/city filters shown above, under a name you pick. Saving over an existing name overwrites it."
+          reasonLabel="Name"
+          reasonPlaceholder="e.g. This quarter, Vancouver"
+          confirmLabel="Save"
+          onCancel={() => setSaveOpen(false)}
+          onConfirm={(name) => {
+            setSaveOpen(false);
+            if (name) saveCurrentView(name);
+          }}
+        />
+      )}
+
+      {deleteTarget && (
+        <ConfirmModal
+          title={`Delete "${deleteTarget}"?`}
+          message="This only removes it from this browser."
+          confirmLabel="Delete"
+          danger
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => {
+            deleteSavedView(deleteTarget);
+            setDeleteTarget(null);
+          }}
+        />
+      )}
     </Page>
   );
 }
