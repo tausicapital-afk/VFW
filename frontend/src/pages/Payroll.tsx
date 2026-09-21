@@ -600,6 +600,7 @@ function Approvals() {
           <h3>Payroll awaiting approval</h3>
           <div className="sp" />
           <span className="sm mut">{pending?.length ?? 0} waiting</span>
+          <ExportMenu dataset="payroll-approvals" disabled={!pending?.length} />
         </div>
 
         {isLoading ? (
