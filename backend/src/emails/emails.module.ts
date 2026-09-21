@@ -19,5 +19,9 @@ import { InboundMailService } from './inbound.service';
   imports: [SubmissionsModule],
   controllers: [EmailsController],
   providers: [EmailsService, InboundMailService],
+  // EmailsService is exported so the export module can reuse EmailsService.list
+  // (and its row-scoping) for the Emails → Sent/Received datasets, the same way
+  // AttendanceModule exports AttendanceService for the Attendance export.
+  exports: [EmailsService],
 })
 export class EmailsModule {}

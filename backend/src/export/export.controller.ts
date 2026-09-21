@@ -9,6 +9,8 @@ import { AttendanceService } from '../attendance/attendance.service';
 import { AuditService } from '../audit/audit.service';
 import { ContactsModule } from '../contacts/contacts.controller';
 import { ContactsService } from '../contacts/contacts.service';
+import { EmailsModule } from '../emails/emails.module';
+import { EmailsService } from '../emails/emails.service';
 import { FeedbackService } from '../feedback/feedback.controller';
 import { InternalService } from '../internal/internal.controller';
 import { ReportsModule } from '../reports/reports.controller';
@@ -25,6 +27,7 @@ import { attendanceDataset, attendanceTeamDataset } from './datasets/attendance.
 import { auditDataset } from './datasets/audit.dataset';
 import { addonsDataset, packagesDataset, showsDataset, taxesDataset } from './datasets/catalogue.dataset';
 import { contactsDataset } from './datasets/contacts.dataset';
+import { emailsReceivedDataset, emailsSentDataset } from './datasets/emails.dataset';
 import { invitationsDataset } from './datasets/invitations.dataset';
 import { activityDataset, logUsersDataset, sessionsDataset } from './datasets/logs.dataset';
 import { feedbackDataset, internalCommentsDataset } from './datasets/people.dataset';
@@ -110,6 +113,7 @@ export class ExportController {
     ReportsModule,
     AttendanceModule,
     PayrollModule,
+    EmailsModule,
   ],
   controllers: [ExportController],
   providers: [ExportRegistry, ExportService],
@@ -137,6 +141,7 @@ export class ExportModule {
     reports: ReportsService,
     attendance: AttendanceService,
     payroll: PayrollService,
+    emails: EmailsService,
   ) {
     registry.register(submissionsDataset(submissions));
     registry.register(userApprovalsDataset(admin));
@@ -159,6 +164,8 @@ export class ExportModule {
     registry.register(payrollDataset(payroll));
     registry.register(payrollApprovalsDataset(payroll));
     registry.register(userSalesDataset(payroll));
+    registry.register(emailsSentDataset(emails));
+    registry.register(emailsReceivedDataset(emails));
     // One per report — see reports.dataset.ts for why they are not one dataset
     // taking a `type`.
     for (const report of reportDatasets(reports)) registry.register(report);

@@ -7,6 +7,7 @@ import { api } from '../lib/api';
 import { fmtDateTime } from '../lib/format';
 import { TestTag, useTestRow } from '../lib/testData';
 import type { EmailDetail, EmailDirection, EmailKind, EmailRow } from '../lib/types';
+import { ExportMenu } from '../shell/ExportMenu';
 import { Page } from '../shell/Shell';
 
 const KIND_LABEL: Record<EmailKind, string> = {
@@ -127,6 +128,11 @@ export function Emails() {
                 <option key={k} value={k}>{KIND_LABEL[k]}</option>
               ))}
             </select>
+            <ExportMenu
+              dataset={direction === 'OUTBOUND' ? 'emails-sent' : 'emails-received'}
+              params={{ kind }}
+              disabled={!data?.length}
+            />
           </div>
 
           {isLoading ? (
