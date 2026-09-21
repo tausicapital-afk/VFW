@@ -32,6 +32,11 @@ is a per-sale deviation, not a rate-card edit.
 
 *No tabs.*
 
+Each row also opens a read-only **quick look** — a modal summary of the sale (parties, show,
+package, pricing, balance) that costs no navigation and no way back. It is deliberately read-only:
+everything that changes a sale lives on the detail page. The list payload already carries everything
+the modal shows, so opening one costs no second request.
+
 The detail view carries an **Invoice number** card, and the edit view's availability both shift at
 approval — before it, a sale and its invoice number belong to whoever owns them; after it, both
 belong to Accounting. The button says *Edit* before a decision and *Amend* after one, and an
@@ -52,6 +57,9 @@ The detail view also carries the money side of a sale:
   that can work a sale. An undo reverses a mark with a visible negative entry rather than deleting it.
 - **Void** (`submission.void` — ACCT, ADMIN) is a soft delete: hidden from lists and reports, kept for
   audit, reversible.
+- **Documents card** — files attached to the sale (contracts, artwork, and the like), uploaded
+  straight to R2 the same three-step way an Account profile picture is (presign → PUT → commit), so
+  the upload never passes through our own API.
 
 ### Contacts — `/contacts`
 **SALES, ACCT, MGR, ADMIN.** Searchable directory of client contacts and brands, opening into a per-contact history (`/contacts/:id`).
@@ -98,7 +106,12 @@ Two things the queue does beyond approve/return:
 ### QuickBooks — `/qbo`
 **ACCT, ADMIN.** Exports approved submissions to QuickBooks and keeps the ledger of what has already gone across.
 
-*No tabs.* Two stacked cards: **Ready to export** and **Export ledger**.
+*No tabs.* A connection banner up top — the connected company name and environment, or a prompt to
+connect one under Administration → Configuration — then two stacked cards: **Ready to export** and
+**Export ledger**. Without a connected company, exporting still allocates an invoice number and moves
+the sale `APPROVED` → `EXPORTED` exactly as before; nothing is posted to QuickBooks until a company
+is connected, and connecting one makes the same button start posting for real. Full mechanics in
+`docs/quickbooks-integration.md`.
 
 ---
 
@@ -131,16 +144,27 @@ Attendance is deliberately *not* derived from the `UserSession` telemetry behind
 connected is a different claim from a day being worked.
 
 ### Payroll — `/payroll`
-**All roles for your own pay; `ACCT` and `ADMIN` for everyone's.** What each person earned in a month,
-and the arithmetic it came from.
+**All roles for your own pay; `ACCT` and `ADMIN` for everyone's.** What each person earned over a
+period, and the arithmetic it came from.
 
 | Tab | Who | What |
 | --- | --- | --- |
-| My pay | all roles | Your own statement: base, commission, gross — beside your full profile, the hours and sales it was derived from, and your lifetime earnings. Also where you submit the month for approval, and where you download the month as a **payslip**. |
-| Payroll run | `payroll.viewAll` (ACCT, ADMIN) | Every active account for the month, with run totals, and a row that opens into that person's statement. |
+| My pay | all roles | Your own statement: base, commission, gross — beside your full profile, the hours and sales it was derived from, and your lifetime earnings. Also where you submit the period for approval, and where you download it as a **payslip**. |
+| Payroll run | `payroll.viewAll` (ACCT, ADMIN) | Every active account for the period, with run totals, and a row that opens into that person's statement. |
 | Approvals | `payroll.approve` (ACCT, ADMIN) | The queue of submitted payroll invoices — edit the figures, then approve or reject. |
 
 A rep with neither permission sees no tab bar at all, just their own statement.
+
+**The period defaults to a calendar month but is not limited to one.** The picker steps month by
+month, or drops into a custom `from`/`to` range typed in directly — a genuinely custom range spells
+out both ends (`Aug 1 – Aug 15, 2026`) rather than pretending to be a month. `frontend/src/lib/period.ts`
+holds the shared logic, and the payslip endpoint mirrors the same labelling rule so a downloaded
+payslip never describes its period differently from the screen it came from.
+
+**Sales this period**, embedded under the statement on *My pay*, lists every sale behind the
+commission line and who it was sold to, for whatever period is on screen. It is the same component
+and the same endpoint that Administration → Users & roles uses under a person's detail, so the two
+screens can never disagree about the same person's money for the same period.
 
 A statement is **base + commission = gross**, with each part shown as its own arithmetic rather than
 as a total to be taken on faith:
@@ -268,11 +292,11 @@ roles can raise its own to ADMIN**, so this grant is effectively a grant of ever
 | Tab | What it does |
 | --- | --- |
 | Invitations & approvals | Issues invitation codes with a fixed role, revokes them, and reviews sign-ups pending approval. |
-| Users & roles | Lists staff accounts and changes each one's role, pay basis (pay type plus whether they earn commission) and rates. |
+| Users & roles | Lists staff accounts and changes each one's role, pay basis (pay type plus whether they earn commission) and rates. Opening a user also shows their **Sales this period** — the same panel Payroll → My pay uses. |
 | Packages & pricing | Three cards: **Shows**, the package catalogue, and the add-on catalogue. New rows are created from the button on each card; package and show ids are derived from the brand (and city/season), and stay fixed once created because that is what submissions point at. |
 | Tax rates | Adds to and maintains the tax rates applied at pricing time. New profiles are created from the button on the card; the code is typed, not derived, because it is the key packages and cities point at. |
 | Settings | Discount approval threshold, invoice prefix and next invoice number (read-only, allocated transactionally), and the FX rates every report converts through. |
-| Configuration | Edits runtime config straight to the database — no redeploy — for values that aren't needed before the database is reachable. Passwords and secrets stay in env. |
+| Configuration | Edits runtime config straight to the database — no redeploy — for values that aren't needed before the database is reachable. Passwords and secrets stay in env. Also where QuickBooks itself is connected: OAuth connect/disconnect, and a mapping card pointing VFW tax profiles, GL accounts and departments at their QuickBooks counterparts. See `docs/quickbooks-integration.md`. |
 
 Tabs are defined in `frontend/src/pages/Admin.tsx` (`TABS`); the Configuration tab lives in `frontend/src/pages/AdminConfig.tsx`.
 
@@ -283,9 +307,14 @@ form and changes nothing already sold. The card exists because seasons used to b
 concern — the Summer/Spring filter on the submission form rendered an empty list purely because no SS
 shows had been seeded, which is a content problem wearing a bug's clothes.
 
-#### Known gap — `listValue` and `cap` are not editable
+#### `listValue` and `cap` are editable
 
-`Package.listValue` (the revenue forgone on a sponsored package, which reporting shows) and `Package.cap` (a per-event limit — VKFW VIP has only 2) exist in the schema and are set by the seed, but no admin screen touches either. Neither the new-package modal nor the edit modal can set them, so a sponsored or capped package cannot currently be created from the console — it has to be seeded or written directly. Wiring them up means adding them to both modals together; adding them to only one would leave the tab able to create a package it cannot then edit.
+`Package.listValue` (the revenue forgone on a sponsored package, which reporting shows) and
+`Package.cap` (a per-event limit — VKFW VIP has only 2) are optional fields on both the new-package
+and edit-package modals, alongside price, tax code and GL account. Both are wired together
+deliberately — adding one to only one modal would leave the tab able to create a package it could not
+then edit. A sponsored or capped package no longer has to be seeded or written directly to the
+database.
 
 ### Logs — `/logs`
 **ACCT and ADMIN** (`activity.view`). Telemetry on how the console itself is being used, as opposed to the business events in Audit trail. It is user-monitoring — who signed in, what they opened, who they messaged — so it is HR/security-sensitive and stops at the two roles that carry full authority.
@@ -375,10 +404,14 @@ browser (see *History* below).
 | Administration → Users & roles | Users | `users` | `admin.manage` |
 | Administration → Packages & pricing | Package rate card | `packages` | `admin.manage` |
 | Administration → Packages & pricing | Add-on catalogue | `addons` | `admin.manage` |
+| Administration → Packages & pricing | Shows | `shows` | `admin.manage` |
 | Administration → Tax rates | Tax profiles | `taxes` | `admin.manage` |
 | Attendance → My timesheet | The month | `attendance` | scoped in `load` (own sheet, or one you may open) |
 | Attendance → Team | Everyone | `attendance-team` | `attendance.viewTeam` |
 | Payroll → Payroll run | Everyone | `payroll` | `payroll.viewAll` |
+| Payroll → Approvals | Submitted invoices | `payroll-approvals` | `payroll.approve` |
+| Emails → Sent | Outbound mail | `emails-sent` | scoped in `load` (own sends, or all with `email.viewAll`) |
+| Emails → Received | Inbound mail | `emails-received` | scoped in `load` (own sends, or all with `email.viewAll`) |
 | Logs → Users | Users | `log-users` | `activity.view` |
 | Logs → Activity | Activity | `activity` | `activity.view` |
 | Logs → Sessions | Sessions | `sessions` | `activity.view` |
@@ -442,17 +475,6 @@ declare its columns exactly one way; there is no shape that satisfies both or ne
 | Administration → Settings, Administration → Configuration | Forms, not tables — and Configuration holds secrets. |
 | Console → Settings, Account | Personal preferences and your own profile — forms, not tables. Your hours are exportable from Attendance. |
 | Payroll → My pay | One statement, not a table. The month it came from exports from *Payroll run*, and the statement itself downloads as a **payslip** (`GET /api/payroll/payslip.pdf`) — a document rather than a dataset, for the reasons under *The payslip* above. |
-
-### Not exported, but not obviously by design
-
-These have no dataset and no stated reason. Recorded here so the absence is visible rather than
-assumed to be a decision someone made:
-
-| Screen / tab | Note |
-| --- | --- |
-| Emails (Sent / Received) | A row-scoped table with filters — structurally the same shape as Logs → Activity, which does export. Whether a mail log *should* be downloadable is a real question (it is closer to Messages than to Contacts), but nobody has answered it in writing. |
-| Payroll → Approvals | A queue of submitted invoices. The reconciliation case for exporting it is at least as strong as for *Payroll run*, which exports. |
-| Administration → Packages & pricing → Shows | The other two cards on the same tab export (`packages`, `addons`); the Shows card was added later and did not get a dataset. This one looks like an oversight rather than a choice. |
 
 ### History — the Reports migration
 
