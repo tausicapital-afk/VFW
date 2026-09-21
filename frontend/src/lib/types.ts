@@ -127,6 +127,18 @@ export interface AddonRow extends TestFlagged {
 export interface TaxProfile { code: string; label: string; rate: Money; note: string | null }
 export interface GlAccount { code: string; name: string }
 
+/**
+ * What a bulk CSV import returns — see the "Import CSV" buttons on the
+ * catalogue cards and on Contacts. Rows are independent (see backend
+ * csv-import.ts): a bad row is reported here, not rolled back alongside the
+ * rows that succeeded, so `errors` is what an admin fixes and re-imports.
+ */
+export interface ImportResult {
+  succeeded: number;
+  failed: number;
+  errors: { row: number; error: string }[];
+}
+
 export interface Catalog {
   events: EventRow[];
   packages: PackageRow[];

@@ -19,10 +19,16 @@ export class ApiError extends Error {
 const API_BASE = import.meta.env.VITE_API_BASE ?? '';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  // A FormData body (file upload) must not carry a 'Content-Type: application/json'
+  // header — the browser sets its own, with the multipart boundary, only when
+  // it is left unset.
+  const isForm = init?.body instanceof FormData;
   const res = await fetch(API_BASE + path, {
     ...init,
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+    headers: isForm
+      ? (init?.headers ?? {})
+      : { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
   });
 
   if (!res.ok) {
@@ -45,4 +51,10 @@ export const api = {
   put: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: 'PUT', body: JSON.stringify(body ?? {}) }),
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+  /** CSV bulk import — see the "Import CSV" buttons on Contacts and the catalogue cards. */
+  upload: <T>(path: string, file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return request<T>(path, { method: 'POST', body: form });
+  },
 };

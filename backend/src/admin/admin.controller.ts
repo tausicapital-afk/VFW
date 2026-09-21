@@ -1,5 +1,19 @@
-import { Body, Controller, Delete, Get, Module, Param, Patch, Post } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Module,
+  Param,
+  Patch,
+  Post,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthUser, Can, CurrentUser } from '../common/auth.guard';
+import { MAX_IMPORT_FILE_BYTES, UploadedCsvFile } from '../common/csv-import';
 import { AdminService } from './admin.service';
 import {
   CreateAddonDto,
@@ -130,6 +144,14 @@ export class AdminController {
     return this.admin.createPackage(dto, user);
   }
 
+  @Post('admin/packages/import')
+  @Can('admin.manage')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_IMPORT_FILE_BYTES } }))
+  importPackages(@UploadedFile() file: UploadedCsvFile, @CurrentUser() user: AuthUser) {
+    if (!file) throw new BadRequestException('No file was uploaded — choose a CSV file first');
+    return this.admin.importPackages(file.buffer.toString('utf8'), user);
+  }
+
   @Patch('admin/packages/:id')
   @Can('admin.manage')
   updatePackage(
@@ -144,6 +166,14 @@ export class AdminController {
   @Can('admin.manage')
   createEvent(@Body() dto: CreateEventDto, @CurrentUser() user: AuthUser) {
     return this.admin.createEvent(dto, user);
+  }
+
+  @Post('admin/events/import')
+  @Can('admin.manage')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_IMPORT_FILE_BYTES } }))
+  importEvents(@UploadedFile() file: UploadedCsvFile, @CurrentUser() user: AuthUser) {
+    if (!file) throw new BadRequestException('No file was uploaded — choose a CSV file first');
+    return this.admin.importEvents(file.buffer.toString('utf8'), user);
   }
 
   @Patch('admin/events/:id')
@@ -182,6 +212,14 @@ export class AdminController {
   @Can('admin.manage')
   createAddon(@Body() dto: CreateAddonDto, @CurrentUser() user: AuthUser) {
     return this.admin.createAddon(dto, user);
+  }
+
+  @Post('admin/addons/import')
+  @Can('admin.manage')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_IMPORT_FILE_BYTES } }))
+  importAddons(@UploadedFile() file: UploadedCsvFile, @CurrentUser() user: AuthUser) {
+    if (!file) throw new BadRequestException('No file was uploaded — choose a CSV file first');
+    return this.admin.importAddons(file.buffer.toString('utf8'), user);
   }
 
   @Patch('admin/addons/:id')

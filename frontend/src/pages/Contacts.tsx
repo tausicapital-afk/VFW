@@ -7,12 +7,14 @@ import { api } from '../lib/api';
 import { TestTag, useTestRow } from '../lib/testData';
 import type { Contact } from '../lib/types';
 import { ExportMenu } from '../shell/ExportMenu';
+import { ImportCsvButton } from '../shell/ImportCsv';
 import { Page } from '../shell/Shell';
 
 const TYPES = ['Designer', 'Sponsor', 'Vendor', 'Media', 'Buyer', 'School'];
 
 export function Contacts() {
   const { user } = useAuth();
+  const qc = useQueryClient();
   const testRow = useTestRow();
   const [q, setQ] = useState('');
   const [adding, setAdding] = useState(false);
@@ -44,7 +46,14 @@ export function Contacts() {
         <ExportMenu dataset="contacts" params={{ q }} disabled={isLoading || !rows.length} />
         <span className="sm mut">{scope}</span>
         {can('contacts.create', user?.role) && (
-          <button className="btn sm primary" onClick={() => setAdding(true)}>+ New contact</button>
+          <>
+            <ImportCsvButton
+              endpoint="/api/contacts/import"
+              onImported={() => void qc.invalidateQueries({ queryKey: ['contacts'] })}
+              label="Import CSV"
+            />
+            <button className="btn sm primary" onClick={() => setAdding(true)}>+ New contact</button>
+          </>
         )}
       </div>
 
