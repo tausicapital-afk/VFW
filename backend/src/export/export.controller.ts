@@ -28,7 +28,7 @@ import { contactsDataset } from './datasets/contacts.dataset';
 import { invitationsDataset } from './datasets/invitations.dataset';
 import { activityDataset, logUsersDataset, sessionsDataset } from './datasets/logs.dataset';
 import { feedbackDataset, internalCommentsDataset } from './datasets/people.dataset';
-import { payrollDataset } from './datasets/payroll.dataset';
+import { payrollApprovalsDataset, payrollDataset } from './datasets/payroll.dataset';
 import { qboLedgerDataset } from './datasets/qbo-ledger.dataset';
 import { reportDatasets } from './datasets/reports.dataset';
 import { submissionsDataset } from './datasets/submissions.dataset';
@@ -156,6 +156,7 @@ export class ExportModule {
     registry.register(attendanceDataset(attendance));
     registry.register(attendanceTeamDataset(attendance));
     registry.register(payrollDataset(payroll));
+    registry.register(payrollApprovalsDataset(payroll));
     registry.register(userSalesDataset(payroll));
     // One per report — see reports.dataset.ts for why they are not one dataset
     // taking a `type`.

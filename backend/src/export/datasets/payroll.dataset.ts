@@ -87,3 +87,49 @@ export function payrollDataset(payroll: PayrollService): ExportDataset<PayrollRo
     columns,
   };
 }
+
+type PayrollApprovalRow = Awaited<ReturnType<PayrollService['pending']>>[number];
+
+/**
+ * The submitted-but-not-yet-approved queue, as the Approvals tab shows it.
+ *
+ * Money columns mirror `columns` above: real numbers, not formatted strings,
+ * because this is also a file someone reconciles before approving a month.
+ * `Note` is included because that is where a prior edit's reason lives — the
+ * one piece of context a reviewer has that the on-screen table also shows.
+ */
+const approvalColumns: ExportColumn<PayrollApprovalRow>[] = [
+  { header: 'Person', value: (r) => r.user.name, width: 24 },
+  { header: 'Role', value: (r) => ROLE_LABEL[r.user.role], width: 20, spreadsheetOnly: true },
+  { header: 'Period start', value: (r) => r.periodStart, width: 12 },
+  { header: 'Period end', value: (r) => r.periodEnd, width: 12 },
+  { header: 'Pay basis', value: (r) => payBasis(r.payType, r.earnsCommission), width: 22 },
+  { header: 'Hours', value: (r) => Number(r.hours), width: 10 },
+  { header: 'Base (CAD)', value: (r) => Number(r.base), money: true, width: 13 },
+  { header: 'Commission %', value: (r) => Number(r.commissionPct), width: 12, spreadsheetOnly: true },
+  { header: 'Commission (CAD)', value: (r) => Number(r.commission), money: true, width: 15 },
+  { header: 'Gross (CAD)', value: (r) => Number(r.gross), money: true, width: 14 },
+  { header: 'Submitted', value: (r) => r.submittedAt, width: 14 },
+  { header: 'Note', value: (r) => r.note, width: 30, spreadsheetOnly: true },
+];
+
+/**
+ * The Approvals queue: submitted invoices awaiting sign-off.
+ *
+ * Carries `payroll.approve` — the exact permission that gates the screen and
+ * `PayrollService.pending()` itself — rather than `payroll.viewAll`, which
+ * gates a different screen (*Payroll run*). Like `payrollDataset`, `pending()`
+ * returns every submitted invoice by definition, so there is no per-row scope
+ * to rely on: the permission is what stands between a signed-in rep and
+ * everyone else's submitted pay.
+ */
+export function payrollApprovalsDataset(payroll: PayrollService): ExportDataset<PayrollApprovalRow> {
+  return {
+    key: 'payroll-approvals',
+    title: 'Payroll approvals',
+    filename: 'payroll-approvals',
+    permission: 'payroll.approve',
+    load: (user) => payroll.pending(user),
+    columns: approvalColumns,
+  };
+}
