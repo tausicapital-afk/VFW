@@ -214,6 +214,9 @@ a{color:var(--blue)}
 .card .bd{padding:16px}
 .grid{display:grid;gap:16px}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
+.charts .card .bd{padding:14px 16px 8px}
+.charts .recharts-cartesian-axis-tick text{font-family:"IBM Plex Mono";font-variant-numeric:tabular-nums}
 .kpi{background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:14px 15px;box-shadow:var(--shadow)}
 .kpi .lb{font-size:10.5px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);font-weight:600}
 .kpi .vl{font-family:"IBM Plex Mono";font-size:24px;font-weight:600;margin-top:8px;letter-spacing:-.02em}
