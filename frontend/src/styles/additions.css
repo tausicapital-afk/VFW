@@ -354,6 +354,22 @@ tbody tr.is-test.on,
    than it bought. */
 .pill.testdata { margin-left: 6px; vertical-align: middle; }
 
+/* Approval-queue SLA flag (Queue.tsx, "Pending accounting approval"). Reuses
+   the amber wash .pill.PENDING already carries elsewhere in the system for
+   "needs attention, not yet wrong" — a stuck submission is exactly that, not
+   an error, so it stays off the red/REJECTED palette. A separate modifier
+   rather than literally applying the PENDING class, because that class name
+   already means "this submission's status is PENDING" on every other screen;
+   reusing it here would make a status pill and an SLA pill indistinguishable
+   by class even though they answer different questions. */
+.pill.sla-late { background: var(--amber-soft); color: var(--amber); margin-top: 4px; }
+
+/* --amber-soft is redeclared per theme (console.css) and picks up dark mode on
+   its own, but --amber itself is not — console.css instead hand-tunes the text
+   colour for .pill.PENDING/.pill.PARTIAL in dark mode because var(--amber) reads
+   too muddy against the dark amber-soft fill. Same fix, same colour, here. */
+:root[data-theme="dark"] .pill.sla-late { background: #3A2A0E; color: #E9B45C; }
+
 /* The Settings switch and the admin Test-data card reuse the same rail so the
    preference reads as the same object as the thing it controls. */
 .testdata-summary { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; }

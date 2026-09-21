@@ -24,6 +24,21 @@ const COST_CENTRES = ['CC-100 Vancouver', 'CC-200 Kids', 'CC-300 Global', 'CC-40
 // Above this, the discount needs explicit sign-off (Settings.discountApprovalPct).
 const DISCOUNT_THRESHOLD = 15;
 
+// How long a submission can sit in "pending accounting approval" before the
+// queue calls it out. A flat calendar-day count rather than a business-day
+// one: getting business days right needs a holiday calendar the backend does
+// not have, and a flat count is honest about that rather than pretending to
+// a precision it can't deliver. Not a Settings field (unlike
+// discountApprovalPct) — that would need a new Settings column, and this
+// screen already has everything it needs in submittedAt, which every
+// submission already carries.
+const APPROVAL_SLA_DAYS = 3;
+
+/** Whole calendar days since a submission entered the queue. */
+function daysPending(submittedAt: string): number {
+  return Math.floor((Date.now() - new Date(submittedAt).getTime()) / 86_400_000);
+}
+
 type Action = { kind: 'approve' | 'reject' | 'return'; sub: Submission };
 
 export function Queue() {
@@ -134,7 +149,24 @@ export function Queue() {
                         ) : '—'}
                       </td>
                       <td className="num">{money(s.total, s.currency)}</td>
-                      <td className="sm mut">{fmtDate(s.submittedAt)}</td>
+                      <td className="sm mut">
+                        {fmtDate(s.submittedAt)}
+                        {s.submittedAt && (() => {
+                          const days = daysPending(s.submittedAt);
+                          return days >= APPROVAL_SLA_DAYS ? (
+                            <div>
+                              <span
+                                className="pill sla-late"
+                                title={`Submitted ${days} day${days === 1 ? '' : 's'} ago — past the ${APPROVAL_SLA_DAYS}-day approval SLA`}
+                              >
+                                {days}d waiting
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="sm mut">{days}d waiting</div>
+                          );
+                        })()}
+                      </td>
                       {canDecide && (
                         <td>
                           <div className="rowflex" style={{ justifyContent: 'flex-end' }}>
