@@ -6,6 +6,12 @@ Source of truth: `frontend/src/shell/Shell.tsx` (the `NAV` array) and `frontend/
 
 Roles: **SALES** (Sales Representative), **INTERN**, **ACCT** (Accounting), **MGR** (Sales Manager), **ADMIN** (Administrator).
 
+**Global search** (Cmd/Ctrl-K, or the ⌕ icon in the rail) is not a screen — it's a command palette
+mounted once in `Shell.tsx` and reachable from every authenticated page. `GET /api/search?q=` covers
+Submissions and Contacts (not yet Emails — it has no per-record route to deep-link to). Every result
+goes through the same scoped service method its owning screen already uses, so a result can never
+point at something the signed-in user couldn't already open directly.
+
 ---
 
 ## Work
@@ -13,7 +19,9 @@ Roles: **SALES** (Sales Representative), **INTERN**, **ACCT** (Accounting), **MG
 ### Dashboard — `/`
 **All roles.** The landing screen: accounting and admins see what is awaiting approval, everyone else sees their own submissions.
 
-*No tabs.*
+*No tabs.* Below the KPI strip: a revenue trend, a submission-status breakdown, and a top-packages
+chart, all derived client-side from data the screen already fetches — no separate chart endpoint, and
+the row-scoping is inherited for free from the already-scoped submissions list.
 
 ### New submission — `/new`
 **All roles** (`submission.create`). The form for creating a new submission — contact, show, package,
@@ -64,7 +72,9 @@ The detail view also carries the money side of a sale:
 ### Contacts — `/contacts`
 **SALES, ACCT, MGR, ADMIN.** Searchable directory of client contacts and brands, opening into a per-contact history (`/contacts/:id`).
 
-*No tabs.*
+*No tabs.* An **Import CSV** button (gated by the same permission as "+ New contact") bulk-creates
+contacts by looping the real single-row create call — a bad row reports its file row number and the
+exact error the single-create path would have produced, and good rows still land.
 
 ### Messages — `/messages`
 **All roles.** Real-time internal chat between staff, with a live unread badge on the nav rail.
@@ -84,11 +94,20 @@ Reading is split like submissions — everyone may open the module, the list dec
 *Sending* an invoice is an accounting action (`email.send` — ACCT, ADMIN) and happens from the
 submission detail, not from here. How mail actually leaves the box is `docs/email-delivery.md`.
 
+Two scheduled jobs also write here (`backend/src/emails/reminders.service.ts`): a daily overdue-payment
+reminder to the contact, and a weekly renewal nudge to the *rep* — not the contact, deliberately, since
+nothing in this system auto-emails a past customer without a person deciding to. Both reuse the same
+receivables/retention data Reports shows, so a reminder can never disagree with what the Reports screen
+says.
+
 ### Approval queue — `/queue`
 **SALES, ACCT, ADMIN** (`submission.queueView`). Submissions waiting on accounting sign-off, where they
 get approved or returned to sales; carries an unread badge showing queue depth.
 
 *No tabs.* Two stacked cards: **Pending accounting approval** and **Returned to sales**.
+
+A row pending past 3 calendar days carries an amber SLA pill instead of a plain submitted-date note
+(`APPROVAL_SLA_DAYS` in `frontend/src/pages/Queue.tsx` — a flat constant, not a Settings field, for now).
 
 **Reading the queue is not deciding on it.** SALES holds `queueView` so a rep can see where their own
 submission sits, and the read is row-scoped like every other submission read. Acting on one stays with
@@ -255,6 +274,11 @@ salaries. **Lifetime earnings** roll up from approved invoices and show on both 
 **ACCT, MGR, ADMIN.** Runs a chosen report over a chosen period, and exports it through the
 system-wide export menu (PDF / Excel / CSV) like every other screen — see *Export coverage*.
 
+A **saved views** dropdown lets you name and reapply a report type + period combination —
+browser-local only (`frontend/src/lib/savedFilters.ts`), no backend model, so it doesn't follow you to
+another device. A saved view pointing at a since-removed report type is shown disabled rather than
+applied silently.
+
 Not tabs strictly — a toolbar of report types (defined in `backend/src/reports/reports.service.ts`), one shown at a time:
 
 | Report | What it shows |
@@ -293,7 +317,7 @@ roles can raise its own to ADMIN**, so this grant is effectively a grant of ever
 | --- | --- |
 | Invitations & approvals | Issues invitation codes with a fixed role, revokes them, and reviews sign-ups pending approval. |
 | Users & roles | Lists staff accounts and changes each one's role, pay basis (pay type plus whether they earn commission) and rates. Opening a user also shows their **Sales this period** — the same panel Payroll → My pay uses. |
-| Packages & pricing | Three cards: **Shows**, the package catalogue, and the add-on catalogue. New rows are created from the button on each card; package and show ids are derived from the brand (and city/season), and stay fixed once created because that is what submissions point at. |
+| Packages & pricing | Three cards: **Shows**, the package catalogue, and the add-on catalogue. New rows are created from the button on each card, or bulk-created via **Import CSV** (same underlying create call, per-row error reporting, no schema bypassed); package and show ids are derived from the brand (and city/season), and stay fixed once created because that is what submissions point at. |
 | Tax rates | Adds to and maintains the tax rates applied at pricing time. New profiles are created from the button on the card; the code is typed, not derived, because it is the key packages and cities point at. |
 | Settings | Discount approval threshold, invoice prefix and next invoice number (read-only, allocated transactionally), and the FX rates every report converts through. |
 | Configuration | Edits runtime config straight to the database — no redeploy — for values that aren't needed before the database is reachable. Passwords and secrets stay in env. Also where QuickBooks itself is connected: OAuth connect/disconnect, and a mapping card pointing VFW tax profiles, GL accounts and departments at their QuickBooks counterparts. See `docs/quickbooks-integration.md`. |

@@ -1,120 +1,97 @@
-# Add-on features — ideas, not commitments
+# Add-on features — shipped, decided, and still open
 
-A shortlist of features the console doesn't have yet, grounded by checking the
-code rather than guessing — each entry below was confirmed absent (grep'd for
-an existing implementation first) or is a known, already-written-down gap.
-Nothing here is scheduled; it's a menu to pick from.
+Originally a shortlist of features the console didn't have yet, grounded by
+checking the code first. As of this pass, the six schema-free items have
+shipped, and the schema-changing items have gateway/provider decisions
+recorded so the next round of work doesn't stall on picking a vendor.
 
 ---
 
-## Money & sales
+## Shipped
 
-- **Online payment collection.** The Installments card (`docs/modules&tabs.md`
-  → Submissions) only records a payment after the fact — someone marks it paid
-  once a wire lands. A "Pay now" link on the invoice email, backed by Stripe or
-  similar, would let a contact pay a deposit or instalment directly and write
-  the same `Payment` ledger entry instantly instead of waiting on a bank
-  confirmation. No payment-gateway code exists in the repo today.
-- **E-signature on contracts.** The Documents card already accepts contract
-  uploads (`frontend/src/pages/DocumentsCard.tsx`). Wiring DocuSign/HelloSign
-  would close the loop from "upload a blank contract" to "have it signed"
-  without leaving the console.
-- **Multi-level approval for large discounts.** Today approval is a single
-  maker/checker step, same for every sale regardless of size. A configurable
-  threshold (e.g. discounts over X% need a second sign-off, mirroring the
-  existing custom-package sign-off pattern in the Approval queue) would
-  tighten control on the biggest deviations without slowing down normal ones.
-- **Commission tiers / bonus rules.** Commission is one flat percentage per
-  rep, stamped onto each sale at creation. Tiered rates (accelerating past a
-  monthly revenue threshold) are a common ask for sales orgs; this would mean
-  the rate becomes a computed rule rather than a stored scalar, so it's a
-  bigger change than most items here.
-- **FX rate history.** Administration → Settings holds one *live* FX snapshot
-  that every report converts through right now. A rate-per-month history would
-  make a March report defensible even if nobody touched Settings between March
-  and September — right now an old report silently re-prices itself if the
-  rate has since moved.
+All six landed with no Prisma schema changes, fully tested, merged to `main`.
 
-## Search & navigation
+- **Dashboard charts.** Revenue trend, submission-status breakdown, and top
+  packages, all derived client-side from data the Dashboard already fetched —
+  no new backend endpoints. Uses `recharts`, themed through the existing CSS
+  custom properties so it repaints on the dark/light toggle. Row-scoping is
+  inherited for free (`GET /api/submissions` was already scoped). See
+  `frontend/src/pages/Dashboard.tsx`.
+- **Approval-queue SLA flag.** A row in "Pending accounting approval" past 3
+  calendar days shows an amber pill instead of a plain date. Flat constant
+  (`APPROVAL_SLA_DAYS` in `frontend/src/pages/Queue.tsx`), not a Settings
+  field — deliberately, to stay schema-free this round. A configurable
+  threshold (mirroring `discountApprovalPct`) is the natural follow-up once
+  schema changes are back on the table.
+- **Saved report filters.** Browser-local only (`frontend/src/lib/savedFilters.ts`
+  + `frontend/src/pages/Reports.tsx`) — save/apply/delete a named filter
+  combination, with a one-line "this browser only" disclosure. No backend
+  model; doesn't sync across devices.
+- **Global search (Cmd/Ctrl-K).** `backend/src/search/` + `frontend/src/shell/CommandPalette.tsx`.
+  Covers Submissions and Contacts for v1 — Emails was left out because it has
+  no per-record route to link to yet. Every result goes through the same
+  scoped service method the owning screen already uses (`SubmissionsService.scopeFor`,
+  `ContactsService.list`'s `contacts.view` check), so a search result can
+  never surface something the caller couldn't already open directly —
+  specifically tested (a colleague's search for the same ref/brand comes back
+  empty).
+- **CSV bulk import.** `POST /api/admin/{packages,addons,events}/import` and
+  `POST /api/contacts/import` — each loops the real single-row create method,
+  so validation and business rules can't drift from the single-create path.
+  Per-row error reporting (file row number + real error message), not
+  all-or-nothing. Frontend: `frontend/src/shell/ImportCsv.tsx`, wired into
+  Admin's three catalogue cards and Contacts.
+- **Payment / renewal reminder emails.** `backend/src/emails/reminders.service.ts`
+  — daily overdue-payment reminders to the contact, weekly renewal nudges to
+  the *rep* (not the contact — a deliberate call against cold-emailing past
+  customers with no human in the loop). Reuses `reports.service.ts`'s
+  receivables/retention logic (now exposed as public `receivablesRows`/
+  `retentionRows` methods) rather than forking it, so the reminder trigger can
+  never disagree with what Reports shows on screen. De-duped via existing
+  `EmailMessage` rows — no new `EmailKind` enum value yet (`OTHER` is used as
+  a placeholder; a dedicated `REMINDER` kind is a natural follow-up once
+  schema changes are back on the table).
 
-- **Global search (Cmd/Ctrl-K).** There's no cross-entity search today — a rep
-  hunting a submission by ref, a contact by name, or an invoice number has to
-  already know which screen to search from. Confirmed no command-palette code
-  exists in `frontend/src/`.
-- **Saved report filters / a personal dashboard.** Reports resets to its
-  defaults on every visit. Letting ACCT/MGR pin a filter set (e.g. "this
-  quarter, Vancouver only") would save re-entering the same setup daily.
+## Decided, not yet built
 
-## Insight
+Provider/design decisions are made — these are ready to scope and dispatch as
+soon as schema-changing work resumes:
 
-- **Dashboard charts.** `docs/roadmap.md` already flags this — the Dashboard
-  KPI strip never got the charts the original mockup called for; confirmed
-  still true (`frontend/src/pages/Dashboard.tsx` has no charting library).
-  Cheapest visible win here, since the reports data it would chart already
-  exists.
-- **Custom / ad hoc report builder.** The 10 canned report types
-  (`docs/modules&tabs.md` → Reports) cover the obvious cuts. A pivot-style
-  builder — pick dimensions and measures — would serve requests that don't fit
-  any of the ten without adding an eleventh, twelfth, thirteenth fixed report.
-- **Approval-queue SLA flag.** Nothing currently flags a submission that's
-  been sitting in the queue too long. A simple "pending > N days" highlight on
-  the Approval queue would surface a stuck deal before a rep has to chase it.
+| Feature | Decision |
+|---|---|
+| Online payment collection | **Stripe** |
+| E-signature on contracts | **DocuSign** |
+| SSO | **Google Workspace** |
+| 2FA | **TOTP authenticator app** |
+| Commission tiers | Build the engine now with **placeholder tiers**, tune real numbers later in Administration |
+| Multi-level approval on over-threshold discounts | **Yes** — a second, different ACCT/ADMIN must sign off, reusing the existing `Settings.discountApprovalPct` trigger |
+| Client portal for contacts | **View-only via magic link** (no password account) |
 
-## Communication
+All seven need a Prisma schema change (new columns/tables/enum values) and
+were deliberately held back from the schema-free batch above to avoid
+concurrent migrations colliding against one shared dev database.
 
-- **Message search, edit/delete, reactions.** `docs/roadmap.md`'s Messaging
-  section lists these as known follow-ups from the original build; still true
-  today — none of the three exist in `frontend/src/pages/Messages.tsx`.
-- **Push notifications.** Same roadmap note. Today, the Approval queue and
-  Messages badges (`frontend/src/shell/Shell.tsx`) only update while the
-  console tab is open in a browser; nothing reaches a phone or a closed tab.
-- **Payment / renewal reminder emails.** No automated dunning for an overdue
-  balance, and no "your usual season is coming up again" nudge for a lapsed
-  contact. Both would lean on data the Outstanding receivables and Customer
-  retention reports already compute — the aggregation exists, the notification
-  trigger doesn't.
+## Deferred — own session, not a quick add
 
-## Access & security
-
-- **SSO (Google / Microsoft).** Staff sign in with email + password only
-  today — no OAuth code found in `backend/src/auth/`. Removes one more
-  password to manage, and fits naturally if VFW runs a company Google
-  Workspace or Microsoft 365 tenant.
-- **Two-factor authentication on login.** OTP exists today only once, at
-  signup verification (`docs/email-and-otp.md`) — there's no ongoing 2FA
-  challenge at every login. Worth adding once the account list is large enough
-  that credential-stuffing is a real risk rather than a theoretical one.
-- **A finer-grained permission editor.** Roles are five fixed, hardcoded
-  buckets in `backend/src/common/acl.ts`. A screen to adjust individual
-  permissions per role (or per user) would be a genuinely bigger change to the
-  ACL model — listed here as the one "big swing" in this section, not a quick
-  add.
-
-## Data
-
-- **CSV import for contacts / catalogue.** Contacts and catalogue rows
-  (packages, add-ons, shows) can only be created one at a time through the
-  console today. A bulk importer would help onboarding a new season's shows or
-  migrating an existing contact list, rather than hand-entering each row.
-- **A client-facing portal.** Contacts currently only ever receive a PDF
-  invoice by email (`docs/modules&tabs.md` → Submissions → Send invoice). A
-  lightweight portal — view an invoice, see payment status, download past
-  invoices without asking someone at VFW to resend them — would cut down on
-  that back-and-forth.
-
-## Mobile
-
-- **A real mobile client.** Commit `5b908da` ("Mobile setup") already laid the
-  CORS/auth groundwork (`docs/architecture.md`) for something to consume the
-  API from a phone, but no client — PWA or native — exists yet. Worth deciding
-  which (an installable PWA wrapper around the existing SPA is far cheaper
-  than a native app) before investing further here.
+- **A finer-grained permission editor**, replacing the five hardcoded ACL
+  roles (`backend/src/common/acl.ts`). Touches every guarded endpoint in the
+  system; explicitly deferred rather than rushed into a batch with everything
+  else.
+- **A real mobile client** (PWA or native) and **push notifications** — grouped
+  together because browser push needs the same service-worker groundwork a
+  PWA would need; there's no client to push to yet either way. Commit
+  `5b908da` ("Mobile setup") already laid the CORS/auth groundwork.
+- **Message search, edit/delete, reactions** on Messages — `docs/roadmap.md`'s
+  known follow-ups from the original messaging build; not yet touched in this
+  round.
+- **Custom / ad hoc report builder** — a pivot-style builder beyond the 10
+  canned report types; not yet scoped.
 
 ---
 
 ## How to use this list
 
-Nothing above is prioritized or scoped — it's a menu, not a backlog. Pick one
-(or a few) and I'll dig into the exact code paths the way the last batch
-(package `listValue`/`cap`, the three export gaps) got scoped, before writing
-or dispatching anything.
+The "Decided, not yet built" table is ready to scope and dispatch in
+controlled batches (not all at once — several touch the same auth/submission
+files and all need schema migrations against one shared dev database). Say
+the word and I'll start the next wave.
