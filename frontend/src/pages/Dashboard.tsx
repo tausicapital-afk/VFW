@@ -1,13 +1,52 @@
 import { useQuery } from '@tanstack/react-query';
+import {
+  Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis,
+} from 'recharts';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { can } from '../lib/acl';
 import { api } from '../lib/api';
 import { fmtDate, money, PAY_LABEL, shortMoney } from '../lib/format';
 import { TestTag, useTestRow } from '../lib/testData';
-import type { Submission } from '../lib/types';
+import type { Submission, SubmissionStatus } from '../lib/types';
 import { Page } from '../shell/Shell';
 import { SubmissionsTable } from './Submissions';
+
+/**
+ * Fixed status order and identity colour, matching the pill palette used
+ * everywhere else (see .pill.* in console.css). Colour follows the status,
+ * never its rank, so a status keeps its colour whichever others are present.
+ * VOIDED is left out — it never appears in /api/submissions (soft-deleted).
+ */
+const STATUS_ORDER: SubmissionStatus[] = ['PENDING', 'RETURNED', 'APPROVED', 'EXPORTED', 'REJECTED', 'DRAFT'];
+const STATUS_SHORT: Record<SubmissionStatus, string> = {
+  DRAFT: 'Draft',
+  PENDING: 'Pending',
+  RETURNED: 'Returned',
+  APPROVED: 'Approved',
+  REJECTED: 'Rejected',
+  EXPORTED: 'Exported',
+  VOIDED: 'Voided',
+};
+const STATUS_COLOR: Record<SubmissionStatus, string> = {
+  DRAFT: 'var(--muted)',
+  PENDING: 'var(--amber)',
+  RETURNED: 'var(--violet)',
+  APPROVED: 'var(--green)',
+  REJECTED: 'var(--red)',
+  EXPORTED: 'var(--blue)',
+  VOIDED: 'var(--ink-3)',
+};
+
+/** Shared chart chrome so all three charts read as one system. */
+const tooltipStyle = {
+  background: 'var(--card)',
+  border: '1px solid var(--line)',
+  borderRadius: 5,
+  fontSize: 12,
+  boxShadow: 'var(--shadow)',
+};
+const axisTick = { fill: 'var(--muted)', fontSize: 11 };
 
 /** Live FX to CAD (the reporting currency), served by /api/fx with a manual
  *  fallback. The dashboard converts each figure through these before summing. */
@@ -64,6 +103,10 @@ export function Dashboard() {
   const paymentsMade = approved.reduce((t, s) => t + s.payments.length, 0);
 
   const isAccounting = can('submission.approve', user?.role);
+  // Same row-scoping /api/submissions already applies server-side (scopeFor in
+  // submissions.service.ts): ACCT/MGR/ADMIN get every rep's rows, everyone else
+  // gets only their own. This just decides how the charts below are labelled.
+  const seesAll = can('submission.viewAll', user?.role);
 
   // Upcoming debt collection: approved sales still owing, soonest show first so
   // the money that has to be chased before its show sits at the top.
@@ -74,6 +117,38 @@ export function Dashboard() {
       const bd = b.showDate ? Date.parse(b.showDate) : Number.POSITIVE_INFINITY;
       return ad - bd;
     });
+
+  // --- Chart data, all derived client-side from the same `rows` already in
+  // memory — no extra endpoint. Dated the same way reports.service.ts dates
+  // "booked" revenue: submittedAt, since a submission is only ever approved
+  // after being sent.
+  const now = new Date();
+  const months = Array.from({ length: 6 }, (_, i) => {
+    const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
+    return { key: `${d.getFullYear()}-${d.getMonth()}`, label: d.toLocaleDateString('en-CA', { month: 'short' }) };
+  });
+  const revenueTrend = months.map(({ key, label }) => ({
+    month: label,
+    revenue: approved.reduce((t, s) => {
+      if (!s.submittedAt) return t;
+      const d = new Date(s.submittedAt);
+      return `${d.getFullYear()}-${d.getMonth()}` === key ? t + toCAD(s.taxable, s.currency) : t;
+    }, 0),
+  }));
+  const hasRevenueTrend = revenueTrend.some((m) => m.revenue > 0);
+
+  const statusBreakdown = STATUS_ORDER
+    .map((status) => ({ status, label: STATUS_SHORT[status], count: rows.filter((s) => s.status === status).length }))
+    .filter((d) => d.count > 0);
+
+  const packageTotals = new Map<string, number>();
+  approved.forEach((s) => {
+    const name = s.packageNameOverride || s.package.name;
+    packageTotals.set(name, (packageTotals.get(name) ?? 0) + toCAD(s.taxable, s.currency));
+  });
+  const topPackages = Array.from(packageTotals, ([name, revenue]) => ({ name, revenue }))
+    .sort((a, b) => b.revenue - a.revenue)
+    .slice(0, 5);
 
   return (
     <Page
@@ -110,6 +185,123 @@ export function Dashboard() {
           sub={pending.length ? 'Needs review' : 'Queue is clear'}
           accent={pending.length ? 'red' : 'ok'}
         />
+      </div>
+
+      <div className="charts" style={{ marginTop: 16 }}>
+        <div className="card">
+          <div className="hd">
+            <h3>{seesAll ? 'Revenue trend' : 'My revenue trend'}</h3>
+            <div className="sp" />
+            <span className="sm mut">Last 6 months · CAD</span>
+          </div>
+          <div className="bd">
+            {isLoading ? (
+              <div className="empty"><h3>Loading…</h3></div>
+            ) : !hasRevenueTrend ? (
+              <div className="empty">
+                <h3>No booked revenue yet</h3>
+                <p>Approved sales will chart here once they come in.</p>
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={220}>
+                <AreaChart data={revenueTrend} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="revenueFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="var(--blue)" stopOpacity={0.32} />
+                      <stop offset="100%" stopColor="var(--blue)" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid stroke="var(--line-soft)" vertical={false} />
+                  <XAxis
+                    dataKey="month" tickLine={false} axisLine={{ stroke: 'var(--line)' }} tick={axisTick}
+                  />
+                  <YAxis
+                    tickLine={false} axisLine={false} width={56} tick={axisTick}
+                    tickFormatter={(v: number) => shortMoney(v, 'CAD')}
+                  />
+                  <Tooltip
+                    formatter={(v) => [money(Number(v), 'CAD'), seesAll ? 'Revenue' : 'My revenue']}
+                    contentStyle={tooltipStyle}
+                    labelStyle={{ color: 'var(--text)', marginBottom: 4 }}
+                    cursor={{ stroke: 'var(--line)' }}
+                  />
+                  <Area
+                    type="monotone" dataKey="revenue" stroke="var(--blue)" strokeWidth={2}
+                    fill="url(#revenueFill)" dot={{ r: 3, fill: 'var(--blue)', strokeWidth: 0 }}
+                    activeDot={{ r: 5 }}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="hd">
+            <h3>Submission status</h3>
+            <div className="sp" />
+            <span className="sm mut">{rows.length} total</span>
+          </div>
+          <div className="bd">
+            {isLoading ? (
+              <div className="empty"><h3>Loading…</h3></div>
+            ) : statusBreakdown.length === 0 ? (
+              <div className="empty"><h3>Nothing yet</h3></div>
+            ) : (
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={statusBreakdown} layout="vertical" margin={{ top: 4, right: 20, left: 8, bottom: 4 }}>
+                  <CartesianGrid stroke="var(--line-soft)" horizontal={false} />
+                  <XAxis type="number" allowDecimals={false} tickLine={false} axisLine={{ stroke: 'var(--line)' }} tick={axisTick} />
+                  <YAxis
+                    type="category" dataKey="label" tickLine={false} axisLine={false} width={90}
+                    tick={{ fill: 'var(--text)', fontSize: 12 }}
+                  />
+                  <Tooltip
+                    formatter={(v) => [`${v} submission${Number(v) === 1 ? '' : 's'}`, '']}
+                    contentStyle={tooltipStyle}
+                    labelStyle={{ color: 'var(--text)', marginBottom: 4 }}
+                    cursor={{ fill: 'var(--line-soft)' }}
+                  />
+                  <Bar dataKey="count" radius={[0, 4, 4, 0]} maxBarSize={22}>
+                    {statusBreakdown.map((d) => <Cell key={d.status} fill={STATUS_COLOR[d.status]} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </div>
+
+        {topPackages.length > 0 && (
+          <div className="card">
+            <div className="hd">
+              <h3>Top packages</h3>
+              <div className="sp" />
+              <span className="sm mut">By booked revenue · CAD</span>
+            </div>
+            <div className="bd">
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={topPackages} layout="vertical" margin={{ top: 4, right: 24, left: 8, bottom: 4 }}>
+                  <CartesianGrid stroke="var(--line-soft)" horizontal={false} />
+                  <XAxis
+                    type="number" tickLine={false} axisLine={{ stroke: 'var(--line)' }} tick={axisTick}
+                    tickFormatter={(v: number) => shortMoney(v, 'CAD')}
+                  />
+                  <YAxis
+                    type="category" dataKey="name" tickLine={false} axisLine={false} width={120}
+                    tick={{ fill: 'var(--text)', fontSize: 12 }}
+                  />
+                  <Tooltip
+                    formatter={(v) => [money(Number(v), 'CAD'), 'Net revenue']}
+                    contentStyle={tooltipStyle}
+                    labelStyle={{ color: 'var(--text)', marginBottom: 4 }}
+                    cursor={{ fill: 'var(--line-soft)' }}
+                  />
+                  <Bar dataKey="revenue" fill="var(--violet)" radius={[0, 4, 4, 0]} maxBarSize={22} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="card" style={{ marginTop: 16 }}>
