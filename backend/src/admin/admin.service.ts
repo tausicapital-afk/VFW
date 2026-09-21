@@ -4,6 +4,7 @@ import { randomInt } from 'crypto';
 import { Decimal } from 'decimal.js';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/auth.guard';
+import { ImportResult, importCsv } from '../common/csv-import';
 import { EmailService } from '../common/email';
 import { ConfigService } from '../config/config.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -838,6 +839,83 @@ export class AdminService {
       );
       return created;
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // Bulk import — CSV. Onboarding a new season's shows, or a rate card's worth
+  // of packages and add-ons, one row at a time through createPackage /
+  // createAddon / createEvent above, so a bad row fails exactly the way a bad
+  // single-create would. See csv-import.ts for the per-row validation and the
+  // independent-rows decision.
+  // -------------------------------------------------------------------------
+
+  /**
+   * `prices` is one column carrying however many city prices a package has,
+   * since a CSV row can't hold a variable-length array natively: groups of
+   * "cityId:currency:price" separated by ";", e.g.
+   * "VAN:USD:250.00;TOR:CAD:275.00". Admin.tsx's new-package modal is the
+   * reference for what a valid group looks like.
+   */
+  async importPackages(csvText: string, actor: AuthUser): Promise<ImportResult> {
+    return importCsv(
+      csvText,
+      (rec) => ({
+        brand: rec['brand'],
+        name: rec['name'],
+        looks: Number(rec['looks']),
+        blurb: rec['blurb'] || undefined,
+        taxCode: rec['taxcode'],
+        glCode: rec['glcode'],
+        prices: (rec['prices'] ?? '')
+          .split(';')
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .map((group) => {
+            const [cityId, currency, price] = group.split(':').map((s) => s.trim());
+            return { cityId, currency, price };
+          }),
+      }),
+      CreatePackageDto,
+      (dto) => this.createPackage(dto, actor),
+    );
+  }
+
+  /** `forBrands` is a ";"-separated list of brand codes, e.g. "VFW;GFC". */
+  async importAddons(csvText: string, actor: AuthUser): Promise<ImportResult> {
+    return importCsv(
+      csvText,
+      (rec) => ({
+        brand: rec['brand'],
+        name: rec['name'],
+        price: rec['price'],
+        currency: rec['currency'],
+        note: rec['note'] || undefined,
+        forBrands: (rec['forbrands'] ?? '')
+          .split(';')
+          .map((s) => s.trim())
+          .filter(Boolean),
+        glCode: rec['glcode'],
+      }),
+      CreateAddonDto,
+      (dto) => this.createAddon(dto, actor),
+    );
+  }
+
+  async importEvents(csvText: string, actor: AuthUser): Promise<ImportResult> {
+    return importCsv(
+      csvText,
+      (rec) => ({
+        brand: rec['brand'],
+        name: rec['name'],
+        season: rec['season'],
+        cityId: rec['cityid'],
+        venue: rec['venue'] || undefined,
+        start: rec['start'],
+        end: rec['end'],
+      }),
+      CreateEventDto,
+      (dto) => this.createEvent(dto, actor),
+    );
   }
 
   async updateEvent(id: string, dto: UpdateEventDto, actor: AuthUser) {

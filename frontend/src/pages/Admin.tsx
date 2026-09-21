@@ -10,6 +10,7 @@ import type {
 } from '../lib/types';
 import { useAuth } from '../auth/AuthContext';
 import { ExportMenu } from '../shell/ExportMenu';
+import { ImportCsvButton } from '../shell/ImportCsv';
 // The role names people read are the shell's, not a second copy of them: this
 // screen is where a role is *assigned*, so a label that had drifted from the one
 // shown everywhere else would mislead exactly the person choosing it. The key
@@ -1159,6 +1160,7 @@ function PackagesTab() {
         <div className="hd">
           <h3>Shows</h3>
           <div className="sp" />
+          <ImportCsvButton endpoint="/api/admin/events/import" onImported={refresh} label="Import CSV" />
           <button className="btn sm blue" onClick={() => setAddingShow(true)}>+ New show</button>
         </div>
         <div className="tbl-wrap">
@@ -1194,6 +1196,7 @@ function PackagesTab() {
           <h3>Package rate card</h3>
           <div className="sp" />
           <ExportMenu dataset="packages" disabled={!data?.packages.length} />
+          <ImportCsvButton endpoint="/api/admin/packages/import" onImported={refresh} label="Import CSV" />
           <button className="btn sm blue" onClick={() => setAddingPackage(true)}>+ New package</button>
         </div>
         <div className="tbl-wrap">
@@ -1234,6 +1237,7 @@ function PackagesTab() {
           <h3>Add-on catalogue</h3>
           <div className="sp" />
           <ExportMenu dataset="addons" disabled={!data?.addons.length} />
+          <ImportCsvButton endpoint="/api/admin/addons/import" onImported={refresh} label="Import CSV" />
           <button className="btn sm blue" onClick={() => setAddingAddon(true)}>+ New add-on</button>
         </div>
         <div className="tbl-wrap">

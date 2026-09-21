@@ -6,6 +6,7 @@ import {
 import { Prisma, SubmissionStatus } from '@prisma/client';
 import { AuthUser } from '../common/auth.guard';
 import { can } from '../common/acl';
+import { ImportResult, importCsv } from '../common/csv-import';
 import { ConfigService } from '../config/config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SubmissionsService } from '../submissions/submissions.service';
@@ -126,5 +127,27 @@ export class ContactsService {
         isTestData: this.config.testDataMode,
       },
     });
+  }
+
+  /**
+   * Migrating an existing contact list, one row at a time through create()
+   * above — same duplicate-brand rejection, same validation, same result. See
+   * csv-import.ts for the per-row and independent-rows decisions.
+   */
+  async importContacts(csvText: string, user: AuthUser): Promise<ImportResult> {
+    return importCsv(
+      csvText,
+      (rec) => ({
+        brand: rec['brand'],
+        designer: rec['designer'] || undefined,
+        company: rec['company'] || undefined,
+        email: rec['email'] || undefined,
+        phone: rec['phone'] || undefined,
+        country: rec['country'] || undefined,
+        type: rec['type'] || undefined,
+      }),
+      CreateContactDto,
+      (dto) => this.create(dto, user),
+    );
   }
 }

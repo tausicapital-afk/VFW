@@ -1,5 +1,18 @@
-import { Body, Controller, Get, Module, Param, Post, Query } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Module,
+  Param,
+  Post,
+  Query,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthUser, Can, CurrentUser } from '../common/auth.guard';
+import { MAX_IMPORT_FILE_BYTES, UploadedCsvFile } from '../common/csv-import';
 import { SubmissionsModule } from '../submissions/submissions.controller';
 import { ContactsService } from './contacts.service';
 import { CreateContactDto } from './dto';
@@ -32,6 +45,14 @@ export class ContactsController {
   @Post()
   create(@Body() dto: CreateContactDto, @CurrentUser() user: AuthUser) {
     return this.contacts.create(dto, user);
+  }
+
+  @Can('contacts.create')
+  @Post('import')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_IMPORT_FILE_BYTES } }))
+  importContacts(@UploadedFile() file: UploadedCsvFile, @CurrentUser() user: AuthUser) {
+    if (!file) throw new BadRequestException('No file was uploaded — choose a CSV file first');
+    return this.contacts.importContacts(file.buffer.toString('utf8'), user);
   }
 }
 
