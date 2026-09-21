@@ -44,6 +44,40 @@ export interface ReportFilters {
   cityId?: string;
 }
 
+/**
+ * Raw row shapes for {@link ReportsService.receivablesRows} and
+ * {@link ReportsService.retentionRows} — exported so RemindersService (the
+ * overdue-payment / renewal-nudge cron jobs) can consume them without
+ * re-deriving the SQL, and without depending on the display-formatted
+ * `ReportTable` the on-screen report actually renders.
+ */
+export interface ReceivableRow {
+  submissionId: string;
+  ref: string;
+  contactId: string;
+  brand: string;
+  contactEmail: string | null;
+  due: Date | null;
+  daysToDue: number | null;
+  total: Decimal;
+  paid: Decimal;
+  balance: Decimal;
+  currency: string;
+}
+
+export interface RetentionRow {
+  contactId: string;
+  brand: string;
+  contactEmail: string | null;
+  bookings: number;
+  net: Decimal;
+  repId: string;
+  repName: string;
+  repEmail: string;
+  firstBooking: Date;
+  lastBooking: Date;
+}
+
 export interface ReportCol {
   label: string;
   /** Right-aligned and thousands-separated by the client. */
@@ -71,7 +105,7 @@ export interface ReportTable {
  * no dueDate column, so receivables age from approvedAt rather than inventing
  * one — if terms ever become per-deal, this is the line that changes.
  */
-const NET_TERMS_DAYS = 30;
+export const NET_TERMS_DAYS = 30;
 
 const money = (v: unknown): string => new Decimal((v as Decimal.Value) ?? 0).toFixed(2);
 const int = (v: unknown): number => Number(v ?? 0);
@@ -284,27 +318,45 @@ export class ReportsService {
   }
 
   /**
-   * Retention counts every live submission (a rejected deal still means the
-   * customer came back), but lifetime value counts only what was booked.
+   * Per-contact retention data, raw — one row per brand with enough to derive
+   * a booking cadence (first/last booking) and who to notify (the rep most
+   * recently on the account), not just the display aggregate below.
+   *
+   * Reused by both {@link retention} (the on-screen report, which only needs
+   * bookings/net/rep) and RemindersService's renewal nudge (which additionally
+   * needs contactEmail, repEmail and the booking-date spread) — one query, two
+   * consumers, rather than a second copy of this SQL forked off for the cron.
    */
-  private async retention(f: ReportFilters, fx: Record<Currency, Decimal>) {
-    const rows = await this.prisma.$queryRaw<
-      { brand: string; bookings: number; net: Decimal; rep: string }[]
-    >(Prisma.sql`
-      SELECT ct.brand AS brand,
+  async retentionRows(f: ReportFilters, fx: Record<Currency, Decimal>) {
+    return this.prisma.$queryRaw<RetentionRow[]>(Prisma.sql`
+      SELECT ct.id AS "contactId",
+             ct.brand AS brand,
+             ct.email AS "contactEmail",
              COUNT(*)::int AS bookings,
              ROUND(
                SUM(CASE WHEN s.status IN ('APPROVED', 'EXPORTED')
                         THEN s.taxable * fx.rate ELSE 0 END), 2) AS net,
-             (array_agg(u.name ORDER BY s."createdAt" DESC))[1] AS rep
+             (array_agg(u.id ORDER BY s."createdAt" DESC))[1] AS "repId",
+             (array_agg(u.name ORDER BY s."createdAt" DESC))[1] AS "repName",
+             (array_agg(u.email ORDER BY s."createdAt" DESC))[1] AS "repEmail",
+             MIN(COALESCE(s."submittedAt", s."createdAt")) AS "firstBooking",
+             MAX(COALESCE(s."submittedAt", s."createdAt")) AS "lastBooking"
       FROM "Submission" s
       JOIN "Contact" ct ON ct.id = s."contactId"
       JOIN "User" u ON u.id = s."repId"
       JOIN ${this.fxSql(fx)} ON fx.cur = s.currency::text
       WHERE ${this.where(f, 'live')}
-      GROUP BY ct.brand
+      GROUP BY ct.id, ct.brand
       ORDER BY bookings DESC, net DESC
     `);
+  }
+
+  /**
+   * Retention counts every live submission (a rejected deal still means the
+   * customer came back), but lifetime value counts only what was booked.
+   */
+  private async retention(f: ReportFilters, fx: Record<Currency, Decimal>) {
+    const rows = await this.retentionRows(f, fx);
 
     return {
       cols: [
@@ -318,28 +370,26 @@ export class ReportsService {
         r.brand,
         r.bookings,
         money(r.net),
-        r.rep,
+        r.repName,
         r.bookings > 1 ? 'Yes' : 'No',
       ]),
     };
   }
 
-  /** Open receivables, oldest due first. Each row stays in its own currency. */
-  private async receivables(f: ReportFilters) {
-    const rows = await this.prisma.$queryRaw<
-      {
-        ref: string;
-        brand: string;
-        due: Date | null;
-        daysToDue: number | null;
-        total: Decimal;
-        paid: Decimal;
-        balance: Decimal;
-        currency: string;
-      }[]
-    >(Prisma.sql`
-      SELECT s.ref,
+  /**
+   * Raw open-receivables rows, oldest due first — one row per submission with
+   * a balance still owed. Reused by both {@link receivables} (the on-screen
+   * report) and RemindersService's overdue-payment reminder, which additionally
+   * needs submissionId/contactId/contactEmail to know who to email and how to
+   * de-dupe against the Emails log.
+   */
+  async receivablesRows(f: ReportFilters) {
+    return this.prisma.$queryRaw<ReceivableRow[]>(Prisma.sql`
+      SELECT s.id AS "submissionId",
+             s.ref,
+             ct.id AS "contactId",
              ct.brand,
+             ct.email AS "contactEmail",
              (COALESCE(s."approvedAt", s."createdAt") + ${`${NET_TERMS_DAYS} days`}::interval)::date AS due,
              ((COALESCE(s."approvedAt", s."createdAt") + ${`${NET_TERMS_DAYS} days`}::interval)::date
                - CURRENT_DATE)::int AS "daysToDue",
@@ -349,6 +399,11 @@ export class ReportsService {
       WHERE ${this.where(f, 'booked')} AND s.balance > 0.01
       ORDER BY due ASC
     `);
+  }
+
+  /** Open receivables, oldest due first. Each row stays in its own currency. */
+  private async receivables(f: ReportFilters) {
+    const rows = await this.receivablesRows(f);
 
     return {
       cols: [
