@@ -369,3 +369,72 @@ tbody tr.is-test.on,
 }
 .status-choice:hover { border-color: var(--blue); }
 .status-choice.on { border-color: var(--blue); box-shadow: 0 0 0 2px var(--blue-soft); }
+
+/* ---------- GLOBAL SEARCH (Cmd/Ctrl-K) ----------
+   The command palette lives in shell/CommandPalette.tsx and is mounted once
+   in Shell.tsx, so it is reachable from every screen. It reuses .modal/.box
+   verbatim (see console.css) — only the two triggers and the palette's own
+   inner layout are new. Every token here is one console.css already declares
+   for both themes, so — like the rest of this file — nothing below needs a
+   separate dark-mode rule. */
+
+/* The icon-only trigger in the mobile top bar, styled like its neighbour
+   .burger: same size, same dark-on-ink chip. */
+.mtop-search {
+  width: 38px; height: 38px; flex: 0 0 auto; border: 0; border-radius: var(--r);
+  background: var(--ink-3); color: #fff; font-size: 17px; cursor: pointer;
+  display: grid; place-items: center;
+}
+.mtop-search:hover { background: var(--ink-4); }
+
+/* The desktop trigger sits in the rail as an ordinary .nav row (see
+   Shell.tsx), so it already has the icon/label layout and hover state; this
+   only styles the "Ctrl K" hint pinned to the row's right edge. */
+.rail-search .cmdk-kbd { margin-left: auto; }
+.collapsed .rail-search .cmdk-kbd { display: none; }
+
+/* A keyboard-shortcut chip, reused for both the rail's "Ctrl K" hint and the
+   palette's own "Esc" hint. */
+.cmdk-kbd {
+  font-family: "IBM Plex Mono"; font-size: 10px; font-weight: 600;
+  padding: 2px 6px; border: 1px solid var(--line); border-radius: 4px;
+  color: var(--muted); background: var(--paper);
+}
+/* Inside the dark rail the chip needs its own contrast rather than the
+   light-sheet tokens .cmdk-kbd otherwise pulls in. */
+.rail-search .cmdk-kbd { color: #C9CED6; background: var(--ink-3); border-color: var(--ink-4); }
+
+/* The palette itself. Anchored toward the top of the viewport — the .modal
+   base centers everything, which reads right for a confirmation dialog but
+   buries a type-ahead list below the fold on a tall screen. */
+.cmdk-modal { align-items: flex-start; padding-top: 14vh; }
+.box.cmdk { max-width: 560px; }
+
+.cmdk-input-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 16px; border-bottom: 1px solid var(--line);
+}
+.cmdk-ic { font-size: 16px; color: var(--muted); flex: 0 0 auto; }
+.cmdk-input-row input {
+  flex: 1; min-width: 0; border: 0; outline: 0; background: none;
+  font-size: 15px; padding: 4px 0; color: var(--text);
+}
+
+.cmdk-results { max-height: 360px; overflow: auto; padding: 6px; }
+.cmdk-empty { padding: 26px 16px; text-align: center; color: var(--muted); font-size: 13px; }
+
+.cmdk-item {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  border: 0; background: none; padding: 10px; border-radius: var(--r);
+  cursor: pointer; color: var(--text); font: inherit;
+}
+.cmdk-item:hover, .cmdk-item.on { background: var(--paper); }
+.cmdk-type {
+  flex: 0 0 auto; width: 76px; font-size: 10px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
+}
+.cmdk-label { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cmdk-sub {
+  margin-left: auto; padding-left: 10px; font-size: 12px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px;
+}

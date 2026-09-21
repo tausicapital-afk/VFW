@@ -8,6 +8,7 @@ import { api } from '../lib/api';
 import { messagingApi, qk, useMessagingRealtime, type Conversation } from '../lib/messaging';
 import type { Role, Submission, User } from '../lib/types';
 import { Avatar } from './Avatar';
+import { CommandPalette } from './CommandPalette';
 
 /**
  * What each role is CALLED. Display only — the permission grant is the `Role`
@@ -96,6 +97,22 @@ export function Shell() {
     localStorage.setItem('rail:collapsed', collapsed ? '1' : '0');
   }, [collapsed]);
 
+  // Global search (Cmd/Ctrl-K) — mounted here, once, so it is reachable from
+  // every authenticated screen rather than re-wired per page. Ctrl-K on
+  // Windows/Linux, Cmd-K on macOS; the search icon in the rail/top bar is the
+  // fallback for anyone whose browser has claimed the shortcut.
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen(true);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
+
   // Record each screen the user opens for the Logs telemetry. Fire-and-forget:
   // this is the one client-driven event, it can only ever log the caller's own
   // view, and a failure here must never surface to the user.
@@ -158,6 +175,15 @@ export function Shell() {
         <button className="burger" aria-label="Menu" onClick={() => setNavOpen(true)}>☰</button>
         <div className="mk">VFW</div>
         <b>Console</b>
+        <div className="sp" style={{ flex: 1 }} />
+        <button
+          className="mtop-search"
+          aria-label="Search"
+          title="Search (Ctrl/Cmd+K)"
+          onClick={() => setPaletteOpen(true)}
+        >
+          ⌕
+        </button>
       </div>
       {navOpen && <button className="rail-backdrop" aria-label="Close menu" onClick={() => setNavOpen(false)} />}
       <aside className={'rail' + (navOpen ? ' open' : '')}>
@@ -174,6 +200,17 @@ export function Shell() {
             {collapsed ? '»' : '«'}
           </button>
         </div>
+
+        <button
+          className="nav rail-search"
+          title={collapsed ? 'Search (Ctrl/Cmd+K)' : undefined}
+          aria-label="Search"
+          onClick={() => setPaletteOpen(true)}
+        >
+          <span className="ic">⌕</span>
+          <span className="lbl">Search</span>
+          {!collapsed && <kbd className="cmdk-kbd">Ctrl K</kbd>}
+        </button>
 
         <div id="nav">
           {NAV.map((item, i) => {
@@ -228,6 +265,8 @@ export function Shell() {
       <div className="main">
         <Outlet key={location.pathname} />
       </div>
+
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>
   );
 }

@@ -29,6 +29,7 @@ import { ProfileModule } from './profile/profile.controller';
 import { FxModule } from './fx/fx.controller';
 import { QboModule } from './qbo/qbo.controller';
 import { ReportsModule } from './reports/reports.controller';
+import { SearchModule } from './search/search.controller';
 import { StorageModule } from './storage/storage.service';
 import { SubmissionsModule } from './submissions/submissions.controller';
 import { TestDataModule } from './testdata/test-data.controller';
@@ -68,6 +69,7 @@ import { TestDataModule } from './testdata/test-data.controller';
     TestDataModule,
     ExportModule,
     QboModule,
+    SearchModule,
   ],
   controllers: [AuthController],
   providers: [
