@@ -68,4 +68,8 @@ export class ExportQueryDto {
    */
   @IsOptional() @IsString() @MaxLength(60)
   userId?: string;
+
+  /** Emails → Sent/Received: which kind the screen's dropdown is showing. */
+  @IsOptional() @IsString() @MaxLength(20)
+  kind?: string;
 }

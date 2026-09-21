@@ -33,6 +33,8 @@ export interface ExportFilters {
   cityId?: string;
   month?: string;
   userId?: string;
+  /** Emails → Sent/Received: the kind dropdown ('' means every kind). */
+  kind?: string;
 }
 
 /**
