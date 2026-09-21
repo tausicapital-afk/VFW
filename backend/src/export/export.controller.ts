@@ -23,7 +23,7 @@ import { SubmissionsModule } from '../submissions/submissions.controller';
 import { SubmissionsService } from '../submissions/submissions.service';
 import { attendanceDataset, attendanceTeamDataset } from './datasets/attendance.dataset';
 import { auditDataset } from './datasets/audit.dataset';
-import { addonsDataset, packagesDataset, taxesDataset } from './datasets/catalogue.dataset';
+import { addonsDataset, packagesDataset, showsDataset, taxesDataset } from './datasets/catalogue.dataset';
 import { contactsDataset } from './datasets/contacts.dataset';
 import { invitationsDataset } from './datasets/invitations.dataset';
 import { activityDataset, logUsersDataset, sessionsDataset } from './datasets/logs.dataset';
@@ -144,6 +144,7 @@ export class ExportModule {
     registry.register(usersDataset(admin));
     registry.register(packagesDataset(admin));
     registry.register(addonsDataset(admin));
+    registry.register(showsDataset(admin));
     registry.register(taxesDataset(admin));
     registry.register(auditDataset(audit));
     registry.register(activityDataset(activity));

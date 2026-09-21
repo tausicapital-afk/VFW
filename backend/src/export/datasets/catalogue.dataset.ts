@@ -5,6 +5,7 @@ type Catalogue = Awaited<ReturnType<AdminService['catalogue']>>;
 type PackageRow = Catalogue['packages'][number];
 type AddonRow = Catalogue['addons'][number];
 type TaxRow = Catalogue['taxes'][number];
+type ShowRow = Catalogue['events'][number];
 
 /**
  * The rate card, as the Packages & pricing tab lists it.
@@ -61,6 +62,26 @@ export function addonsDataset(admin: AdminService): ExportDataset<AddonRow> {
       { header: 'GL', value: (a) => a.glCode, width: 10 },
       { header: 'Sold to', value: (a) => a.forBrands.join(', '), width: 16, spreadsheetOnly: true },
       { header: 'Note', value: (a) => a.note, width: 32 },
+    ],
+  };
+}
+
+/** The show list, as the Shows card lists it. */
+export function showsDataset(admin: AdminService): ExportDataset<ShowRow> {
+  return {
+    key: 'shows',
+    title: 'Shows',
+    filename: 'shows',
+    permission: 'admin.manage',
+    load: async () => (await admin.catalogue()).events,
+    columns: [
+      { header: 'Brand', value: (ev) => ev.brand, width: 8 },
+      { header: 'Show', value: (ev) => ev.name, width: 24 },
+      { header: 'Test data', value: (ev) => (ev.isTestData ? 'TEST' : ''), width: 10 },
+      { header: 'Season', value: (ev) => ev.season, width: 16 },
+      { header: 'City', value: (ev) => ev.city.name, width: 16 },
+      { header: 'Start', value: (ev) => ev.start, width: 13 },
+      { header: 'End', value: (ev) => ev.end, width: 13 },
     ],
   };
 }

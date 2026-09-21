@@ -38,6 +38,7 @@ const DATASETS = [
   ['users', 'Users & roles'],
   ['packages', 'Packages & pricing — Package rate card'],
   ['addons', 'Packages & pricing — Add-on catalogue'],
+  ['shows', 'Packages & pricing — Shows'],
   ['taxes', 'Tax rates'],
 ] as const;
 
@@ -131,6 +132,14 @@ describe('administration tab exports', () => {
     expect(csv).toContain('City pricing');
     // A multi-city, multi-currency cell — never a bare number a sheet would sum.
     expect(csv).toMatch(/Vancouver [A-Z]{3} \d/);
+  }, 30_000);
+
+  it('exports the show list the Shows card shows', async () => {
+    const csv = (await pull('shows')).toString('utf8');
+
+    expect(csv).toContain('Brand,Show,Test data,Season,City,Start,End');
+    expect(csv).toContain('Vancouver Fashion Week');
+    expect(csv).toContain('Vancouver');
   }, 30_000);
 
   it('404s an unknown dataset rather than crashing', async () => {
