@@ -1,3 +1,11 @@
+# The app requests the directory URL (https://.../vfw-relay/), not index.php
+# directly. Without this, Apache doesn't know index.php is the folder's default
+# document — it finds nothing to serve, and because Indexes is off below, that
+# comes back as a bare 403 instead of running the script. Confirmed live: hitting
+# /vfw-relay/index.php directly worked the whole time, only the bare folder URL
+# 403'd.
+DirectoryIndex index.php
+
 # Only index.php is reachable. Without this, the server would hand out any file
 # dropped beside the script — including a backup like index.php.bak, which most
 # editors create on save and which is served as PLAIN TEXT, token and all.
