@@ -51,7 +51,7 @@ function submission(overrides: Partial<Submission> = {}): Submission {
       start: '2026-10-01', end: '2026-10-02', cityId: 'city1',
       city: { id: 'city1', name: 'Vancouver', country: 'CA', currency: 'CAD' },
     },
-    package: { id: 'p1', brand: 'VFW', name: 'Runway Package', looks: 8, blurb: null, taxCode: 'GST', glCode: '4000', prices: [] },
+    package: { id: 'p1', brand: 'VFW', name: 'Runway Package', looks: 8, blurb: null, taxCode: 'GST', glCode: '4000', listValue: null, cap: null, prices: [] },
     addons: [], payments: [], installments: [],
     tax: { code: 'GST', label: 'GST', rate: '0.05', note: null },
     ...overrides,
