@@ -692,6 +692,11 @@ export class AdminService {
           blurb: dto.blurb?.trim() || null,
           taxCode: dto.taxCode,
           glCode: dto.glCode,
+          listValue:
+            dto.listValue !== undefined
+              ? decimal(String(dto.listValue), 'List value').toFixed(2)
+              : undefined,
+          cap: dto.cap,
           prices: { create: prices },
           // A package invented while the Test data switch is on is a rehearsal
           // package. Only creation reads the switch — editing a real package
@@ -940,6 +945,20 @@ export class AdminService {
       before.glCode = pkg.glCode;
       after.glCode = dto.glCode;
       data.gl = { connect: { code: dto.glCode } };
+    }
+    if (dto.listValue !== undefined) {
+      const next = decimal(String(dto.listValue), 'List value').toFixed(2);
+      const current = pkg.listValue?.toFixed(2) ?? null;
+      if (next !== current) {
+        before.listValue = current;
+        after.listValue = next;
+        data.listValue = next;
+      }
+    }
+    if (dto.cap !== undefined && dto.cap !== pkg.cap) {
+      before.cap = pkg.cap ?? null;
+      after.cap = dto.cap;
+      data.cap = dto.cap;
     }
 
     const priceUpdates = (dto.prices ?? []).flatMap((p) => {

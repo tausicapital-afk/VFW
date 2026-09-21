@@ -1347,6 +1347,9 @@ function NewPackageModal({
   const [blurb, setBlurb] = useState('');
   const [taxCode, setTaxCode] = useState(taxes[0]?.code ?? '');
   const [glCode, setGlCode] = useState(glAccounts[0]?.code ?? '');
+  // Both blank by default: a normal package is neither sponsored nor capped.
+  const [listValue, setListValue] = useState('');
+  const [cap, setCap] = useState('');
   // Keyed by city: a blank price means the package is not sold there. The
   // currency defaults to the city's but is not fixed to it — VFW prices
   // Vancouver in USD and the Emerging Designer package prices it in CAD.
@@ -1367,6 +1370,8 @@ function NewPackageModal({
         blurb: blurb.trim() || undefined,
         taxCode,
         glCode,
+        listValue: listValue.trim() !== '' ? Number(listValue.trim()) : undefined,
+        cap: cap.trim() !== '' ? Number(cap.trim()) : undefined,
         // Money leaves as the string it was typed as — see AddonRowEdit.
         prices: sold.map(([cityId, p]) => ({ cityId, currency: p.currency, price: p.price.trim() })),
       }),
@@ -1434,6 +1439,26 @@ function NewPackageModal({
                   <option key={g.code} value={g.code}>{g.code} · {g.name}</option>
                 ))}
               </select>
+            </div>
+            <div className="f">
+              <label>List value (optional)</label>
+              <input
+                type="number"
+                step="0.01"
+                value={listValue}
+                onChange={(e) => setListValue(e.target.value)}
+                placeholder="Leave blank if not sponsored"
+              />
+            </div>
+            <div className="f">
+              <label>Cap per event (optional)</label>
+              <input
+                type="number"
+                step="1"
+                value={cap}
+                onChange={(e) => setCap(e.target.value)}
+                placeholder="Leave blank for no limit"
+              />
             </div>
           </div>
 
@@ -1692,6 +1717,8 @@ function PackageModal({
   );
   const [taxCode, setTaxCode] = useState(pkg.taxCode);
   const [glCode, setGlCode] = useState(pkg.glCode);
+  const [listValue, setListValue] = useState(pkg.listValue ?? '');
+  const [cap, setCap] = useState(pkg.cap != null ? String(pkg.cap) : '');
   const [error, setError] = useState<string | null>(null);
 
   const save = useMutation({
@@ -1699,6 +1726,8 @@ function PackageModal({
       api.patch(`/api/admin/packages/${pkg.id}`, {
         taxCode,
         glCode,
+        listValue: listValue.trim() !== '' ? Number(listValue.trim()) : undefined,
+        cap: cap.trim() !== '' ? Number(cap.trim()) : undefined,
         prices: Object.entries(prices).map(([cityId, price]) => ({ cityId, price })),
       }),
     onSuccess: onSaved,
@@ -1739,6 +1768,26 @@ function PackageModal({
                   <option key={g.code} value={g.code}>{g.code} · {g.name}</option>
                 ))}
               </select>
+            </div>
+            <div className="f">
+              <label>List value (optional)</label>
+              <input
+                type="number"
+                step="0.01"
+                value={listValue}
+                onChange={(e) => setListValue(e.target.value)}
+                placeholder="Leave blank if not sponsored"
+              />
+            </div>
+            <div className="f">
+              <label>Cap per event (optional)</label>
+              <input
+                type="number"
+                step="1"
+                value={cap}
+                onChange={(e) => setCap(e.target.value)}
+                placeholder="Leave blank for no limit"
+              />
             </div>
           </div>
           <div className="note lock" style={{ marginTop: 12 }}>

@@ -118,6 +118,7 @@ export interface PackagePrice { cityId: string; currency: Currency; price: Money
 export interface PackageRow extends TestFlagged {
   id: string; brand: string; name: string; looks: number; blurb: string | null;
   taxCode: string; glCode: string; prices: PackagePrice[];
+  listValue: Money | null; cap: number | null;
 }
 export interface AddonRow extends TestFlagged {
   id: string; brand: string; name: string; price: Money;
@@ -643,6 +644,7 @@ export interface AdminPackagePrice extends PackagePrice {
 export interface AdminPackage extends TestFlagged {
   id: string; brand: string; name: string; looks: number; blurb: string | null;
   taxCode: string; glCode: string;
+  listValue: Money | null; cap: number | null;
   prices: AdminPackagePrice[];
 }
 export interface AdminTaxProfile extends TaxProfile {

@@ -161,6 +161,37 @@ describe('catalogue — creating packages, add-ons and tax profiles', () => {
       await newPackage({ prices: [{ cityId: 'VAN', currency: 'USD', price: 'free' }] }).expect(400);
     });
 
+    it('takes a list value and a per-event cap for a sponsored package', async () => {
+      const res = await newPackage({ listValue: 5000, cap: 2 }).expect(201);
+      expect(res.body).toMatchObject({ listValue: '5000', cap: 2 });
+    });
+
+    it('leaves both off an ordinary package', async () => {
+      const res = await newPackage().expect(201);
+      expect(res.body).toMatchObject({ listValue: null, cap: null });
+    });
+
+    it('updates the list value and cap, and records the audit diff', async () => {
+      await newPackage({ listValue: 5000, cap: 2 }).expect(201);
+
+      const res = await http(app)
+        .patch(`/api/admin/packages/${BRAND}-BRONZE`)
+        .set('Cookie', admin)
+        .send({ listValue: 6000, cap: 3 })
+        .expect(200);
+      expect(res.body).toMatchObject({ listValue: '6000', cap: 3 });
+
+      const entry = await prisma.auditEntry.findFirst({
+        where: { action: 'CATALOG_PACKAGE_UPDATED' },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(entry?.payload).toMatchObject({
+        packageId: `${BRAND}-BRONZE`,
+        before: { listValue: '5000.00', cap: 2 },
+        after: { listValue: '6000.00', cap: 3 },
+      });
+    });
+
     it('leaves an audit entry naming the package', async () => {
       await newPackage().expect(201);
 

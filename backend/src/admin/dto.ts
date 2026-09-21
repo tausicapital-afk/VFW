@@ -218,6 +218,19 @@ export class CreatePackageDto {
   @IsString()
   glCode: string;
 
+  /** Revenue given up on a sponsored package — absent for an ordinary one. */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  listValue?: number;
+
+  /** Per-event sell limit, e.g. VIP capped at 2. No upper bound: how high a cap
+   *  makes sense is a call for the person setting it, not this DTO. */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  cap?: number;
+
   @IsArray()
   @ArrayMinSize(1)
   @ValidateNested({ each: true })
@@ -270,6 +283,16 @@ export class UpdatePackageDto {
   @IsOptional()
   @IsString()
   glCode?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  listValue?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  cap?: number;
 
   @IsOptional()
   @IsArray()
