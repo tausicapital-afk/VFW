@@ -1159,6 +1159,7 @@ function PackagesTab() {
         <div className="hd">
           <h3>Shows</h3>
           <div className="sp" />
+          <ExportMenu dataset="shows" disabled={!data?.events.length} />
           <button className="btn sm blue" onClick={() => setAddingShow(true)}>+ New show</button>
         </div>
         <div className="tbl-wrap">
