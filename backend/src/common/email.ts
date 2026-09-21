@@ -265,6 +265,15 @@ function textLayout(lines: string[]): string {
 // roles that must not be handed a live OTP or reset link.
 // ---------------------------------------------------------------------------
 
+/**
+ * Deterministic subject prefixes for the two reminder builders below. Exported
+ * so RemindersService's de-dupe queries and these builders cannot drift apart
+ * on the exact string — see {@link EmailService.paymentReminder} and
+ * {@link EmailService.renewalNudge}.
+ */
+export const PAYMENT_REMINDER_SUBJECT_PREFIX = 'Payment reminder:';
+export const RENEWAL_NUDGE_SUBJECT_PREFIX = 'Renewal check-in:';
+
 /** Kinds whose BODY carries a code or link and must not be stored. */
 const REDACT_BODY: EmailKind[] = ['OTP', 'WELCOME', 'PASSWORD_RESET', 'INVITATION'];
 /** Kinds whose SUBJECT itself carries the code (OTP puts it right in the line). */
@@ -994,6 +1003,121 @@ export class EmailService {
       attachments: [
         { filename: `${opts.invoiceNo}.pdf`, content: opts.pdf, contentType: 'application/pdf' },
       ],
+    };
+  }
+
+  /**
+   * A dunning nudge for a submission whose balance is past its Net-terms due
+   * date. System-triggered (no `triggeredById`) but tied to the sale via
+   * `submissionId`, which RemindersService also uses as the de-dupe key so the
+   * same overdue invoice does not get emailed on every cron tick.
+   *
+   * `kind` is {@link EmailKind.OTHER} rather than a dedicated enum value —
+   * adding `REMINDER` would need a Prisma migration, out of scope for now. The
+   * subject carries {@link PAYMENT_REMINDER_SUBJECT_PREFIX} so the Emails log
+   * (and RemindersService's own de-dupe query) can recognise this send.
+   */
+  paymentReminder(opts: {
+    to: string;
+    submissionId: string;
+    ref: string;
+    brand: string;
+    daysOverdue: number;
+    dueDate: string;
+    balance: string;
+    currency: string;
+  }): Mail {
+    const bodyHtml =
+      `<h1 style="margin:0 0 14px;font-size:22px;color:#0e0e11;">Payment reminder</h1>` +
+      `<p style="margin:0 0 6px;">Hi ${esc(opts.brand)}, our records show invoice ` +
+      `<b>${esc(opts.ref)}</b> is still outstanding.</p>` +
+      `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" ` +
+      `style="margin:18px 0;background:#f4f6f5;border:1px solid #e3e8e6;border-radius:12px;">` +
+      `<tr><td style="padding:16px 20px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#2b3230;">` +
+      `<div style="margin:0 0 4px;"><b>Amount due:</b> ${esc(opts.balance)} ${esc(opts.currency)}</div>` +
+      `<div style="margin:0 0 4px;"><b>Due date:</b> ${esc(opts.dueDate)}</div>` +
+      `<div><b>Days overdue:</b> ${opts.daysOverdue}</div>` +
+      `</td></tr></table>` +
+      `<p style="margin:0 0 6px;">If payment has already been sent, please disregard this notice. ` +
+      `Otherwise, we'd appreciate it if you could arrange payment at your earliest convenience.</p>`;
+    return {
+      to: opts.to,
+      kind: EmailKind.OTHER,
+      submissionId: opts.submissionId,
+      subject: `${PAYMENT_REMINDER_SUBJECT_PREFIX} ${opts.ref} is ${opts.daysOverdue} day(s) overdue`,
+      html: layout({
+        title: 'Payment reminder',
+        preheader: `Invoice ${opts.ref} is ${opts.daysOverdue} day(s) overdue`,
+        bodyHtml,
+      }),
+      text: textLayout([
+        `Invoice ${opts.ref} is still outstanding.`,
+        '',
+        `Amount due: ${opts.balance} ${opts.currency}`,
+        `Due date: ${opts.dueDate}`,
+        `Days overdue: ${opts.daysOverdue}`,
+        '',
+        `If payment has already been sent, please disregard this notice.`,
+      ]),
+    };
+  }
+
+  /**
+   * An internal heads-up to the rep who owns a contact that has gone quiet
+   * relative to that contact's own booking cadence — the "your usual season is
+   * coming up again" nudge, but aimed at the rep rather than the contact.
+   *
+   * This is deliberately NOT sent to the contact: a past client should not be
+   * cold-emailed "you should buy again" with no human in the loop. The rep
+   * decides whether and how to reach out; this just surfaces the signal.
+   *
+   * `kind` is OTHER for the same reason as {@link paymentReminder}. There is no
+   * `submissionId` (this is not about one sale), so RemindersService de-dupes
+   * this one on (toAddress, subject) instead — the subject carries the brand
+   * name via {@link RENEWAL_NUDGE_SUBJECT_PREFIX}.
+   */
+  renewalNudge(opts: {
+    to: string;
+    repName: string;
+    brand: string;
+    bookings: number;
+    lastBookingDate: string;
+    daysSinceLastBooking: number;
+    avgGapDays: number;
+  }): Mail {
+    const first = esc(opts.repName.split(' ')[0] || opts.repName);
+    const bodyHtml =
+      `<h1 style="margin:0 0 14px;font-size:22px;color:#0e0e11;">A contact may be due for a renewal</h1>` +
+      `<p style="margin:0 0 6px;">Hi ${first}, <b>${esc(opts.brand)}</b> hasn't booked in a while relative ` +
+      `to their usual pattern.</p>` +
+      `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" ` +
+      `style="margin:18px 0;background:#f4f6f5;border:1px solid #e3e8e6;border-radius:12px;">` +
+      `<tr><td style="padding:16px 20px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#2b3230;">` +
+      `<div style="margin:0 0 4px;"><b>Past bookings:</b> ${opts.bookings}</div>` +
+      `<div style="margin:0 0 4px;"><b>Usual gap between bookings:</b> ~${opts.avgGapDays} days</div>` +
+      `<div style="margin:0 0 4px;"><b>Last booking:</b> ${esc(opts.lastBookingDate)}</div>` +
+      `<div><b>Days since:</b> ${opts.daysSinceLastBooking}</div>` +
+      `</td></tr></table>` +
+      `<p style="margin:0 0 6px;color:#8a938f;font-size:13px;">` +
+      `This is an internal signal from the Customer retention report — worth a check-in if it's time for ` +
+      `their usual season.</p>`;
+    return {
+      to: opts.to,
+      kind: EmailKind.OTHER,
+      subject: `${RENEWAL_NUDGE_SUBJECT_PREFIX} ${opts.brand}`,
+      html: layout({
+        title: 'Renewal check-in',
+        preheader: `${opts.brand} may be due for a renewal check-in`,
+        bodyHtml,
+      }),
+      text: textLayout([
+        `${opts.brand} hasn't booked in a while relative to their usual pattern.`,
+        '',
+        `Past bookings: ${opts.bookings}`,
+        `Usual gap between bookings: ~${opts.avgGapDays} days`,
+        `Last booking: ${opts.lastBookingDate}`,
+        `Days since: ${opts.daysSinceLastBooking}`,
+      ]),
     };
   }
 }
