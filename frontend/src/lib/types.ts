@@ -324,6 +324,15 @@ export interface SendInvoiceResult {
   to: string;
 }
 
+/** One row of GET /api/search — the Cmd/Ctrl-K global search. */
+export interface SearchResult {
+  id: string;
+  type: 'submission' | 'contact';
+  label: string;
+  sublabel: string | null;
+  href: string;
+}
+
 // --- Insight: reports, leaderboard, audit trail ------------------------------
 
 /**

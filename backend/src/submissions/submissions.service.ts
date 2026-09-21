@@ -86,6 +86,34 @@ export class SubmissionsService {
     });
   }
 
+  /**
+   * Jump-to search (Cmd/Ctrl-K global search) — matches a ref or invoice
+   * number, case-insensitive, partial. Reuses `scopeFor()` so this can never
+   * surface a sale the caller could not already open at `/submissions/:id`; a
+   * rep hunting a ref must never stumble onto another rep's deal this way.
+   * Capped: this feeds a jump-to list, not a results page.
+   */
+  async search(user: AuthUser, q: string, limit = 5) {
+    return this.prisma.submission.findMany({
+      where: {
+        ...this.scopeFor(user),
+        status: { not: SubmissionStatus.VOIDED },
+        OR: [
+          { ref: { contains: q, mode: 'insensitive' } },
+          { invoiceNo: { contains: q, mode: 'insensitive' } },
+        ],
+      },
+      select: {
+        id: true,
+        ref: true,
+        invoiceNo: true,
+        contact: { select: { brand: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+  }
+
   /** The soft-deleted sales, for the roles that can restore them. */
   async listVoided(user: AuthUser) {
     if (!can('submission.void', user.role)) throw new ForbiddenException();
