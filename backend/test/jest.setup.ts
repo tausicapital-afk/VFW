@@ -61,3 +61,10 @@ for (const key of ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET']) {
 // is exactly the "Stripe is not configured" path payments.spec.ts exercises.
 process.env.STRIPE_SECRET_KEY = '';
 process.env.STRIPE_WEBHOOK_SECRET = '';
+
+// Same trick again, for DocuSign — docusign-connection.spec.ts asserts on the
+// "not configured" path the same way auth.google.spec.ts does, and a
+// developer's dev .env may well carry real DOCUSIGN_CLIENT_ID/SECRET values.
+for (const key of ['DOCUSIGN_CLIENT_ID', 'DOCUSIGN_CLIENT_SECRET', 'DOCUSIGN_HMAC_KEY']) {
+  process.env[key] = '';
+}

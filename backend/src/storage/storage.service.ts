@@ -6,6 +6,7 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import type { Readable } from 'stream';
 import { ConfigService } from '../config/config.service';
 
 // Presigned URLs are deliberately short-lived: long enough to push or pull one
@@ -126,6 +127,44 @@ export class StorageService {
       ResponseContentDisposition: `${disposition}; filename="${filename.replace(/"/g, '')}"`,
     });
     return getSignedUrl(this.requireClient(), cmd, { expiresIn });
+  }
+
+  /**
+   * Write bytes straight into the bucket, server-side — for the one caller
+   * that has no browser to hand a presigned PUT to: the DocuSign webhook,
+   * which fetches a completed envelope's combined PDF from DocuSign's own API
+   * and has to land it in R2 itself. Every other write in this app goes
+   * through {@link presignUpload} on purpose (see the class doc); this is the
+   * narrow exception for content this app receives directly rather than a
+   * browser.
+   */
+  async putObject(key: string, body: Buffer, contentType: string): Promise<void> {
+    const cmd = new PutObjectCommand({
+      Bucket: this.bucket,
+      Key: key,
+      Body: body,
+      ContentType: contentType,
+    });
+    await this.requireClient().send(cmd);
+  }
+
+  /**
+   * Read an object's bytes back, server-side — the counterpart to
+   * {@link putObject}. Used to hand an already-uploaded Document's content to
+   * DocuSign when sending it for signature (the eSignature API needs the
+   * actual bytes, not a link); every other download in this app is a
+   * presigned GET the browser follows itself (see {@link presignDownload}).
+   */
+  async getObject(key: string): Promise<Buffer> {
+    const cmd = new GetObjectCommand({ Bucket: this.bucket, Key: key });
+    const res = await this.requireClient().send(cmd);
+    const body = res.Body as Readable | undefined;
+    if (!body) throw new ServiceUnavailableException('Document storage returned an empty object');
+    const chunks: Buffer[] = [];
+    for await (const chunk of body) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array));
+    }
+    return Buffer.concat(chunks);
   }
 }
 

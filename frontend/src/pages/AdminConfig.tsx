@@ -5,6 +5,7 @@ import { api } from '../lib/api';
 import { fmtDate } from '../lib/format';
 import type {
   AdminCatalogue, ConfigField, ConfigGroup, ConfigState, ConfigTestResult, EnvPanelRow,
+  DocuSignStatus,
   MailAccount, MailAccountInput, MailAccountsState,
   QboBrowseOption, QboMapping, QboMappingKind, QboStatus,
   TestDataMarkResult, TestDataSummary,
@@ -59,6 +60,10 @@ export function ConfigTab() {
               their own elsewhere on the page. */}
           {g.id === 'quickbooks' && <QboConnectionCard />}
           {g.id === 'quickbooks' && <QboMappingsCard />}
+          {/* Same reasoning as the QuickBooks connection card above: a real
+              OAuth handshake, not a form field, so it needs its own UI
+              directly under the credentials that make it possible. */}
+          {g.id === 'docusign' && <DocuSignConnectionCard />}
         </div>
       ))}
 
@@ -677,6 +682,111 @@ function QboMappingsCard() {
         >
           {save.isPending ? 'Saving…' : 'Add mapping'}
         </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// DocuSign — the OAuth connection an admin authorizes so staff can send a
+// submission's contract out for signature. Same shape as QboConnectionCard
+// above (a redirect to DocuSign's consent screen and back, not a form field),
+// and the redirect lands on /admin?tab=config&docusign=connected|error the
+// same way the QBO one lands on ?qbo=connected|error.
+// ---------------------------------------------------------------------------
+
+function DocuSignConnectionCard() {
+  const qc = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { data } = useQuery({
+    queryKey: ['admin', 'docusign', 'status'],
+    queryFn: () => api.get<DocuSignStatus>('/api/admin/docusign/status'),
+  });
+
+  const callbackResult = searchParams.get('docusign');
+  const callbackMessage = searchParams.get('docusignMessage');
+
+  useEffect(() => {
+    if (callbackResult) void qc.invalidateQueries({ queryKey: ['admin', 'docusign', 'status'] });
+  }, [callbackResult, qc]);
+
+  const dismissCallback = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('docusign');
+    next.delete('docusignMessage');
+    setSearchParams(next, { replace: true });
+  };
+
+  const disconnect = useMutation({
+    mutationFn: () => api.post<DocuSignStatus>('/api/admin/docusign/disconnect'),
+    onSuccess: (s) => qc.setQueryData(['admin', 'docusign', 'status'], s),
+  });
+
+  if (!data) return null;
+
+  return (
+    <div className="card" style={{ marginBottom: 16 }}>
+      <div className="hd">
+        <h3>Connection</h3>
+        <div className="sp" style={{ flex: 1 }} />
+        <span className={'pill ' + (data.connected && !data.refreshTokenExpired ? 'APPROVED' : 'RETURNED')}>
+          {data.connected ? (data.refreshTokenExpired ? 'Expired' : 'Connected') : 'Not connected'}
+        </span>
+      </div>
+      <div className="bd">
+        {callbackResult === 'connected' && (
+          <div className="note good rowflex" style={{ marginTop: 0, marginBottom: 12, gap: 8 }}>
+            <span style={{ flex: 1 }}>Connected to DocuSign.</span>
+            <button className="btn sm" onClick={dismissCallback}>Dismiss</button>
+          </div>
+        )}
+        {callbackResult === 'error' && (
+          <div className="note bad rowflex" style={{ marginTop: 0, marginBottom: 12, gap: 8 }}>
+            <span style={{ flex: 1 }}>{callbackMessage || 'Could not connect to DocuSign.'}</span>
+            <button className="btn sm" onClick={dismissCallback}>Dismiss</button>
+          </div>
+        )}
+
+        {data.connected ? (
+          <>
+            <p className="sm" style={{ marginTop: 0 }}>
+              <b>{data.accountName || data.accountId}</b>{' '}
+              <span className="mut">· {data.environment}</span>
+            </p>
+            <p className="sm mut">Connected {data.connectedAt ? fmtDate(data.connectedAt) : '—'}.</p>
+            {data.refreshTokenExpired && (
+              <div className="note bad" style={{ marginTop: 8 }}>
+                This connection has gone stale. Reconnect below; sending a document for signature
+                fails until you do.
+              </div>
+            )}
+          </>
+        ) : (
+          <p className="sm mut" style={{ marginTop: 0 }}>
+            Not connected. "Send for signature" on the Documents card fails with a clear error
+            until a DocuSign account is connected here.
+          </p>
+        )}
+      </div>
+      <div className="ft">
+        {data.connected && (
+          <button
+            className="btn"
+            disabled={disconnect.isPending}
+            onClick={() => {
+              if (confirm('Disconnect DocuSign? Sending a document for signature stops working until you reconnect.')) {
+                disconnect.mutate();
+              }
+            }}
+          >
+            {disconnect.isPending ? 'Disconnecting…' : 'Disconnect'}
+          </button>
+        )}
+        {/* A plain link, not a mutation — same reasoning as the QBO card: this
+            has to leave the SPA for DocuSign's consent screen. */}
+        <a className="btn primary" href="/api/admin/docusign/connect">
+          {data.connected ? 'Reconnect' : 'Connect to DocuSign'}
+        </a>
       </div>
     </div>
   );

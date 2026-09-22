@@ -6,6 +6,14 @@ import { downloadFile } from '../lib/export';
 import { money, PAY_LABEL, STATUS_LABEL } from '../lib/format';
 import type { PortalData, PortalSubmission } from '../lib/types';
 
+const SIGNATURE_LABEL: Record<NonNullable<PortalSubmission['signature']>['status'], string> = {
+  SENT: 'Contract sent for signature',
+  DELIVERED: 'Contract opened',
+  COMPLETED: 'Contract signed',
+  DECLINED: 'Signature declined',
+  VOIDED: 'Signature request withdrawn',
+};
+
 /**
  * The unauthenticated, token-gated contact portal — GET /api/portal/:token.
  * No cookie, no login, nothing but the token in the URL, which is why this
@@ -56,6 +64,15 @@ export function Portal() {
       window.location.href = res.url;
     },
     onError: (e: Error) => setPayError(e.message),
+  });
+
+  // A presigned R2 URL, not a file this app streams — see
+  // PortalService.signedContractUrl. Opened directly rather than run through
+  // downloadFile, same as every other presigned link in the console.
+  const downloadSignedContract = useMutation({
+    mutationFn: (s: PortalSubmission) =>
+      api.get<{ url: string; filename: string }>(`/api/portal/${token}/submissions/${s.id}/signed-contract`),
+    onSuccess: ({ url }) => window.open(url, '_blank', 'noopener'),
   });
 
   return (
@@ -123,6 +140,7 @@ export function Portal() {
                       <th className="num">Paid</th>
                       <th className="num">Balance</th>
                       <th>Payment</th>
+                      <th>Contract</th>
                       <th />
                     </tr>
                   </thead>
@@ -136,6 +154,7 @@ export function Portal() {
                         <td className="num">{money(s.paidAmount, s.currency)}</td>
                         <td className="num">{money(s.balance, s.currency)}</td>
                         <td className="sm">{PAY_LABEL[s.payStatus]}</td>
+                        <td className="sm">{s.signature ? SIGNATURE_LABEL[s.signature.status] : '—'}</td>
                         <td>
                           <div className="rowflex" style={{ gap: 8, justifyContent: 'flex-end' }}>
                             {Number(s.balance) > 0 && (
@@ -145,6 +164,15 @@ export function Portal() {
                                 onClick={() => { setPayError(null); pay.mutate(s); }}
                               >
                                 {pay.isPending ? 'Redirecting…' : 'Pay now'}
+                              </button>
+                            )}
+                            {s.signature?.status === 'COMPLETED' && (
+                              <button
+                                className="btn sm"
+                                disabled={downloadSignedContract.isPending}
+                                onClick={() => downloadSignedContract.mutate(s)}
+                              >
+                                Signed contract
                               </button>
                             )}
                             {s.invoiceNo && (

@@ -68,6 +68,15 @@ export const ACL = {
   // module (viewOwn), but the list is row-scoped — a rep sees only mail they
   // triggered, while viewAll roles see the whole log. Sending an invoice is an
   // accounting action, held by the same roles that can generate one.
+  //
+  // Also gates sending a document out for signature (DocuSignController.
+  // sendForSignature): handing a contract to the contact to sign is the same
+  // kind of outward-facing act as emailing an invoice or a portal link, not a
+  // documents/submission-write permission — the document itself was already
+  // uploaded under no special permission (DocumentsController has none; access
+  // is scoped to the submission, not gated further), and what needs gating here
+  // is the act of sending something out to the customer, which is exactly what
+  // this permission already governs everywhere else it appears.
   'email.viewOwn': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
   'email.viewAll': ['ACCT', 'MGR', 'ADMIN'],
   'email.send': ['ACCT', 'ADMIN'],

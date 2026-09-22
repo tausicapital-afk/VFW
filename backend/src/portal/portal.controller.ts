@@ -45,6 +45,16 @@ export class PortalController {
       })
       .end(buffer);
   }
+
+  // The signed contract, once DocuSign has returned one — a presigned R2 URL
+  // (same shape as DocumentsService.downloadUrl for the authenticated side),
+  // not a stream through this API. Still read-only: nothing here signs
+  // anything, it only retrieves a result that already exists.
+  @Public()
+  @Get(':token/submissions/:submissionId/signed-contract')
+  signedContract(@Param('token') token: string, @Param('submissionId') submissionId: string) {
+    return this.portal.signedContractUrl(token, submissionId);
+  }
 }
 
 @Module({

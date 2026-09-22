@@ -45,7 +45,7 @@ export interface ConfigField {
 }
 
 export interface ConfigGroup {
-  id: 'email' | 'storage' | 'quickbooks' | 'payments' | 'data';
+  id: 'email' | 'storage' | 'quickbooks' | 'payments' | 'docusign' | 'data';
   title: string;
   blurb: string;
   /** Keys that must all resolve to a value for the group to be usable. */
@@ -201,6 +201,50 @@ export const CONFIG_GROUPS: ConfigGroup[] = [
           '/api/payments/stripe/webhook. Stripe signs every event with this so the server can ' +
           'tell a real payment confirmation from a forged one. Stored encrypted; leave blank to ' +
           'keep the current one.',
+      },
+    ],
+  },
+  {
+    id: 'docusign',
+    title: 'DocuSign e-signature',
+    blurb:
+      'The DocuSign app credentials that let this console send a contract out for signature. Set ' +
+      'these first, then use the Connect button below to authorize a specific DocuSign account — ' +
+      'the credentials here identify the app, not an account connection by themselves.',
+    requiredKeys: ['DOCUSIGN_CLIENT_ID', 'DOCUSIGN_CLIENT_SECRET'],
+    fields: [
+      {
+        key: 'DOCUSIGN_ENVIRONMENT',
+        label: 'Environment',
+        type: 'select',
+        options: ['demo', 'production'],
+        help:
+          'Demo talks to a test DocuSign account for trying this out safely (account-d.docusign.com); ' +
+          'production sends a real, binding envelope. Switching this does not move an existing ' +
+          'connection — reconnect after changing it.',
+      },
+      {
+        key: 'DOCUSIGN_CLIENT_ID',
+        label: 'Integration key (Client ID)',
+        type: 'text',
+        required: true,
+        help: 'From the app you registered at admindemo.docusign.com (or admin.docusign.com in production) — the demo and production keys are different.',
+      },
+      {
+        key: 'DOCUSIGN_CLIENT_SECRET',
+        label: 'Secret key',
+        type: 'secret',
+        required: true,
+        help: 'The secret half of the same integration key. Stored encrypted; leave blank to keep the current one.',
+      },
+      {
+        key: 'DOCUSIGN_HMAC_KEY',
+        label: 'Connect HMAC key (optional)',
+        type: 'secret',
+        help:
+          'Only if you enabled HMAC signing on the DocuSign Connect configuration that points at this ' +
+          "console's webhook. When set, a status update with a missing or wrong signature is rejected " +
+          'rather than trusted. Stored encrypted; leave blank to keep the current one.',
       },
     ],
   },

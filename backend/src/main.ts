@@ -22,9 +22,14 @@ import { SentryExceptionFilter } from './common/sentry';
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: true,
-    // Stripe's webhook signature check needs the exact bytes it signed, not
-    // Nest's JSON-parsed body — this makes Nest also stash the raw buffer on
-    // `req.rawBody` for every request. See PaymentsController.handleWebhook.
+    // Exposes `req.rawBody` (a Buffer) alongside the normal JSON-parsed
+    // `req.body` — it does not change body parsing for any route. Two
+    // consumers need it: Stripe's webhook signature check (see
+    // PaymentsController.handleWebhook) and the DocuSign Connect webhook's
+    // optional HMAC check (see docusign-webhook.service.ts). Both have to
+    // hash/verify the exact bytes the sender signed, not a re-serialization
+    // of the parsed JSON (key order/number formatting/whitespace are not
+    // guaranteed to round-trip identically).
     rawBody: true,
   });
 
