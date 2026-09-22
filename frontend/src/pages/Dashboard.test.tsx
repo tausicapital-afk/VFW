@@ -42,6 +42,7 @@ function submission(overrides: Partial<Submission> = {}): Submission {
     balance: '550.00', payStatus: 'PARTIAL', commissionPct: '10.00', commissionAmount: '100.00',
     notes: null, showDate: '2026-10-01', paymentMethod: null, glCode: null, costCentre: null,
     department: null, invoiceNo: null, qbDocNumber: null, qboInvoiceId: null, qboSyncError: null,
+    discountOverrideRequestedAt: null, discountOverrideRequestedById: null, discountOverrideRequestedBy: null,
     voidedFrom: null, voidedAt: null, rejectReason: null, returnNote: null,
     submittedAt: '2026-09-01T00:00:00.000Z', approvedAt: '2026-09-02T00:00:00.000Z', exportedAt: null,
     rep: { id: 'u1', name: 'Rep One', colour: '#2F6BFF' },
