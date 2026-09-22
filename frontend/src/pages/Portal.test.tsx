@@ -29,7 +29,7 @@ const PORTAL_DATA: PortalData = {
       id: 's1', ref: 'VFW-0001', status: 'APPROVED', currency: 'USD',
       total: '1000.00', paidAmount: '500.00', balance: '500.00', payStatus: 'PARTIAL',
       invoiceNo: 'VFW-2041', event: 'Fall Show', package: 'Bronze Package',
-      showDate: null, createdAt: '2026-01-01T00:00:00.000Z',
+      showDate: null, createdAt: '2026-01-01T00:00:00.000Z', signature: null,
     },
   ],
 };
