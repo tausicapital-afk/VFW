@@ -21,6 +21,15 @@ import { TrackedEnvelopeStatus, TRACKED_ENVELOPE_STATUSES, apiAccountBase, docus
  * cryptographically random password — nobody is ever meant to sign in as
  * this account, and the random password (never emailed, never logged) makes
  * that true regardless of role.
+ *
+ * The `.internal` suffix is load-bearing, not decorative: it is an
+ * IETF-reserved special-use domain (RFC 9476) no registrar will issue and
+ * Google will never verify a Workspace/Gmail address against, which is what
+ * keeps this row unreachable through Google SSO's link-by-verified-email flow
+ * (AuthService.loginWithGoogle) — see the identical note on
+ * payments.service.ts's SYSTEM_USER_EMAIL, the sibling account this same
+ * pattern was introduced for. Do not repoint this at a real, registrable
+ * domain.
  */
 const SYSTEM_USER_EMAIL = 'docusign@system.internal';
 
