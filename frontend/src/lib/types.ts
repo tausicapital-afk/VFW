@@ -833,7 +833,7 @@ export interface ConfigField {
 }
 
 export interface ConfigGroup {
-  id: 'email' | 'storage' | 'quickbooks' | 'data';
+  id: 'email' | 'storage' | 'quickbooks' | 'payments' | 'data';
   title: string;
   blurb: string;
   /** null when the group requires nothing — draw no status pill. */

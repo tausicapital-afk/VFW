@@ -633,6 +633,7 @@ model Submission {
   comments     InternalComment[]
   audit        AuditEntry[]
   emails       EmailMessage[]    @relation("EmailSubmission")
+  stripeCheckoutSessions StripeCheckoutSession[]
 
   @@index([status])
   @@index([repId, status])
@@ -672,6 +673,11 @@ model Payment {
   // Set when this payment was posted by marking an installment done, so the
   // ledger row and the schedule row point at each other.
   installment Installment?
+
+  // Set when this payment was posted by a completed Stripe Checkout Session,
+  // so the ledger row and the session that produced it point at each other —
+  // the same back-relation `installment` above is for the installment path.
+  stripeCheckoutSession StripeCheckoutSession?
 
   // See Submission.isTestData for what this flag is and why it is stored.
   isTestData Boolean @default(false)
@@ -725,6 +731,64 @@ model Installment {
   @@index([submissionId])
   // Powers "what is due, oldest first" across every sale.
   @@index([status, dueDate])
+}
+
+// ---------------------------------------------------------------------------
+// Stripe — online payment collection from the contact portal
+// (docs/addon-features.md: "Online payment collection... decision: Stripe").
+//
+// The portal has no session and no CSRF story beyond the token itself (see
+// ContactPortalToken and PortalService.resolveContactId), so
+// PaymentsService re-verifies token -> contact -> submission ownership on
+// every checkout-session create, the same as every other portal endpoint.
+// Stripe's hosted Checkout page does the actual card handling; nothing in
+// this app ever sees a card number.
+//
+// One row per Checkout Session this app created, so the webhook — which only
+// ever carries STRIPE's own session id, never anything the browser sent us —
+// can be mapped back to a submission. `status` starts PENDING the instant the
+// session is created and is claimed to COMPLETED by the webhook handler with
+// an `updateMany({ where: { status: PENDING } })` guard — the same
+// "claim-atomically-then-act" idiom InstallmentsService.mark uses for its own
+// race (two people clicking "mark done" at once). Stripe retries a webhook
+// delivery until it gets a 2xx, so the same event can arrive more than once;
+// the second delivery finds nothing left to claim and posts nothing.
+// ---------------------------------------------------------------------------
+
+enum StripeCheckoutSessionStatus {
+  PENDING
+  COMPLETED
+}
+
+model StripeCheckoutSession {
+  id String @id @default(cuid())
+
+  // Stripe's own id for the Checkout Session ("cs_...") — what the webhook
+  // event actually carries, and the reason this table exists.
+  stripeSessionId String @unique
+
+  submissionId String
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  // Frozen at session-creation time from the submission's balance then, the
+  // same reason Submission.packagePrice freezes a catalogue price rather than
+  // joining live: the balance could move (another payment lands) between
+  // creating the session and Stripe confirming it, and this is the figure
+  // Checkout actually put in front of the contact's card.
+  amount   Decimal  @db.Decimal(14, 2)
+  currency Currency
+
+  status StripeCheckoutSessionStatus @default(PENDING)
+
+  // The ledger entry this session posted, filled in only once the claim above
+  // succeeds. Unique — a session posts at most one Payment, ever.
+  paymentId String?  @unique
+  payment   Payment? @relation(fields: [paymentId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([submissionId])
 }
 
 model Document {
