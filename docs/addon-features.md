@@ -1,9 +1,11 @@
 # Add-on features — shipped, decided, and still open
 
 Originally a shortlist of features the console didn't have yet, grounded by
-checking the code first. As of this pass, the six schema-free items have
-shipped, and the schema-changing items have gateway/provider decisions
-recorded so the next round of work doesn't stall on picking a vendor.
+checking the code first. All eleven items that had a scope or a provider
+decision — the six schema-free features, Batch A's three schema-changing
+ones, and Wave 2's five provider-decided ones — have now shipped. What
+remains is the deferred list at the bottom, each held back for its own
+reason rather than a lack of a decision.
 
 ---
 
@@ -78,22 +80,62 @@ fully tested together afterward.
   Payroll → Commission tiers tab (`payroll.manageTiers`, ACCT/ADMIN). Frozen
   into `PayrollInvoice.tierBonus` at submit time, same as base/commission.
 
-## Decided, not yet built
+## Shipped — Wave 2
 
-Provider/design decisions are made — these are ready to scope and dispatch in
-the next batches:
+All five items decided in the previous pass have landed, each reviewed
+separately for security before merge (two of them — Stripe and DocuSign — sit
+behind public, unauthenticated webhooks, so that scrutiny was not optional).
 
-| Feature | Decision |
-|---|---|
-| Online payment collection | **Stripe** |
-| E-signature on contracts | **DocuSign** |
-| SSO | **Google Workspace** |
-| 2FA | **TOTP authenticator app** |
-| Client portal for contacts | **View-only via magic link** (no password account) |
+- **Google Workspace SSO + TOTP 2FA.** `backend/src/auth/google-sso.service.ts`
+  mirrors `QboConnectionService`'s OAuth shape (state/CSRF, encrypted tokens,
+  graceful "not configured"). SSO only ever signs in an *existing* account —
+  matched and linked by verified email, never used to provision one; account
+  creation stays exclusively the invitation system's job. TOTP
+  (`backend/src/auth/totp.ts`) stores the secret encrypted via the same
+  `config.crypto` helper already used for SMTP/R2/QBO, and `totpEnabled` only
+  flips after a real code is proven once, so enrolling with a secret you never
+  saved can't lock you out. A password (or Google) login for a TOTP-enabled
+  user does not complete the session — it returns a short-lived, single-purpose
+  challenge that can't be replayed as a real session token.
+- **Client portal for contacts.** `backend/src/portal/` + `frontend/src/pages/Portal.tsx`
+  — a `ContactPortalToken`-gated, unauthenticated view at `/portal/:token`
+  (60-day link, not a one-shot credential) showing a contact their own
+  submissions: status, balance, invoice PDF, and (once sent) signature status
+  and the signed contract. A strict field allowlist, not "everything minus the
+  sensitive bits" — no internal notes, GL/cost-centre, rep, discount
+  mechanics, or any other contact's data, and a missing vs. expired token
+  return byte-identical 404s.
+- **Online payment collection (Stripe).** `backend/src/payments/` — from the
+  portal, a contact can pay their outstanding balance via a Stripe-hosted
+  Checkout page; the card never touches this server. The webhook verifies
+  Stripe's signature over the raw request body before any database write,
+  posts the `Payment` and recomputes the balance exactly once per Checkout
+  Session (an `updateMany` compare-and-set claim absorbs Stripe's retried
+  deliveries), and cross-checks Stripe's own confirmed `amount_total` against
+  the amount the app expected before trusting it. Webhook-posted payments are
+  attributed to a lazily-created, hidden service `User`
+  (`stripe@system.internal`) rather than loosening `Payment.recordedById`'s
+  required FK — the `.internal` domain is IETF-reserved, which is what keeps
+  that row unreachable through the SSO link-by-email flow above.
+- **E-signature on contracts (DocuSign).** `backend/src/docusign/` —
+  `DocuSignConnectionService` again mirrors QBO's OAuth shape; "Send for
+  signature" (`email.send`, ACCT/ADMIN) turns an uploaded `Document` into a
+  DocuSign envelope, tracked as a `SignatureRequest`. The `@Public()` Connect
+  webhook trusts only the envelope id to look up a `SignatureRequest` this
+  console itself created — nothing else in the payload — and claims the
+  `completed` transition atomically so a redelivered notification can't
+  duplicate the signed `Document`. The signed PDF lands back in R2 and is
+  attributed to the same hidden-service-user pattern Stripe uses
+  (`docusign@system.internal`). Not yet exercised against a live DocuSign
+  account — the envelope JSON shape and OAuth token-endpoint details are
+  built from documentation, not a sandbox run, and are flagged in code for
+  whoever connects the first real account to double-check.
 
-All five still need a Prisma schema change and are held back from full
-parallelism for the same reason Batch A's three were run on isolated
-Postgres instances.
+All five needed a Prisma schema change and were built and merged sequentially
+rather than on isolated Postgres instances like Batch A, since — unlike Batch
+A's three — several share real integration points (the portal is the surface
+both Stripe and DocuSign hang their contact-facing pieces off of) rather than
+being independent.
 
 ## Deferred — own session, not a quick add
 
@@ -118,7 +160,9 @@ Postgres instances.
 
 ## How to use this list
 
-The "Decided, not yet built" table is ready to scope and dispatch in
-controlled batches (not all at once — several touch the same auth/submission
-files and all need schema migrations against one shared dev database). Say
-the word and I'll start the next wave.
+Everything that had a provider decision recorded is now shipped. What's left
+is the "Deferred" list above, each item deliberately held back for a reason
+specific to it (touches every guarded endpoint, needs service-worker
+groundwork nothing else has laid, or just isn't scoped yet) rather than a
+queue waiting on schema-migration bandwidth. Say the word and I'll scope
+whichever one you want to start.
