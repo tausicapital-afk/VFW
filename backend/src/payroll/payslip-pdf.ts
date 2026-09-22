@@ -29,6 +29,16 @@ export type PayslipPayType = 'SALARY' | 'HOURLY' | 'COMMISSION_ONLY';
 export type PayslipRole = 'SALES' | 'INTERN' | 'ACCT' | 'MGR' | 'ADMIN';
 export type PayslipInvoiceStatus = 'SUBMITTED' | 'APPROVED' | 'REJECTED';
 
+/** One bracket's contribution to the tier bonus below — restated from
+ *  PayrollService's own shape for the same reason the enums above are: this
+ *  file stays free of that module's imports. */
+export interface TierBonusBreakdownEntry {
+  thresholdRevenue: string;
+  bonusPct: string;
+  portion: string;
+  amount: string;
+}
+
 export interface PayslipPdfData {
   companyName: string;
   /** The inclusive date range this document is for, and the only one on it. */
@@ -69,6 +79,13 @@ export interface PayslipPdfData {
     baseHours: string | null;
     commission: string;
     commissionUnpaid: string;
+    /** The bonus layer from the commission-tier table, on top of `commission`
+     *  above — see the schema comment on CommissionTier. Zero, with an empty
+     *  `tierBonusBreakdown`, for a rep whose revenue never crossed a threshold;
+     *  the renderer omits the whole line in that case rather than printing a
+     *  bonus that was not earned. */
+    tierBonus: string;
+    tierBonusBreakdown: TierBonusBreakdownEntry[];
     gross: string;
   };
 
@@ -355,9 +372,29 @@ export function buildPayslipPdf(d: PayslipPdfData): Promise<Buffer> {
     );
   }
 
+  // Only printed when it is actually nonzero — a rep whose revenue never
+  // crossed a tier gets no line at all, not a "Tier bonus $0.00" that reads
+  // like a promise never kept. The derivation names every bracket it earned
+  // from, the same "own arithmetic" rule every other line here follows.
+  if (Number(d.pay.tierBonus) > 0) {
+    const tierDerivation = d.pay.tierBonusBreakdown.length
+      ? d.pay.tierBonusBreakdown
+          .map((b) => `${cash(b.portion)} of net revenue above ${cash(b.thresholdRevenue)}, at +${b.bonusPct}%`)
+          .join('; ')
+      : 'Bonus from the commission-tier table';
+    earning('Tier bonus', tierDerivation, cash(d.pay.tierBonus));
+  }
+
   rule(y, INK);
   y += 8;
-  earning('Gross pay', `Base + commission, in ${d.currency}`, cash(d.pay.gross), true);
+  earning(
+    'Gross pay',
+    Number(d.pay.tierBonus) > 0
+      ? `Base + commission + tier bonus, in ${d.currency}`
+      : `Base + commission, in ${d.currency}`,
+    cash(d.pay.gross),
+    true,
+  );
 
   // --- What it was worked out from -----------------------------------------
   y = section('What it was worked out from', y + 2);

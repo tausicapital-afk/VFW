@@ -12,7 +12,30 @@ import { StorageService } from '../storage/storage.service';
 import { avatarUrl } from '../profile/avatar';
 import { currentMonth, dayKey, parseDay, summarise } from '../attendance/attendance.service';
 import { buildPayslipPdf, type PayslipPdfData } from './payslip-pdf';
-import { EditPayrollInvoiceDto, PayrollQueryDto, RejectPayrollInvoiceDto, SubmitPayrollDto } from './dto';
+import {
+  CreateCommissionTierDto,
+  EditPayrollInvoiceDto,
+  PayrollQueryDto,
+  RejectPayrollInvoiceDto,
+  SubmitPayrollDto,
+  UpdateCommissionTierDto,
+} from './dto';
+
+/** Money and rates: parse from a string, the same way admin/admin.service.ts
+ *  does for tax rates — a JS number would round a figure typed with more
+ *  precision than it can safely represent. */
+function decimal(raw: string, field: string): Decimal {
+  let d: Decimal;
+  try {
+    d = new Decimal(raw);
+  } catch {
+    throw new BadRequestException(`${field} is not a valid number`);
+  }
+  if (!d.isFinite() || d.isNegative()) {
+    throw new BadRequestException(`${field} must be a positive number`);
+  }
+  return d;
+}
 
 /**
  * Inclusive `from`/`to` → the half-open range Prisma's date columns need.
@@ -108,6 +131,64 @@ interface ClientSales {
   invoiced: Decimal;
   collected: Decimal;
   outstanding: Decimal;
+}
+
+/** One bracket of the global commission-tier table, as PayrollService reads
+ *  it — see the schema comment on CommissionTier. */
+interface Tier {
+  thresholdRevenue: Decimal;
+  bonusPct: Decimal;
+}
+
+/** One bracket's contribution to a rep's tier bonus, kept only when it
+ *  actually earned something — this is what lets the statement and the
+ *  payslip show real arithmetic ("$12,000 above $50,000, at +2.00%") without
+ *  recomputing it themselves. */
+export interface TierBonusBreakdownEntry {
+  thresholdRevenue: string;
+  bonusPct: string;
+  portion: string;
+  amount: string;
+}
+
+/**
+ * The tier bonus for one rep's period, walked progressively — like a tax
+ * bracket, not a cliff. `tiers` must already be sorted ascending by
+ * `thresholdRevenue` (see `tierTable()`).
+ *
+ * Only the slice of `revenue` between one threshold and the next earns that
+ * tier's `bonusPct`, so crossing into a new bracket is never a pay cut on the
+ * dollars already below it. A tier the revenue never reaches contributes
+ * nothing and is left out of the breakdown entirely — not a $0.00 row — which
+ * is what lets the screens omit the whole line cleanly for a rep who never
+ * crossed one.
+ */
+function computeTierBonus(revenue: Decimal, tiers: Tier[]): { bonus: Decimal; breakdown: TierBonusBreakdownEntry[] } {
+  const breakdown: TierBonusBreakdownEntry[] = [];
+  let bonus = new Decimal(0);
+
+  for (let i = 0; i < tiers.length; i++) {
+    const { thresholdRevenue, bonusPct } = tiers[i];
+    // Tiers are ascending, so once revenue does not reach one threshold it
+    // cannot reach any higher one either — nothing further to walk.
+    if (revenue.lte(thresholdRevenue)) break;
+
+    const next = tiers[i + 1]?.thresholdRevenue ?? null;
+    const bracketTop = next && next.lt(revenue) ? next : revenue;
+    const portion = bracketTop.minus(thresholdRevenue);
+    if (portion.lte(0) || bonusPct.lte(0)) continue;
+
+    const amount = portion.times(bonusPct).dividedBy(100);
+    bonus = bonus.plus(amount);
+    breakdown.push({
+      thresholdRevenue: thresholdRevenue.toFixed(2),
+      bonusPct: bonusPct.toFixed(2),
+      portion: portion.toFixed(2),
+      amount: amount.toDecimalPlaces(2).toFixed(2),
+    });
+  }
+
+  return { bonus: bonus.toDecimalPlaces(2), breakdown };
 }
 
 /**
@@ -341,11 +422,25 @@ export class PayrollService {
     return byUser;
   }
 
+  /**
+   * The global commission-tier table, ascending by threshold — the order
+   * `computeTierBonus` needs to walk it progressively. See the schema comment
+   * on CommissionTier for why there is one table for the whole company.
+   */
+  private async tierTable(): Promise<Tier[]> {
+    const rows = await this.prisma.commissionTier.findMany({ orderBy: { thresholdRevenue: 'asc' } });
+    return rows.map((t) => ({
+      thresholdRevenue: new Decimal(t.thresholdRevenue.toString()),
+      bonusPct: new Decimal(t.bonusPct.toString()),
+    }));
+  }
+
   private async statement(
     person: Person,
     sales: RepSales | undefined,
     attendance: AttendanceDay[] | undefined,
     lifetimeEarned: Decimal | undefined,
+    tiers: Tier[],
   ) {
     const summary = summarise(attendance ?? []);
     const hours = new Decimal(summary.hours);
@@ -353,6 +448,14 @@ export class PayrollService {
 
     const base = this.basePay(person.payType, baseRate, hours).toDecimalPlaces(2);
     const commission = (sales?.commission ?? new Decimal(0)).toDecimalPlaces(2);
+    // Bonus layer on top of the ordinary per-sale commission above, computed
+    // fresh here rather than stamped onto any sale — see the schema comment on
+    // CommissionTier for why. Struck on the same revenue commission itself is
+    // struck on, so the two lines are always talking about the same dollars.
+    const { bonus: tierBonus, breakdown: tierBonusBreakdown } = computeTierBonus(
+      sales?.revenue ?? new Decimal(0),
+      tiers,
+    );
     const { avatarKey, ...profile } = person;
 
     return {
@@ -401,7 +504,14 @@ export class PayrollService {
         earnsCommission: person.earnsCommission,
         commission: commission.toFixed(2),
         commissionUnpaid: (sales?.commissionUnpaid ?? new Decimal(0)).toFixed(2),
-        gross: base.plus(commission).toFixed(2),
+        // The bonus layer from the commission-tier table, on the same revenue
+        // as the commission above. `tierBonusBreakdown` is empty whenever this
+        // is zero — a rep who never crossed a threshold has nothing to show,
+        // not a $0.00 line — which is what lets the statement and the payslip
+        // omit it cleanly rather than asserting a bonus that was not earned.
+        tierBonus: tierBonus.toFixed(2),
+        tierBonusBreakdown,
+        gross: base.plus(commission).plus(tierBonus).toFixed(2),
       },
     };
   }
@@ -422,6 +532,7 @@ export class PayrollService {
     const sales = (await this.salesByRep(range, fx)).get(userId);
     const attendance = (await this.attendanceByUser(range, [userId])).get(userId);
     const lifetime = (await this.lifetimeEarnedByUser([userId])).get(userId);
+    const tiers = await this.tierTable();
     // This period's payroll invoice, if one has been submitted — lets the
     // screen show a status pill and compare the frozen snapshot against the
     // live figure.
@@ -436,7 +547,7 @@ export class PayrollService {
       to,
       self: userId === actor.id,
       invoice,
-      ...(await this.statement(person, sales, attendance, lifetime)),
+      ...(await this.statement(person, sales, attendance, lifetime, tiers)),
     };
   }
 
@@ -504,6 +615,8 @@ export class PayrollService {
         baseHours: sheet.pay.baseHours,
         commission: sheet.pay.commission,
         commissionUnpaid: sheet.pay.commissionUnpaid,
+        tierBonus: sheet.pay.tierBonus,
+        tierBonusBreakdown: sheet.pay.tierBonusBreakdown,
         gross: sheet.pay.gross,
       },
       invoice: sheet.invoice
@@ -594,10 +707,14 @@ export class PayrollService {
     const sales = await this.salesByRep(range, fx);
     const attendance = await this.attendanceByUser(range, people.map((p) => p.id));
     const lifetime = await this.lifetimeEarnedByUser(people.map((p) => p.id));
+    // Read once for the whole run, not once per person: everyone in a run is
+    // paid against the same table at the same instant, the same way one FX
+    // table prices every currency in it.
+    const tiers = await this.tierTable();
 
     const rows = await Promise.all(
       people.map((person) =>
-        this.statement(person, sales.get(person.id), attendance.get(person.id), lifetime.get(person.id)),
+        this.statement(person, sales.get(person.id), attendance.get(person.id), lifetime.get(person.id), tiers),
       ),
     );
 
@@ -613,6 +730,7 @@ export class PayrollService {
         base: total((r) => r.pay.base),
         commission: total((r) => r.pay.commission),
         commissionUnpaid: total((r) => r.pay.commissionUnpaid),
+        tierBonus: total((r) => r.pay.tierBonus),
         gross: total((r) => r.pay.gross),
         hours: total((r) => r.attendance.hours),
       },
@@ -748,6 +866,10 @@ export class PayrollService {
         commissionPct: sheet.user.commissionPct,
         earnsCommission: sheet.pay.earnsCommission,
         commission: sheet.pay.commission,
+        // Frozen exactly like commission above: the tier table is read fresh
+        // here, at submit time, and never again for this invoice — editing it
+        // afterwards must not move a period that has already been claimed.
+        tierBonus: sheet.pay.tierBonus,
         gross: sheet.pay.gross,
       };
       const invoice = await tx.payrollInvoice.upsert({
@@ -831,7 +953,12 @@ export class PayrollService {
 
     const base = dto.base != null ? new Decimal(dto.base).toDecimalPlaces(2) : invoice.base;
     const commission = dto.commission != null ? new Decimal(dto.commission).toDecimalPlaces(2) : invoice.commission;
-    const gross = base.plus(commission);
+    // Not editable here — the tier bonus stays exactly what it was frozen at on
+    // submit, the same way it is untouched by anything else that happens after
+    // that instant. Only re-summed into gross, alongside whatever base and
+    // commission were just corrected to.
+    const tierBonus = new Decimal(invoice.tierBonus.toString());
+    const gross = base.plus(commission).plus(tierBonus);
 
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.payrollInvoice.update({
@@ -919,6 +1046,132 @@ export class PayrollService {
         tx,
       );
       return updated;
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Commission tiers — administering the table `statement()` above reads. See
+  // the schema comment on CommissionTier for what these figures mean and why
+  // there is one table for the whole company rather than one per user.
+  // ---------------------------------------------------------------------------
+
+  /** The whole table, ascending — what the admin screen edits. */
+  async listTiers() {
+    return this.prisma.commissionTier.findMany({ orderBy: { thresholdRevenue: 'asc' } });
+  }
+
+  /**
+   * Additive, like the rest of the catalogue: a new bracket changes what the
+   * NEXT read of a statement pays, and reaches nothing already frozen onto a
+   * submitted PayrollInvoice — see the comment on `PayrollInvoice.tierBonus`.
+   */
+  async createTier(dto: CreateCommissionTierDto, actor: AuthUser) {
+    const thresholdRevenue = decimal(dto.thresholdRevenue, 'Threshold revenue');
+    const bonusPct = decimal(dto.bonusPct, 'Bonus %');
+    if (bonusPct.greaterThan(100)) {
+      throw new BadRequestException('Bonus % cannot exceed 100%');
+    }
+
+    const existing = await this.prisma.commissionTier.findUnique({
+      where: { thresholdRevenue: thresholdRevenue.toFixed(2) },
+    });
+    if (existing) {
+      throw new BadRequestException(`A tier already starts at ${thresholdRevenue.toFixed(2)}`);
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const created = await tx.commissionTier.create({
+        data: { thresholdRevenue: thresholdRevenue.toFixed(2), bonusPct: bonusPct.toFixed(2) },
+      });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'PAYROLL_TIER_CREATED',
+          detail: `Commission tier added: +${bonusPct.toFixed(2)}% above ${thresholdRevenue.toFixed(2)} CAD net revenue`,
+          payload: { tierId: created.id, thresholdRevenue: thresholdRevenue.toFixed(2), bonusPct: bonusPct.toFixed(2) },
+        },
+        tx,
+      );
+      return created;
+    });
+  }
+
+  async updateTier(id: string, dto: UpdateCommissionTierDto, actor: AuthUser) {
+    const tier = await this.prisma.commissionTier.findUnique({ where: { id } });
+    if (!tier) throw new NotFoundException('Commission tier not found');
+
+    const before: Record<string, string> = {};
+    const after: Record<string, string> = {};
+    const data: Prisma.CommissionTierUpdateInput = {};
+
+    if (dto.thresholdRevenue !== undefined) {
+      const next = decimal(dto.thresholdRevenue, 'Threshold revenue');
+      const fixed = next.toFixed(2);
+      if (fixed !== tier.thresholdRevenue.toFixed(2)) {
+        const clash = await this.prisma.commissionTier.findUnique({ where: { thresholdRevenue: fixed } });
+        if (clash && clash.id !== id) {
+          throw new BadRequestException(`A tier already starts at ${fixed}`);
+        }
+        before.thresholdRevenue = tier.thresholdRevenue.toFixed(2);
+        after.thresholdRevenue = fixed;
+        data.thresholdRevenue = fixed;
+      }
+    }
+    if (dto.bonusPct !== undefined) {
+      const next = decimal(dto.bonusPct, 'Bonus %');
+      if (next.greaterThan(100)) {
+        throw new BadRequestException('Bonus % cannot exceed 100%');
+      }
+      const fixed = next.toFixed(2);
+      if (fixed !== tier.bonusPct.toFixed(2)) {
+        before.bonusPct = tier.bonusPct.toFixed(2);
+        after.bonusPct = fixed;
+        data.bonusPct = fixed;
+      }
+    }
+
+    if (!Object.keys(after).length) throw new BadRequestException('Nothing was changed');
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.commissionTier.update({ where: { id }, data });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'PAYROLL_TIER_UPDATED',
+          detail: `Commission tier updated: ${before.thresholdRevenue ?? tier.thresholdRevenue.toFixed(2)} -> ${
+            after.thresholdRevenue ?? updated.thresholdRevenue.toFixed(2)
+          }, +${updated.bonusPct.toFixed(2)}%`,
+          payload: { tierId: id, before, after },
+        },
+        tx,
+      );
+      return updated;
+    });
+  }
+
+  /**
+   * A hard delete — unlike a Submission or a User, a tier is not itself
+   * referenced anywhere. It only shapes what `computeTierBonus` works out on
+   * the fly on the next read; a submitted PayrollInvoice already carries its
+   * own frozen `tierBonus` and cannot be reached by removing the bracket that
+   * produced it.
+   */
+  async deleteTier(id: string, actor: AuthUser) {
+    const tier = await this.prisma.commissionTier.findUnique({ where: { id } });
+    if (!tier) throw new NotFoundException('Commission tier not found');
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.commissionTier.delete({ where: { id } });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'PAYROLL_TIER_DELETED',
+          detail: `Commission tier removed: +${tier.bonusPct.toFixed(2)}% above ${tier.thresholdRevenue.toFixed(2)} CAD net revenue`,
+          payload: { tierId: id, thresholdRevenue: tier.thresholdRevenue.toFixed(2), bonusPct: tier.bonusPct.toFixed(2) },
+        },
+        tx,
+      );
+      return { ok: true };
     });
   }
 }

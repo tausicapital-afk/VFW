@@ -124,6 +124,16 @@ describe('payslip', () => {
     earnsCommission = true,
   ) => prisma.user.update({ where: { id: salesId }, data: { payType, baseRate, earnsCommission } });
 
+  /** Replaces the whole commission-tier table for one test. Restored to the
+   *  seeded placeholder in `afterEach`, the same way `setPay` is. */
+  const setTiers = async (rows: { thresholdRevenue: string; bonusPct: string }[]) => {
+    await prisma.commissionTier.deleteMany({});
+    for (const row of rows) {
+      await prisma.commissionTier.create({ data: row });
+    }
+  };
+  let seededTiers: { thresholdRevenue: string; bonusPct: string }[];
+
   beforeAll(async () => {
     app = await createTestApp();
     prisma = app.get(PrismaService);
@@ -145,6 +155,12 @@ describe('payslip', () => {
       name: accounting.name,
       role: accounting.role,
     };
+
+    const tiers = await prisma.commissionTier.findMany();
+    seededTiers = tiers.map((t) => ({
+      thresholdRevenue: t.thresholdRevenue.toFixed(2),
+      bonusPct: t.bonusPct.toFixed(2),
+    }));
   });
 
   afterEach(async () => {
@@ -159,6 +175,7 @@ describe('payslip', () => {
     });
     await prisma.auditEntry.deleteMany({ where: { action: 'PAYSLIP_GENERATED' } });
     await setPay('COMMISSION_ONLY', '0');
+    await setTiers(seededTiers);
   });
 
   afterAll(async () => {
@@ -266,6 +283,56 @@ describe('payslip', () => {
     );
     expect(data.pay.base).toBe('496.00'); // 32.00 x 15.50
     expect(data.pay.commissionUnpaid).toBe('400.00');
+    // Below every seeded tier's threshold, so there is nothing here either —
+    // proven at the data level, since a rendered PDF's text cannot be read
+    // back out (see the file comment above).
+    expect(data.pay.tierBonus).toBe(screen.pay.tierBonus);
+    expect(data.pay.tierBonusBreakdown).toEqual(screen.pay.tierBonusBreakdown);
+  });
+
+  // --- The tier bonus ---------------------------------------------------------
+  // The arithmetic itself is pinned in payroll.spec.ts; what matters here is
+  // that the payslip carries exactly what the statement carries, including the
+  // breakdown the renderer's "Tier bonus" line reads its derivation from.
+
+  it('carries a nonzero tier bonus onto the payslip, breakdown included', async () => {
+    await setTiers([
+      { thresholdRevenue: '0', bonusPct: '0' },
+      { thresholdRevenue: '50000', bonusPct: '2' },
+    ]);
+    await sale({ taxable: '60000', commissionAmount: '4800', payStatus: 'PAID' });
+
+    const screen = (
+      await http(app).get(`/api/payroll?from=${FROM}&to=${TO}`).set('Cookie', sales).expect(200)
+    ).body;
+    const { data } = await payroll.payslip({ from: FROM, to: TO }, salesActor);
+
+    expect(screen.pay.tierBonus).toBe('200.00'); // 2% of the 10,000 above the 50,000 threshold
+    expect(data.pay.tierBonus).toBe(screen.pay.tierBonus);
+    expect(data.pay.tierBonusBreakdown).toEqual(screen.pay.tierBonusBreakdown);
+    expect(data.pay.tierBonusBreakdown).toEqual([
+      { thresholdRevenue: '50000.00', bonusPct: '2.00', portion: '10000.00', amount: '200.00' },
+    ]);
+    // Gross really does include it, not just the standalone line.
+    expect(data.pay.gross).toBe('5000.00'); // 0 base + 4800 commission + 200 tier bonus
+    expect(isPdf(await buildPayslipPdf(data))).toBe(true);
+  });
+
+  it('omits the tier bonus from the payslip data entirely when revenue never crosses a threshold', async () => {
+    await setTiers([
+      { thresholdRevenue: '0', bonusPct: '0' },
+      { thresholdRevenue: '50000', bonusPct: '2' },
+    ]);
+    await sale({ taxable: '20000', commissionAmount: '1600', payStatus: 'PAID' });
+
+    const { data } = await payroll.payslip({ from: FROM, to: TO }, salesActor);
+
+    // Not a $0.00 line — nothing to render at all. The PDF renderer's "Tier
+    // bonus" line is gated on exactly this: `Number(d.pay.tierBonus) > 0`.
+    expect(data.pay.tierBonus).toBe('0.00');
+    expect(data.pay.tierBonusBreakdown).toEqual([]);
+    expect(data.pay.gross).toBe('1600.00');
+    expect(isPdf(await buildPayslipPdf(data))).toBe(true);
   });
 
   it('carries the whole person, which is half of what a payslip is for', async () => {
@@ -367,7 +434,11 @@ describe('payslip', () => {
         baseHours: '142.50',
         commission: '2000.00',
         commissionUnpaid: '400.00',
-        gross: '6560.00',
+        tierBonus: '300.00',
+        tierBonusBreakdown: [
+          { thresholdRevenue: '20000.00', bonusPct: '6.00', portion: '5000.00', amount: '300.00' },
+        ],
+        gross: '6860.00',
       },
       invoice: null,
       preparedBy: 'Hannah Okafor',
@@ -391,6 +462,8 @@ describe('payslip', () => {
             baseHours: null,
             commission: '0.00',
             commissionUnpaid: '0.00',
+            tierBonus: '0.00',
+            tierBonusBreakdown: [],
             gross: '0.00',
           },
         }),

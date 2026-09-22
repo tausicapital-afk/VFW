@@ -9,7 +9,7 @@ import { fmtDate, money } from '../lib/format';
 import { currentMonthPeriod, isCalendarMonth, periodLabel, shiftMonthPeriod } from '../lib/period';
 import { TestTag, useTestRow } from '../lib/testData';
 import type {
-  PayrollInvoiceRow, PayrollInvoiceStatus, PayrollRun, PayrollSheet, PayrollStatement, PayType,
+  CommissionTier, PayrollInvoiceRow, PayrollInvoiceStatus, PayrollRun, PayrollSheet, PayrollStatement, PayType,
 } from '../lib/types';
 import { Avatar } from '../shell/Avatar';
 import { ExportMenu } from '../shell/ExportMenu';
@@ -47,13 +47,17 @@ const cad = (v: string) => money(v, 'CAD');
 
 export function Payroll() {
   const { user } = useAuth();
-  const [tab, setTab] = useState<'mine' | 'run' | 'approvals'>('mine');
+  const [tab, setTab] = useState<'mine' | 'run' | 'approvals' | 'tiers'>('mine');
   const showRun = can('payroll.viewAll', user?.role);
   const showApprovals = can('payroll.approve', user?.role);
+  // The commission-tier table is company-wide pay policy, so it is gated the
+  // same as approving payroll and administering the catalogue, not opened to
+  // everyone who can merely view their own pay.
+  const showTiers = can('payroll.manageTiers', user?.role);
 
   return (
     <Page crumb="People" title="Payroll">
-      {(showRun || showApprovals) && (
+      {(showRun || showApprovals || showTiers) && (
         <div className="tabs">
           <button className={'tab' + (tab === 'mine' ? ' on' : '')} onClick={() => setTab('mine')}>
             My pay
@@ -71,10 +75,23 @@ export function Payroll() {
               Approvals
             </button>
           )}
+          {showTiers && (
+            <button className={'tab' + (tab === 'tiers' ? ' on' : '')} onClick={() => setTab('tiers')}>
+              Commission tiers
+            </button>
+          )}
         </div>
       )}
 
-      {tab === 'run' && showRun ? <Run /> : tab === 'approvals' && showApprovals ? <Approvals /> : <MyPay />}
+      {tab === 'run' && showRun ? (
+        <Run />
+      ) : tab === 'approvals' && showApprovals ? (
+        <Approvals />
+      ) : tab === 'tiers' && showTiers ? (
+        <CommissionTiersTab />
+      ) : (
+        <MyPay />
+      )}
     </Page>
   );
 }
@@ -345,6 +362,24 @@ function Statement({ statement, period }: { statement: PayrollStatement; period:
             </span>
             <span>{cad(pay.commission)}</span>
           </div>
+          {/* Only shown when it is actually nonzero — a period that never
+              crossed a tier threshold has nothing to report here, not a
+              $0.00 line that reads like a bonus that was promised and not
+              paid. */}
+          {Number(pay.tierBonus) > 0 && (
+            <div className="r">
+              <span>
+                Tier bonus
+                <span className="mut sm">
+                  {' '}·{' '}
+                  {pay.tierBonusBreakdown
+                    .map((b) => `${cad(b.portion)} above ${cad(b.thresholdRevenue)} at +${b.bonusPct}%`)
+                    .join('; ')}
+                </span>
+              </span>
+              <span>{cad(pay.tierBonus)}</span>
+            </div>
+          )}
           <div className="r big">
             <span>Gross</span>
             <span>{cad(pay.gross)}</span>
@@ -511,6 +546,7 @@ function Run() {
                       <th style={{ textAlign: 'right' }}>Base</th>
                       <th style={{ textAlign: 'right' }}>Sales</th>
                       <th style={{ textAlign: 'right' }}>Commission</th>
+                      <th style={{ textAlign: 'right' }}>Tier bonus</th>
                       <th style={{ textAlign: 'right' }}>Gross</th>
                       <th />
                     </tr>
@@ -541,6 +577,12 @@ function Run() {
                             <div className="mut sm">{cad(row.pay.commissionUnpaid)} unpaid</div>
                           )}
                         </td>
+                        {/* A dash rather than $0.00 — most rows never cross a
+                            tier, and a column of zeroes would bury the ones
+                            that did. */}
+                        <td style={{ textAlign: 'right' }}>
+                          {Number(row.pay.tierBonus) > 0 ? cad(row.pay.tierBonus) : <span className="mut">—</span>}
+                        </td>
                         <td style={{ textAlign: 'right' }} className="b">{cad(row.pay.gross)}</td>
                         <td style={{ textAlign: 'right' }}>
                           <button
@@ -553,7 +595,7 @@ function Run() {
                       </tr>
                     ))}
                     {run.rows.length === 0 && (
-                      <tr><td colSpan={8} className="mut">No active accounts.</td></tr>
+                      <tr><td colSpan={9} className="mut">No active accounts.</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -715,10 +757,19 @@ function InvoiceActionModal({
           <div className="totals" style={{ marginBottom: 16 }}>
             <div className="r"><span>Period</span><span>{label}</span></div>
             <div className="r"><span>Submitted gross</span><span>{money(invoice.gross, 'CAD')}</span></div>
+            {Number(invoice.tierBonus) > 0 && (
+              <div className="r">
+                <span>Of which tier bonus</span>
+                <span>{money(invoice.tierBonus, 'CAD')}</span>
+              </div>
+            )}
           </div>
 
           {kind === 'edit' && (
             <>
+              {/* Base and commission alone — the tier bonus stays exactly what
+                  it was frozen at when this was submitted; editing the tier
+                  table afterwards must not move an already-submitted period. */}
               <div className="fields">
                 <div className="f">
                   <label>Base pay (CAD)</label>
@@ -767,5 +818,208 @@ function InvoiceActionModal({
         </div>
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Commission tiers — the bonus layer `pay.tierBonus` above is computed from.
+// One table for the whole company: it is company-wide pay policy, the same
+// reason there is one Settings.discountApprovalPct rather than one per rep.
+// ---------------------------------------------------------------------------
+
+function CommissionTiersTab() {
+  const qc = useQueryClient();
+  const [adding, setAdding] = useState(false);
+
+  const { data: tiers, isLoading } = useQuery({
+    queryKey: ['payroll', 'tiers'],
+    queryFn: () => api.get<CommissionTier[]>('/api/payroll/tiers'),
+  });
+
+  const refresh = () => void qc.invalidateQueries({ queryKey: ['payroll', 'tiers'] });
+
+  return (
+    <>
+      <div className="card">
+        <div className="hd">
+          <h3>Commission tiers</h3>
+          <div className="sp" style={{ flex: 1 }} />
+          <button className="btn sm blue" onClick={() => setAdding(true)}>+ New tier</button>
+        </div>
+        <div className="tbl-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Net revenue threshold (CAD)</th>
+                <th className="num">Bonus %</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {(tiers ?? []).map((t) => (
+                <TierRowEdit key={t.id} tier={t} onSaved={refresh} />
+              ))}
+              {!isLoading && tiers?.length === 0 && (
+                <tr><td colSpan={3} className="mut">No tiers yet — every rep earns plain commission, with no bonus layer.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div className="note" style={{ marginTop: 16 }}>
+        Applied progressively at payroll time, like a tax bracket rather than a cliff: the slice of a
+        period's net revenue between one threshold and the next earns that tier's bonus, on top of the
+        ordinary commission struck on each sale. A change here reprices the <b>next</b> read of a
+        statement — a period someone has already submitted keeps the tier bonus it was frozen with, the
+        same guarantee an edited commission rate gives every sale already on the books.
+      </div>
+
+      {adding && (
+        <NewTierModal
+          onClose={() => setAdding(false)}
+          onSaved={() => { setAdding(false); refresh(); }}
+        />
+      )}
+    </>
+  );
+}
+
+function NewTierModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const [thresholdRevenue, setThreshold] = useState('');
+  const [bonusPct, setBonusPct] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const create = useMutation({
+    mutationFn: () =>
+      api.post('/api/payroll/tiers', { thresholdRevenue: thresholdRevenue.trim(), bonusPct: bonusPct.trim() }),
+    onSuccess: onSaved,
+    onError: (e: Error) => setError(e.message),
+  });
+
+  const ready = thresholdRevenue.trim() !== '' && bonusPct.trim() !== '';
+
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="box" onClick={(e) => e.stopPropagation()}>
+        <div className="hd">
+          <h3>New commission tier</h3>
+          <div className="sp" style={{ flex: 1 }} />
+          <button className="btn sm" onClick={onClose}>Close</button>
+        </div>
+
+        <div className="bd">
+          <div className="fields">
+            <div className="f">
+              <label>Net revenue threshold (CAD)</label>
+              <input
+                type="number"
+                step="0.01"
+                value={thresholdRevenue}
+                onChange={(e) => setThreshold(e.target.value)}
+                placeholder="50000"
+              />
+              <div className="help">The floor of this bracket — a period's revenue at or below it earns nothing from this tier.</div>
+            </div>
+            <div className="f">
+              <label>Bonus %</label>
+              <input
+                type="number"
+                step="0.01"
+                value={bonusPct}
+                onChange={(e) => setBonusPct(e.target.value)}
+                placeholder="2"
+              />
+              <div className="help">Extra percentage on the revenue above this threshold and below the next tier up.</div>
+            </div>
+          </div>
+
+          <div className="note" style={{ marginTop: 12 }}>
+            Progressive, not a cliff: only the slice of a period's revenue between this threshold and the
+            next tier earns this rate — crossing into a new bracket never costs the dollars already below it.
+          </div>
+          {error && <div className="note bad" style={{ marginTop: 12 }}>{error}</div>}
+        </div>
+
+        <div className="ft">
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button
+            className="btn primary"
+            disabled={!ready || create.isPending}
+            onClick={() => { setError(null); create.mutate(); }}
+          >
+            {create.isPending ? 'Adding…' : 'Add tier'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TierRowEdit({ tier, onSaved }: { tier: CommissionTier; onSaved: () => void }) {
+  const [thresholdRevenue, setThreshold] = useState(tier.thresholdRevenue);
+  const [bonusPct, setBonusPct] = useState(tier.bonusPct);
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = useMutation({
+    mutationFn: () => api.patch(`/api/payroll/tiers/${tier.id}`, { thresholdRevenue, bonusPct }),
+    onSuccess: onSaved,
+    onError: (e: Error) => setError(e.message),
+  });
+
+  const remove = useMutation({
+    mutationFn: () => api.del(`/api/payroll/tiers/${tier.id}`),
+    onSuccess: onSaved,
+    onError: (e: Error) => { setConfirming(false); setError(e.message); },
+  });
+
+  const dirty = thresholdRevenue !== tier.thresholdRevenue || bonusPct !== tier.bonusPct;
+
+  return (
+    <tr>
+      <td className="num">
+        <input
+          type="number"
+          step="0.01"
+          style={{ width: 130, textAlign: 'right' }}
+          value={thresholdRevenue}
+          onChange={(e) => setThreshold(e.target.value)}
+        />
+      </td>
+      <td className="num">
+        <input
+          type="number"
+          step="0.01"
+          style={{ width: 90, textAlign: 'right' }}
+          value={bonusPct}
+          onChange={(e) => setBonusPct(e.target.value)}
+        />
+        {error && <div className="sm" style={{ color: 'var(--red)' }}>{error}</div>}
+      </td>
+      <td>
+        <div className="rowflex" style={{ justifyContent: 'flex-end', gap: 8 }}>
+          {confirming ? (
+            <>
+              <span className="sm mut">Delete this tier?</span>
+              <button className="btn sm" onClick={() => setConfirming(false)}>Cancel</button>
+              <button className="btn sm dgr" disabled={remove.isPending} onClick={() => remove.mutate()}>
+                {remove.isPending ? 'Deleting…' : 'Confirm'}
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                className="btn sm"
+                disabled={!dirty || save.isPending}
+                onClick={() => { setError(null); save.mutate(); }}
+              >
+                {save.isPending ? 'Saving…' : 'Save'}
+              </button>
+              <button className="btn sm dgr" onClick={() => setConfirming(true)}>Delete</button>
+            </>
+          )}
+        </div>
+      </td>
+    </tr>
   );
 }

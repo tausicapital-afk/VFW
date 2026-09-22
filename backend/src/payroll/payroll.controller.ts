@@ -1,8 +1,15 @@
-import { Body, Controller, Get, Module, Param, Patch, Post, Query, Res } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Module, Param, Patch, Post, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { AuthUser, Can, CurrentUser } from '../common/auth.guard';
 import { PayrollService } from './payroll.service';
-import { EditPayrollInvoiceDto, PayrollQueryDto, RejectPayrollInvoiceDto, SubmitPayrollDto } from './dto';
+import {
+  CreateCommissionTierDto,
+  EditPayrollInvoiceDto,
+  PayrollQueryDto,
+  RejectPayrollInvoiceDto,
+  SubmitPayrollDto,
+  UpdateCommissionTierDto,
+} from './dto';
 
 /**
  * Payroll. The read routes carry `payroll.viewOwn`, which every role holds, because
@@ -131,6 +138,39 @@ export class PayrollController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.payroll.rejectInvoice(id, dto, user);
+  }
+
+  // --- Commission tiers ------------------------------------------------------
+  // The table `run()`/`statementFor()` read to work out each period's tier
+  // bonus. Declared before no `:id`-shaped route of its own collides — these
+  // live under their own `tiers` prefix, distinct from `invoices/:id`.
+
+  @Get('tiers')
+  @Can('payroll.manageTiers')
+  listTiers() {
+    return this.payroll.listTiers();
+  }
+
+  @Post('tiers')
+  @Can('payroll.manageTiers')
+  createTier(@Body() dto: CreateCommissionTierDto, @CurrentUser() user: AuthUser) {
+    return this.payroll.createTier(dto, user);
+  }
+
+  @Patch('tiers/:id')
+  @Can('payroll.manageTiers')
+  updateTier(
+    @Param('id') id: string,
+    @Body() dto: UpdateCommissionTierDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.payroll.updateTier(id, dto, user);
+  }
+
+  @Delete('tiers/:id')
+  @Can('payroll.manageTiers')
+  deleteTier(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.payroll.deleteTier(id, user);
   }
 }
 

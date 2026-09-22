@@ -101,6 +101,16 @@ describe('payroll', () => {
     return res.body;
   };
 
+  /** Replaces the whole commission-tier table for one test. Restored to the
+   *  seeded placeholder in `afterEach`. */
+  const setTiers = async (rows: { thresholdRevenue: string; bonusPct: string }[]) => {
+    await prisma.commissionTier.deleteMany({});
+    for (const row of rows) {
+      await prisma.commissionTier.create({ data: row });
+    }
+  };
+  let seededTiers: { thresholdRevenue: string; bonusPct: string }[];
+
   beforeAll(async () => {
     app = await createTestApp();
     prisma = app.get(PrismaService);
@@ -110,6 +120,12 @@ describe('payroll', () => {
     sales = await loginCookie(app, SALES);
     salesId = (await prisma.user.findUniqueOrThrow({ where: { email: SALES } })).id;
     otherId = (await prisma.user.findUniqueOrThrow({ where: { email: OTHER_SALES } })).id;
+
+    const tiers = await prisma.commissionTier.findMany();
+    seededTiers = tiers.map((t) => ({
+      thresholdRevenue: t.thresholdRevenue.toFixed(2),
+      bonusPct: t.bonusPct.toFixed(2),
+    }));
   });
 
   afterEach(async () => {
@@ -120,6 +136,7 @@ describe('payroll', () => {
       where: { date: { gte: new Date('2032-05-01'), lt: new Date('2032-06-01') } },
     });
     await setPay('COMMISSION_ONLY', '0');
+    await setTiers(seededTiers);
   });
 
   afterAll(async () => {
@@ -234,6 +251,168 @@ describe('payroll', () => {
 
     const body = await statement(sales);
     expect(Number(body.pay.commission)).toBeCloseTo(800 * rate, 2);
+  });
+
+  // --- Commission tiers ------------------------------------------------------
+  //
+  // The bonus layer on top of the commission above — see the schema comment on
+  // CommissionTier. Computed fresh at aggregation time from the same
+  // `sales.revenue` commission itself is struck on; never by touching a sale's
+  // stamped `commissionPct`/`commissionAmount`.
+  describe('commission tiers', () => {
+    // `submitMine` refuses a period that has not finished yet, and this file's
+    // shared 2032-05 is deliberately in the future (for isolation from every
+    // other suite) — so the two tests below that actually submit a period use
+    // a month of their own, safely in the past, rather than the shared one.
+    const FROZEN_FROM = '2020-02-01';
+    const FROZEN_TO = '2020-02-29';
+    const FROZEN_IN_MONTH = new Date('2020-02-14T12:00:00Z');
+
+    beforeEach(() =>
+      setTiers([
+        { thresholdRevenue: '0', bonusPct: '0' },
+        { thresholdRevenue: '50000', bonusPct: '2' },
+      ]),
+    );
+
+    afterEach(() =>
+      prisma.payrollInvoice.deleteMany({
+        where: {
+          userId: salesId,
+          periodStart: new Date(`${FROZEN_FROM}T00:00:00Z`),
+          periodEnd: new Date(`${FROZEN_TO}T00:00:00Z`),
+        },
+      }),
+    );
+
+    it('gives no tier bonus to a rep whose revenue never crosses a threshold', async () => {
+      await sale({ approvedAt: IN_MONTH, taxable: '10000', commissionAmount: '800' });
+
+      const body = await statement(sales);
+
+      expect(body.pay.tierBonus).toBe('0.00');
+      // Nothing to show, not a bracket that earned $0.00 — this is what lets
+      // the screens omit the whole line rather than printing a stray zero.
+      expect(body.pay.tierBonusBreakdown).toEqual([]);
+      expect(body.pay.gross).toBe('800.00'); // base 0 + commission 800 + tier bonus 0
+    });
+
+    it('gives the right progressive bonus to a rep who crosses a threshold', async () => {
+      // 60,000 net revenue: the first 50,000 earns nothing, the 10,000 above it
+      // earns +2% — a $200 bonus, not 2% of the whole 60,000.
+      await sale({ approvedAt: IN_MONTH, taxable: '60000', commissionAmount: '4800' });
+
+      const body = await statement(sales);
+
+      expect(body.sales.revenue).toBe('60000.00');
+      expect(body.pay.tierBonus).toBe('200.00');
+      expect(body.pay.tierBonusBreakdown).toEqual([
+        { thresholdRevenue: '50000.00', bonusPct: '2.00', portion: '10000.00', amount: '200.00' },
+      ]);
+      // Additive, on top of the ordinary commission — never folded into it.
+      expect(body.pay.commission).toBe('4800.00');
+      expect(body.pay.gross).toBe('5000.00'); // 0 base + 4800 commission + 200 tier bonus
+    });
+
+    it('never rewrites the per-sale commission — only the aggregate bonus moves', async () => {
+      const id = await sale({ approvedAt: IN_MONTH, taxable: '60000', commissionAmount: '4800' });
+
+      await statement(sales);
+
+      const row = await prisma.submission.findUniqueOrThrow({ where: { id } });
+      expect(row.commissionPct.toFixed(2)).toBe('8.00');
+      expect(row.commissionAmount.toFixed(2)).toBe('4800.00');
+    });
+
+    it("does not let one rep's revenue push another rep into a tier", async () => {
+      await sale({ approvedAt: IN_MONTH, taxable: '60000', commissionAmount: '4800', repId: otherId });
+
+      const mine = await statement(sales);
+      expect(mine.pay.tierBonus).toBe('0.00');
+    });
+
+    it('adds the run\'s tier bonuses into the run total, alongside everyone else\'s', async () => {
+      await sale({ approvedAt: IN_MONTH, taxable: '60000', commissionAmount: '4800' });
+
+      const res = await http(app)
+        .get(`/api/payroll/run?from=${FROM}&to=${TO}`)
+        .set('Cookie', acct)
+        .expect(200);
+
+      const mine = res.body.rows.find((r: { user: { id: string } }) => r.user.id === salesId);
+      expect(mine.pay.tierBonus).toBe('200.00');
+      expect(Number(res.body.totals.tierBonus)).toBeCloseTo(200, 2);
+      // The run's own gross total already includes it — not a figure sitting
+      // outside the sum the run signs off from.
+      const summedGross = res.body.rows.reduce(
+        (t: number, r: { pay: { gross: string } }) => t + Number(r.pay.gross),
+        0,
+      );
+      expect(Number(res.body.totals.gross)).toBeCloseTo(summedGross, 2);
+    });
+
+    it("freezes a submitted invoice's tier bonus — editing the tier table afterwards does not move it", async () => {
+      await sale({ approvedAt: FROZEN_IN_MONTH, taxable: '60000', commissionAmount: '4800' });
+
+      const submitted = await http(app)
+        .post('/api/payroll/submit')
+        .set('Cookie', sales)
+        .send({ from: FROZEN_FROM, to: FROZEN_TO })
+        .expect(201);
+      // The invoice comes back as the raw Prisma row (see main.ts's Decimal
+      // toJSON), which drops trailing zeros — Number() sidesteps that rather
+      // than asserting an exact string shape unrelated to what this test cares
+      // about.
+      expect(Number(submitted.body.tierBonus)).toBeCloseTo(200, 2);
+      expect(Number(submitted.body.gross)).toBeCloseTo(5000, 2);
+
+      // Administration tunes the table after the period was already claimed —
+      // a much richer bonus, the way tuning a placeholder for real numbers
+      // would look.
+      await setTiers([
+        { thresholdRevenue: '0', bonusPct: '0' },
+        { thresholdRevenue: '50000', bonusPct: '10' },
+      ]);
+
+      // The frozen invoice is untouched...
+      const mine = await http(app).get('/api/payroll/invoices/mine').set('Cookie', sales).expect(200);
+      const invoice = mine.body.find((i: { id: string }) => i.id === submitted.body.id);
+      expect(Number(invoice.tierBonus)).toBeCloseTo(200, 2);
+      expect(Number(invoice.gross)).toBeCloseTo(5000, 2);
+
+      // ...while the live statement now reflects the new table, the same way
+      // an edited rate moves the next sale and not one already booked. Read
+      // directly rather than through the shared `statement()` helper, which
+      // is pinned to this file's 2032 period, not this test's own.
+      const liveRes = await http(app)
+        .get(`/api/payroll?from=${FROZEN_FROM}&to=${FROZEN_TO}`)
+        .set('Cookie', sales)
+        .expect(200);
+      // `pay.*` is formatted server-side (`.toFixed(2)`), so this one is an
+      // exact string; `invoice.*` is the same raw row as above.
+      expect(liveRes.body.pay.tierBonus).toBe('1000.00'); // 10% of the 10,000 above 50,000
+      expect(Number(liveRes.body.invoice.tierBonus)).toBeCloseTo(200, 2); // the frozen snapshot, unchanged
+    });
+
+    it("an admin correction to base/commission re-sums gross without moving the frozen tier bonus", async () => {
+      await sale({ approvedAt: FROZEN_IN_MONTH, taxable: '60000', commissionAmount: '4800' });
+
+      const submitted = await http(app)
+        .post('/api/payroll/submit')
+        .set('Cookie', sales)
+        .send({ from: FROZEN_FROM, to: FROZEN_TO })
+        .expect(201);
+      expect(Number(submitted.body.tierBonus)).toBeCloseTo(200, 2);
+
+      const edited = await http(app)
+        .patch(`/api/payroll/invoices/${submitted.body.id}`)
+        .set('Cookie', acct)
+        .send({ base: 100, commission: 4800, note: 'Manual base correction' })
+        .expect(200);
+
+      expect(Number(edited.body.tierBonus)).toBeCloseTo(200, 2); // untouched by the edit
+      expect(Number(edited.body.gross)).toBeCloseTo(5100, 2); // 100 + 4800 + 200
+    });
   });
 
   // --- Who may see what ----------------------------------------------------

@@ -66,6 +66,10 @@ const columns: ExportColumn<PayrollRow>[] = [
   },
   { header: 'Commission (CAD)', value: (r) => Number(r.pay.commission), money: true, width: 15 },
   { header: 'Of which unpaid', value: (r) => Number(r.pay.commissionUnpaid), money: true, width: 15 },
+  // The bonus layer from the commission-tier table, on top of the ordinary
+  // per-sale commission above — see the schema comment on CommissionTier.
+  // Zero for anyone who did not cross a threshold this period.
+  { header: 'Tier bonus (CAD)', value: (r) => Number(r.pay.tierBonus), money: true, width: 14 },
   { header: 'Gross (CAD)', value: (r) => Number(r.pay.gross), money: true, width: 14 },
 ];
 
@@ -108,6 +112,7 @@ const approvalColumns: ExportColumn<PayrollApprovalRow>[] = [
   { header: 'Base (CAD)', value: (r) => Number(r.base), money: true, width: 13 },
   { header: 'Commission %', value: (r) => Number(r.commissionPct), width: 12, spreadsheetOnly: true },
   { header: 'Commission (CAD)', value: (r) => Number(r.commission), money: true, width: 15 },
+  { header: 'Tier bonus (CAD)', value: (r) => Number(r.tierBonus), money: true, width: 14 },
   { header: 'Gross (CAD)', value: (r) => Number(r.gross), money: true, width: 14 },
   { header: 'Submitted', value: (r) => r.submittedAt, width: 14 },
   { header: 'Note', value: (r) => r.note, width: 30, spreadsheetOnly: true },
