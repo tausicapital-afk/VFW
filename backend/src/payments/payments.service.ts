@@ -43,6 +43,14 @@ function toStripeMinorUnits(amount: Decimal.Value, currency: Currency): number {
  * argon2 AuthService itself uses — nothing ever hands this password to anyone,
  * so there is no code path that can sign in as it, but the column is never a
  * fake or reused credential either.
+ *
+ * The `.internal` suffix is not decorative: it is an IETF-reserved special-use
+ * domain (RFC 9476) that a real registrar will never issue and Google will
+ * never verify a Workspace/Gmail address against. That is what keeps this row
+ * unreachable through Google SSO's "link an existing account by verified
+ * email" flow (AuthService.loginWithGoogle) — an attacker cannot present a
+ * Google-verified `@system.internal` address. Do not repoint this at a real,
+ * registrable domain.
  */
 const SYSTEM_USER_EMAIL = 'stripe@system.internal';
 
@@ -249,6 +257,30 @@ export class PaymentsService {
    */
   private async postPayment(session: Stripe.Checkout.Session): Promise<void> {
     const recordedById = await this.systemUserId();
+
+    // Read-before-claim, deliberately outside the transaction below: this
+    // Checkout Session is created with a fixed, non-adjustable quantity and
+    // no promotion codes or automatic tax, so `amount_total` can only ever
+    // equal what we asked Stripe to charge — but the ledger must never trust
+    // that invariant blindly. If a mismatch ever shows up (a future change to
+    // session creation, or a Stripe-side surprise), fail loud and post
+    // nothing rather than record a figure nobody actually confirmed. The row
+    // is left PENDING (not claimed), so a corrected redelivery can still post
+    // it once the mismatch is understood.
+    const preCheck = await this.prisma.stripeCheckoutSession.findUnique({
+      where: { stripeSessionId: session.id },
+    });
+    if (preCheck && preCheck.status === 'PENDING') {
+      const expected = toStripeMinorUnits(preCheck.amount, preCheck.currency);
+      if (session.amount_total !== expected) {
+        this.log.error(
+          `Stripe checkout session ${session.id} confirmed amount_total=${session.amount_total} ` +
+            `but this app expected ${expected} minor units (${preCheck.amount} ${preCheck.currency}) — ` +
+            `refusing to post a Payment for an unconfirmed amount.`,
+        );
+        return;
+      }
+    }
 
     await this.prisma.$transaction(async (tx) => {
       const claimed = await tx.stripeCheckoutSession.updateMany({
