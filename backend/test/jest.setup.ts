@@ -43,3 +43,12 @@ for (const key of ['MAIL_HOST', 'MAIL_USERNAME', 'MAIL_PASSWORD', 'MAIL_FROM_ADD
   process.env[key] = '';
 }
 process.env.DEV_ECHO_LINKS = 'true';
+
+// Same reasoning, same trick, for Stripe: a dev .env that someday carries real
+// keys (to test against Stripe's own sandbox by hand) must never let the test
+// suite make a live call. Blanked rather than deleted so ConfigModule's later
+// `.env` load cannot refill it — see the MAIL_* comment above for why that
+// distinction matters. ConfigService.get treats '' as unset either way, which
+// is exactly the "Stripe is not configured" path payments.spec.ts exercises.
+process.env.STRIPE_SECRET_KEY = '';
+process.env.STRIPE_WEBHOOK_SECRET = '';

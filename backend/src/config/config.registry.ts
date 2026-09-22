@@ -45,7 +45,7 @@ export interface ConfigField {
 }
 
 export interface ConfigGroup {
-  id: 'email' | 'storage' | 'quickbooks' | 'data';
+  id: 'email' | 'storage' | 'quickbooks' | 'payments' | 'data';
   title: string;
   blurb: string;
   /** Keys that must all resolve to a value for the group to be usable. */
@@ -172,6 +172,35 @@ export const CONFIG_GROUPS: ConfigGroup[] = [
         type: 'secret',
         required: true,
         help: 'The secret half of the same app credential. Stored encrypted; leave blank to keep the current one.',
+      },
+    ],
+  },
+  {
+    id: 'payments',
+    title: 'Online payments (Stripe)',
+    blurb:
+      'Lets a contact pay their outstanding balance from the portal, via a Stripe-hosted ' +
+      'checkout page — the card never touches this server. Until both keys are set, the ' +
+      "portal's Pay now button is refused rather than shown broken.",
+    requiredKeys: ['STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET'],
+    fields: [
+      {
+        key: 'STRIPE_SECRET_KEY',
+        label: 'Secret key',
+        type: 'secret',
+        required: true,
+        help: 'From the Stripe Dashboard (Developers → API keys). Stored encrypted; leave blank to keep the current one.',
+      },
+      {
+        key: 'STRIPE_WEBHOOK_SECRET',
+        label: 'Webhook signing secret',
+        type: 'secret',
+        required: true,
+        help:
+          'From the webhook endpoint configured in the Stripe Dashboard, pointed at ' +
+          '/api/payments/stripe/webhook. Stripe signs every event with this so the server can ' +
+          'tell a real payment confirmation from a forged one. Stored encrypted; leave blank to ' +
+          'keep the current one.',
       },
     ],
   },

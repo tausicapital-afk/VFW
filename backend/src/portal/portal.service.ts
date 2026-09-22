@@ -192,4 +192,15 @@ export class PortalService {
     const contactId = await this.resolveContactId(token);
     return this.submissions.invoicePdfForPortal(submissionId, contactId);
   }
+
+  /**
+   * Resolve a token down to a contactId for another module that is scoped by
+   * the same portal token — today, PaymentsService's checkout-session create.
+   * A thin public wrapper around {@link resolveContactId} rather than widening
+   * that method itself, so the token-lifecycle rule (same 404 for missing and
+   * expired) has exactly one implementation that everything else calls into.
+   */
+  async contactIdForToken(token: string): Promise<string> {
+    return this.resolveContactId(token);
+  }
 }

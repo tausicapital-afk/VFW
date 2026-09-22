@@ -35,10 +35,17 @@ function isAuthWrite(ctx: ExecutionContext): boolean {
  * the URL, so it gets the same treatment as the auth surface: a tight,
  * IP-keyed bucket with a lockout, on top of (not instead of) the global one —
  * a brute-force walk of the token space has to survive both.
+ *
+ * Also covers `/api/payments/portal/...` — PaymentsController's
+ * checkout-session create, which is a payments-module route but is gated by
+ * the exact same portal token and so faces the exact same brute-force shape.
+ * `/api/payments/stripe/webhook` (Stripe's own server calling us, gated by a
+ * signature rather than a guessable token) is deliberately NOT matched here —
+ * it stays in the global bucket.
  */
 function isPortal(ctx: ExecutionContext): boolean {
   const req = ctx.switchToHttp().getRequest<Request>();
-  return req.path.startsWith('/api/portal/');
+  return req.path.startsWith('/api/portal/') || req.path.startsWith('/api/payments/portal/');
 }
 
 /**

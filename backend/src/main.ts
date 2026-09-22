@@ -22,6 +22,10 @@ import { SentryExceptionFilter } from './common/sentry';
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: true,
+    // Stripe's webhook signature check needs the exact bytes it signed, not
+    // Nest's JSON-parsed body — this makes Nest also stash the raw buffer on
+    // `req.rawBody` for every request. See PaymentsController.handleWebhook.
+    rawBody: true,
   });
 
   // Replace Nest's default logger with pino, so framework logs are structured

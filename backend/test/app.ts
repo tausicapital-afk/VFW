@@ -21,7 +21,9 @@ import { SESSION_COOKIE } from '../src/common/cookie';
  */
 export async function createTestApp(): Promise<INestApplication> {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-  const app = moduleRef.createNestApplication();
+  // Mirror main.ts's rawBody: true — the Stripe webhook spec needs req.rawBody
+  // to exercise signature verification the same way the real app does.
+  const app = moduleRef.createNestApplication({ rawBody: true });
   app.use(cookieParser());
   app.useGlobalPipes(
     new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
