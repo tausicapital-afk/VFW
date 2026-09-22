@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { TestDataProvider } from './lib/testData';
 import { ThemeProvider } from './theme/ThemeContext';
@@ -21,6 +21,7 @@ import { Logs } from './pages/Logs';
 import { Messages } from './pages/Messages';
 import { NewSubmission } from './pages/NewSubmission';
 import { Payroll } from './pages/Payroll';
+import { Portal } from './pages/Portal';
 import { Qbo } from './pages/Qbo';
 import { Queue } from './pages/Queue';
 import { Reports } from './pages/Reports';
@@ -50,6 +51,19 @@ const qc = new QueryClient({
 
 function Routed() {
   const { user, loading } = useAuth();
+  const location = useLocation();
+
+  // The contact portal is unauthenticated and token-gated, not session-gated —
+  // it must render the same way whether nobody is signed in, or the rep who
+  // sent the link is signed in in the same browser. So it is checked before
+  // the session-loading gate below, not folded into either branch it produces.
+  if (location.pathname.startsWith('/portal/')) {
+    return (
+      <Routes>
+        <Route path="/portal/:token" element={<Portal />} />
+      </Routes>
+    );
+  }
 
   // Render nothing until the session check resolves, otherwise a signed-in user
   // sees the login screen flash before being bounced back into the app.

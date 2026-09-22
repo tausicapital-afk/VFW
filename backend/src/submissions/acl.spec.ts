@@ -36,6 +36,7 @@ const ENDPOINTS: Ep[] = [
   { name: 'PATCH /:id', method: 'patch', path: '/api/submissions/no-such-id', permission: 'accounting.fields', body: { glAccount: '4010' } },
   { name: 'POST /invoice', method: 'post', path: '/api/submissions/no-such-id/invoice', permission: 'invoice.generate' },
   { name: 'GET  /invoice.pdf', method: 'get', path: '/api/submissions/no-such-id/invoice.pdf', permission: 'invoice.generate' },
+  { name: 'POST /contacts/:id/portal-link', method: 'post', path: '/api/contacts/no-such-id/portal-link', permission: 'email.send' },
   { name: 'POST /export', method: 'post', path: '/api/submissions/no-such-id/export', permission: 'quickbooks.export' },
   { name: 'GET  /voided', method: 'get', path: '/api/submissions/voided', permission: 'submission.void' },
   { name: 'POST /void', method: 'post', path: '/api/submissions/no-such-id/void', permission: 'submission.void' },

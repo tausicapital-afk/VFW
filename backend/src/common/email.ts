@@ -275,7 +275,7 @@ export const PAYMENT_REMINDER_SUBJECT_PREFIX = 'Payment reminder:';
 export const RENEWAL_NUDGE_SUBJECT_PREFIX = 'Renewal check-in:';
 
 /** Kinds whose BODY carries a code or link and must not be stored. */
-const REDACT_BODY: EmailKind[] = ['OTP', 'WELCOME', 'PASSWORD_RESET', 'INVITATION'];
+const REDACT_BODY: EmailKind[] = ['OTP', 'WELCOME', 'PASSWORD_RESET', 'INVITATION', 'PORTAL_LINK'];
 /** Kinds whose SUBJECT itself carries the code (OTP puts it right in the line). */
 const REDACT_SUBJECT: EmailKind[] = ['OTP'];
 
@@ -956,6 +956,44 @@ export class EmailService {
         '',
         `Invitation code: ${code}`,
         link,
+      ]),
+    };
+  }
+
+  /**
+   * The contact portal's magic link — a standing, read-only way for a contact
+   * to check their own sales without an account. `days` is the token's
+   * lifetime; the copy is deliberately careful to say "until it expires", not
+   * "once", since — unlike the reset link above — this one is meant to be
+   * opened again and again.
+   */
+  portalLink(to: string, contactName: string, token: string, days: number): Mail {
+    const link = `${this.appUrl}/portal/${encodeURIComponent(token)}`;
+    const first = esc(contactName || 'there');
+    const bodyHtml =
+      `<h1 style="margin:0 0 14px;font-size:22px;color:#0e0e11;">Your ${esc(brandName())} portal</h1>` +
+      `<p style="margin:0 0 6px;">Hi ${first}, here is your link to check the status and payment ` +
+      `history of your sales with ${esc(brandName())} at any time.</p>` +
+      button('Open your portal', link) +
+      `<p style="margin:0 0 6px;">This link works for the next <b>${days} days</b> and can be opened ` +
+      `as many times as you like — no account or password needed.</p>` +
+      `<p style="margin:14px 0 0;color:#8a938f;font-size:13px;">` +
+      `If you weren't expecting this, you can ignore it — it only ever shows your own information. ` +
+      `If the button doesn't work, paste this link into your browser:<br>` +
+      `<a href="${esc(link)}" style="color:${brandColour()};word-break:break-all;">${esc(link)}</a></p>`;
+    return {
+      to,
+      kind: EmailKind.PORTAL_LINK,
+      subject: `Your ${brandName()} portal link`,
+      html: layout({ title: 'Your portal', preheader: 'Check your sales and payment history', bodyHtml }),
+      text: textLayout([
+        `Hi ${contactName || 'there'},`,
+        '',
+        `Here is your link to check the status and payment history of your sales with ${brandName()}:`,
+        link,
+        '',
+        `It works for the next ${days} days and can be opened as many times as you like — no account needed.`,
+        `If you weren't expecting this, ignore it — it only ever shows your own information.`,
       ]),
     };
   }

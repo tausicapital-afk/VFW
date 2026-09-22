@@ -209,6 +209,26 @@ model PasswordReset {
   createdAt DateTime  @default(now())
 }
 
+// A magic link into the read-only contact portal (docs/addon-features.md:
+// "Client portal for contacts... View-only via magic link"). Deliberately NOT
+// modelled like PasswordReset above: a reset link is a one-shot credential that
+// changes something, so it burns on first use; a portal link is a standing way
+// for a contact to check on their own sales, so it stays usable — by design,
+// repeatedly — until it expires. There is no `usedAt` and no compare-and-set on
+// read, because reading does not consume anything. The one property carried over
+// from PasswordReset is the *discipline*, not the shape: every access re-checks
+// `expiresAt` against `now()` in the same query that loads the row, so an
+// expired token can never be treated as live by a stale read.
+model ContactPortalToken {
+  token     String    @id
+  contactId String
+  contact   Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+
+  @@index([contactId])
+}
+
 // One-time 6-digit codes emailed for a specific purpose. Today that is SIGNUP —
 // a freshly created account is PENDING and cannot log in until the code sent to
 // its inbox is entered, which proves the email is real and reachable. The code
@@ -399,6 +419,7 @@ model Contact {
 
   submissions Submission[]
   feedback    DesignerFeedback[]
+  portalTokens ContactPortalToken[]
 
   // See Submission.isTestData for what this flag is and why it is stored.
   isTestData Boolean @default(false)
@@ -1015,6 +1036,10 @@ enum EmailKind {
   PASSWORD_CHANGED
   INVITATION
   INVOICE
+  // The contact-portal magic link. Carries a standing credential exactly like
+  // PASSWORD_RESET/INVITATION, so it is redacted the same way — see
+  // REDACT_BODY in common/email.ts.
+  PORTAL_LINK
   TEST
   INBOUND
   OTHER

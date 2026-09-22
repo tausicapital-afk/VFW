@@ -25,6 +25,7 @@ import { ExportModule } from './export/export.controller';
 import { MessagingModule } from './messaging/messaging.module';
 import { PrismaModule } from './prisma/prisma.service';
 import { PayrollModule } from './payroll/payroll.controller';
+import { PortalModule } from './portal/portal.controller';
 import { ProfileModule } from './profile/profile.controller';
 import { FxModule } from './fx/fx.controller';
 import { QboModule } from './qbo/qbo.controller';
@@ -55,6 +56,7 @@ import { TestDataModule } from './testdata/test-data.controller';
     CatalogModule,
     SubmissionsModule,
     ContactsModule,
+    PortalModule,
     StorageModule,
     DocumentsModule,
     ReportsModule,

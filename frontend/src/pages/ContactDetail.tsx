@@ -1,5 +1,8 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { useAuth } from '../auth/AuthContext';
+import { can } from '../lib/acl';
 import { api } from '../lib/api';
 import { fmtDate, money } from '../lib/format';
 import { TestTag, useTestRow } from '../lib/testData';
@@ -19,10 +22,19 @@ function Row({ label, value }: { label: string; value: string }) {
 export function ContactDetail() {
   const { id } = useParams<{ id: string }>();
   const testRow = useTestRow();
+  const { user } = useAuth();
+  const [linkSentTo, setLinkSentTo] = useState<string | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['contact', id],
     queryFn: () => api.get<ContactDetailData>(`/api/contacts/${id}`),
+  });
+
+  const sendPortalLink = useMutation({
+    mutationFn: () => api.post<{ ok: true; to: string }>(`/api/contacts/${id}/portal-link`),
+    onSuccess: (r) => { setLinkSentTo(r.to); setLinkError(null); },
+    onError: (e: Error) => setLinkError(e.message),
   });
 
   if (isLoading) {
@@ -52,7 +64,22 @@ export function ContactDetail() {
       // is reached from a link, and someone who lands straight on a demo
       // customer never sees the Contacts table that would have told them.
       title={<>{contact.brand}<TestTag on={contact.isTestData} /></>}
+      actions={
+        can('email.send', user?.role) && (
+          <button
+            className="btn"
+            disabled={sendPortalLink.isPending || !contact.email}
+            title={contact.email ? undefined : 'This contact has no email on file'}
+            onClick={() => { setLinkSentTo(null); setLinkError(null); sendPortalLink.mutate(); }}
+          >
+            {sendPortalLink.isPending ? 'Sending…' : 'Send portal link'}
+          </button>
+        )
+      }
     >
+      {linkSentTo && <div className="note" style={{ marginBottom: 16 }}>Portal link sent to {linkSentTo}.</div>}
+      {linkError && <div className="note bad" style={{ marginBottom: 16 }}>{linkError}</div>}
+
       <div className="split">
         <div className="card">
           <div className="hd"><h3>{contact.type ?? 'Designer'}</h3></div>

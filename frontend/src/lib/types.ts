@@ -172,6 +172,35 @@ export interface ContactDetail {
   submissions: ContactSubmission[];
 }
 
+// --- Contact portal: the unauthenticated, token-gated view (backend/src/portal) --
+
+/**
+ * What GET /api/portal/:token returns. A deliberate allowlist on the server —
+ * no internal notes, no designer feedback, no cost centre/GL, no other
+ * contact's data — so this type is exactly the server's shape, not a trimmed
+ * copy of the authenticated Submission type.
+ */
+export interface PortalSubmission {
+  id: string;
+  ref: string;
+  status: SubmissionStatus;
+  currency: Currency;
+  total: Money;
+  paidAmount: Money;
+  balance: Money;
+  payStatus: PayStatus;
+  invoiceNo: string | null;
+  event: string;
+  package: string;
+  showDate: string | null;
+  createdAt: string;
+}
+
+export interface PortalData {
+  contact: { brand: string; designer: string; company: string | null };
+  submissions: PortalSubmission[];
+}
+
 export type DocumentType = 'contract' | 'po' | 'receipt' | 'other';
 
 /** A file attached to a submission. The bytes live in R2; this is the pointer. */
@@ -299,7 +328,7 @@ export type EmailDirection = 'OUTBOUND' | 'INBOUND';
 export type EmailStatus = 'SENT' | 'FAILED' | 'RECEIVED';
 export type EmailKind =
   | 'OTP' | 'WELCOME' | 'PASSWORD_RESET' | 'PASSWORD_CHANGED'
-  | 'INVITATION' | 'INVOICE' | 'TEST' | 'INBOUND' | 'OTHER';
+  | 'INVITATION' | 'INVOICE' | 'PORTAL_LINK' | 'TEST' | 'INBOUND' | 'OTHER';
 
 /** A row in the Emails list — the summary shape, without the full body. */
 export interface EmailRow extends TestFlagged {

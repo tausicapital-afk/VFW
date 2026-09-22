@@ -20,6 +20,7 @@ const KINDS: EmailKind[] = [
   'PASSWORD_CHANGED',
   'INVITATION',
   'INVOICE',
+  'PORTAL_LINK',
   'TEST',
   'INBOUND',
   'OTHER',

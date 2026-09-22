@@ -31,6 +31,17 @@ function isAuthWrite(ctx: ExecutionContext): boolean {
 }
 
 /**
+ * The unauthenticated contact portal. Its only gate is possessing the token in
+ * the URL, so it gets the same treatment as the auth surface: a tight,
+ * IP-keyed bucket with a lockout, on top of (not instead of) the global one —
+ * a brute-force walk of the token space has to survive both.
+ */
+function isPortal(ctx: ExecutionContext): boolean {
+  const req = ctx.switchToHttp().getRequest<Request>();
+  return req.path.startsWith('/api/portal/');
+}
+
+/**
  * Railway probes this every few seconds; throttling it would fail the deploy.
  *
  * Only the machine probe is exempt. The same URL serves an HTML status page to
@@ -55,6 +66,16 @@ export const throttlerOptions: ThrottlerModuleOptions = {
       // at the top of the next minute — otherwise a burst just paces itself.
       blockDuration: 15 * MINUTE,
       skipIf: (ctx) => !isAuthWrite(ctx),
+    },
+    {
+      name: 'portal',
+      ttl: MINUTE,
+      limit: 20,
+      // Same shape as the auth bucket: trip it and the door stays shut for 15
+      // minutes rather than reopening a minute later, which is what actually
+      // stops a slow, paced guess at the token space.
+      blockDuration: 15 * MINUTE,
+      skipIf: (ctx) => !isPortal(ctx),
     },
     {
       name: 'global',
