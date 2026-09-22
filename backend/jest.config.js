@@ -3,19 +3,27 @@ module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
   roots: ['<rootDir>/src'],
-  // otplib's package.json "exports" map correctly resolves `require('otplib')`
-  // to its pre-bundled dist/index.cjs under plain Node (verified: `node -e
-  // "require.resolve('otplib')"` returns the .cjs file, and requiring it works
-  // fine) — this is what backend/dist/main.js actually calls at runtime.
-  // ts-jest's resolver does not follow that "exports" map the same way and
-  // falls through to otplib's TypeScript SOURCE tree instead, which imports
-  // its ESM-only @otplib/plugin-base32-scure -> @scure/base dependency and
-  // fails to parse ("Unexpected token 'export'") under Jest's CJS transform.
-  // Forcing the same resolution Node already uses sidesteps the resolver gap
-  // without touching runtime behaviour.
-  moduleNameMapper: {
-    '^otplib$': '<rootDir>/node_modules/otplib/dist/index.cjs',
+  // otplib pulls in @otplib/plugin-base32-scure -> @scure/base, and (via
+  // @otplib/plugin-crypto-noble) @noble/hashes — all published as plain ESM
+  // ("export const ...", no CJS build for the leaf files). Plain Node handles
+  // this fine at runtime (verified: `node -e "require('otplib')"` resolves
+  // and runs correctly via each package's own pre-bundled dist/*.cjs, which is
+  // what backend/dist/main.js actually calls in production) because esbuild
+  // inlined those ESM deps into each package's own CJS bundle at publish time.
+  // Jest's resolver, though, does not consistently follow the same "exports"
+  // path ts-jest's transform pipeline takes — it can land on a package's
+  // TypeScript SOURCE tree instead of its bundled dist, which then imports the
+  // ESM leaf files directly and fails to parse ("Unexpected token 'export'")
+  // under Jest's default node_modules-is-untransformed rule. Letting ts-jest
+  // also transform (not just type-check) this small dependency cluster fixes
+  // parsing wherever the resolver lands, without touching runtime behaviour —
+  // confirmed by running every spec that imports the auth module chain with
+  // zero remaining "Unexpected token"/"SyntaxError" output.
+  transform: {
+    '^.+\\.tsx?$': ['ts-jest', {}],
+    '^.+\\.jsx?$': ['ts-jest', { isolatedModules: true }],
   },
+  transformIgnorePatterns: ['/node_modules/(?!(@scure|@otplib|@noble|otplib)/)'],
   testRegex: '\\.spec\\.ts$',
   // Sync + seed the throwaway test database once before the whole suite.
   globalSetup: '<rootDir>/test/global-setup.ts',
