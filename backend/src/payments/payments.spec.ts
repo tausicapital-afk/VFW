@@ -281,18 +281,20 @@ describe('Online payment collection (Stripe)', () => {
       expect(res.body).toEqual({ received: true });
 
       const submission = await prisma.submission.findUniqueOrThrow({ where: { id: a.submissionId } });
-      // decimal.js's .toString() drops trailing zeros for any value, not just
-      // zero (Decimal('0.00').toString() === '0') — a pre-existing quirk of
-      // every Decimal field in this app, not something this feature changed.
-      expect(submission.balance.toString()).toBe('0');
-      expect(submission.paidAmount.toString()).toBe(Number(a.total).toFixed(2));
+      // Compared numerically, not by string: decimal.js's .toString() drops
+      // trailing zeros for any value, not just zero (Decimal('0.00')
+      // .toString() === '0', and Decimal('8085.00').toString() === '8085') —
+      // a pre-existing quirk of every Decimal field in this app, not
+      // something this feature changed.
+      expect(Number(submission.balance)).toBe(0);
+      expect(Number(submission.paidAmount)).toBe(Number(a.total));
       expect(submission.payStatus).toBe('PAID');
 
       const payments = await prisma.payment.findMany({ where: { submissionId: a.submissionId } });
       expect(payments).toHaveLength(1);
       expect(payments[0].method).toBe('Stripe');
       expect(payments[0].reference).toBe('pi_test_valid_1');
-      expect(payments[0].amount.toString()).toBe(Number(a.total).toFixed(2));
+      expect(Number(payments[0].amount)).toBe(Number(a.total));
 
       // Attributed to the hidden system user, never to a real staff account.
       const recordedBy = await prisma.user.findUniqueOrThrow({ where: { id: payments[0].recordedById } });
@@ -338,7 +340,7 @@ describe('Online payment collection (Stripe)', () => {
       expect(payments).toHaveLength(1);
 
       const submission = await prisma.submission.findUniqueOrThrow({ where: { id: a.submissionId } });
-      expect(submission.balance.toString()).toBe('0');
+      expect(Number(submission.balance)).toBe(0);
     });
 
     it('accepts, but takes no action on, an event type it does not handle', async () => {
