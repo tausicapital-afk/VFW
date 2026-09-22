@@ -221,7 +221,23 @@ async function main() {
     });
   }
 
-  await prisma.settings.upsert({ where: { id: 1 }, update: {}, create: { id: 1 } });
+  const settingsRow = await prisma.settings.upsert({ where: { id: 1 }, update: {}, create: { id: 1 } });
+
+  // Mirrors the backfill INSERT in migration 20260922004804_fx_rate_snapshot.
+  // That SQL only runs for a database that actually applies migrations
+  // (`prisma migrate deploy`); the test harness instead syncs the schema with
+  // `prisma db push` (see test/global-setup.ts), which never executes
+  // migration.sql at all. Without this, every integration test would start
+  // from a database with zero FX history — a state that never occurs once
+  // this feature has shipped anywhere, live or backfilled — and ReportsService
+  // would silently take the "no snapshot yet" fallback path in every test
+  // instead of the snapshot-lookup path the feature exists to exercise.
+  const hasFxHistory = (await prisma.fxRateSnapshot.count()) > 0;
+  if (!hasFxHistory) {
+    await prisma.fxRateSnapshot.create({
+      data: { effectiveFrom: new Date(), rates: settingsRow.fxRates as object },
+    });
+  }
 
   // Submission refs come from Settings.nextSubmissionSeq, so that counter has to
   // start above any ref that already exists or the next create reissues a taken

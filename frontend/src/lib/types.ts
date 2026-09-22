@@ -657,6 +657,16 @@ export interface Settings {
   scoreWeights: ScoreWeights;
 }
 
+/** One dated FX rate set, as recorded every time Settings.fxRates is edited —
+ *  see Administration -> Settings' FX rate history. */
+export interface FxRateSnapshot {
+  id: string;
+  effectiveFrom: string;
+  rates: Record<string, number>;
+  createdAt: string;
+  createdById: string | null;
+}
+
 /** The rate card as the admin screen edits it: prices carry their own id and city. */
 export interface AdminPackagePrice extends PackagePrice {
   id: string;

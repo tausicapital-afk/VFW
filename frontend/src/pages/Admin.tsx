@@ -5,8 +5,8 @@ import { api } from '../lib/api';
 import { fmtDate, money } from '../lib/format';
 import { TestTag, useTestRow } from '../lib/testData';
 import type {
-  AdminCatalogue, AdminUser, Currency, EventRow, Invitation, PayType, Role, Season, Settings,
-  UserStatus,
+  AdminCatalogue, AdminUser, Currency, EventRow, FxRateSnapshot, Invitation, PayType, Role,
+  Season, Settings, UserStatus,
 } from '../lib/types';
 import { useAuth } from '../auth/AuthContext';
 import { ExportMenu } from '../shell/ExportMenu';
@@ -2412,9 +2412,59 @@ function SettingsTab() {
   if (!data) return <div className="empty"><h3>Loading…</h3></div>;
   return <SettingsForm settings={data} onSaved={() => {
     void qc.invalidateQueries({ queryKey: ['admin', 'settings'] });
+    void qc.invalidateQueries({ queryKey: ['admin', 'settings', 'fx-history'] });
     void qc.invalidateQueries({ queryKey: ['leaderboard'] });
     void qc.invalidateQueries({ queryKey: ['reports'] });
   }} />;
+}
+
+/**
+ * The FX rate history: every snapshot the live-edit form below has ever
+ * written, newest first. This is the point of the whole feature — Accounting
+ * can see when a rate last changed, and a report can be trusted to have used
+ * whatever was in force at the time, rather than always today's figure.
+ */
+function FxRateHistoryCard() {
+  const { data } = useQuery({
+    queryKey: ['admin', 'settings', 'fx-history'],
+    queryFn: () => api.get<FxRateSnapshot[]>('/api/admin/settings/fx-history'),
+  });
+
+  return (
+    <div className="card">
+      <div className="hd"><h3>FX rate history</h3></div>
+      <div className="bd">
+        {!data ? (
+          <div className="mut sm">Loading…</div>
+        ) : data.length === 0 ? (
+          <div className="mut sm">No history yet — saving the form below writes the first entry.</div>
+        ) : (
+          <table className="tbl sm">
+            <thead>
+              <tr>
+                <th>Effective</th>
+                {CURRENCIES.map((c) => <th key={c} className="num">{c}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {data.map((snap) => (
+                <tr key={snap.id}>
+                  <td>{fmtDate(snap.effectiveFrom)}</td>
+                  {CURRENCIES.map((c) => (
+                    <td key={c} className="num">{snap.rates[c] ?? '—'}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <div className="note" style={{ marginTop: 12 }}>
+          Every save below adds a new row here rather than overwriting the last one — a report for
+          an older period converts through whatever was in force then, not the current rate.
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function SettingsForm({ settings, onSaved }: { settings: Settings; onSaved: () => void }) {
@@ -2515,6 +2565,8 @@ function SettingsForm({ settings, onSaved }: { settings: Settings; onSaved: () =
             </div>
           </div>
         </div>
+
+        <FxRateHistoryCard />
       </div>
 
       <div className="grid">
