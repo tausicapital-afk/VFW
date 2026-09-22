@@ -240,20 +240,27 @@ async function main() {
     });
   }
 
-  // One baseline Contact. Nothing else here creates one, and several call
+  // Two baseline Contacts. Nothing else here creates one, and several call
   // sites (e.g. PayrollService's tests, and any ad hoc script) reasonably
-  // assume "some contact exists" the way they assume "some event/package
-  // exists" — without this, that assumption silently depends on some OTHER
+  // assume "some contact exists" — or, for a per-client breakdown, "at least
+  // two distinct ones exist" — the way they assume "some event/package
+  // exists". Without this, that assumption silently depends on some OTHER
   // seed or test having created one first, which is exactly the kind of
   // order-dependency that broke when adding new test files shifted Jest's
   // default file-scheduling order (see the CI failure this fixed: payroll's
-  // and payslip's specs, which grab `prisma.contact.findFirstOrThrow()`,
-  // started running before any test that happened to create one).
-  await prisma.contact.upsert({
-    where: { brand: 'Atelier Rowan' },
-    update: {},
-    create: { brand: 'Atelier Rowan', designer: 'Rowan Sinclair', type: 'Designer' },
-  });
+  // and payslip's specs, which grab `prisma.contact.findFirstOrThrow()` or
+  // `findMany({ take: 2 })`, started running before any test that happened
+  // to create some).
+  for (const c of [
+    { brand: 'Atelier Rowan', designer: 'Rowan Sinclair' },
+    { brand: 'Maison Vesper', designer: 'Vesper Adeyemi' },
+  ]) {
+    await prisma.contact.upsert({
+      where: { brand: c.brand },
+      update: {},
+      create: { ...c, type: 'Designer' },
+    });
+  }
 
   const settingsRow = await prisma.settings.upsert({ where: { id: 1 }, update: {}, create: { id: 1 } });
 
