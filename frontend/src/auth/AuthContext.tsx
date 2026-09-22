@@ -3,10 +3,19 @@ import { createContext, useContext, type ReactNode } from 'react';
 import { api, ApiError } from '../lib/api';
 import type { User } from '../lib/types';
 
+/**
+ * What a login attempt (password or the second half of the Google redirect)
+ * can resolve to: either it landed a session, or the account has TOTP
+ * enrolled and there is one more step. `challenge` is the short-lived token
+ * the second step must present — see backend/src/auth/auth.service.ts.
+ */
+export type LoginOutcome = { totpRequired: false } | { totpRequired: true; challenge: string };
+
 interface AuthValue {
   user: User | null;
   loading: boolean;
-  login: (email: string, password: string, remember: boolean) => Promise<void>;
+  login: (email: string, password: string, remember: boolean) => Promise<LoginOutcome>;
+  completeTotp: (challenge: string, code: string) => Promise<void>;
   verifyOtp: (email: string, code: string) => Promise<void>;
   logout: () => Promise<void>;
 }
@@ -38,9 +47,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     user: data ?? null,
     loading: isLoading,
     async login(email, password, remember) {
-      const { user } = await api.post<{ user: User }>('/api/auth/login', {
-        email, password, remember,
-      });
+      const result = await api.post<{ user: User } | { totpRequired: true; challenge: string }>(
+        '/api/auth/login',
+        { email, password, remember },
+      );
+      if ('totpRequired' in result) return { totpRequired: true, challenge: result.challenge };
+      qc.setQueryData(['me'], result.user);
+      return { totpRequired: false };
+    },
+    // Step 2 of a TOTP login (password or Google): the code from the
+    // authenticator app, plus the challenge the first step handed back.
+    async completeTotp(challenge, code) {
+      const { user } = await api.post<{ user: User }>('/api/auth/login/totp', { challenge, code });
       qc.setQueryData(['me'], user);
     },
     // Verifying the signup code activates the account AND returns a live session,

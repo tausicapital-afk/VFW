@@ -43,3 +43,12 @@ for (const key of ['MAIL_HOST', 'MAIL_USERNAME', 'MAIL_PASSWORD', 'MAIL_FROM_ADD
   process.env[key] = '';
 }
 process.env.DEV_ECHO_LINKS = 'true';
+
+// Same trick, same reason, for Google SSO: a developer's dev .env may carry a
+// real GOOGLE_CLIENT_ID/SECRET, and auth.google.spec.ts asserts on the
+// "not configured" path specifically. Blanking (not deleting — see the MAIL_*
+// note above for why that distinction matters) keeps that assertion true
+// regardless of what the environment running the suite happens to have set.
+for (const key of ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET']) {
+  process.env[key] = '';
+}

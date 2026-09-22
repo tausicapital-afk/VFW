@@ -37,6 +37,7 @@ export function Account() {
       <div className="grid" style={{ maxWidth: 760 }}>
         {profile ? <ProfileCard profile={profile} /> : <div className="card"><div className="bd mut">Loading…</div></div>}
         <PasswordCard />
+        {profile && <TwoFactorCard profile={profile} />}
       </div>
     </Page>
   );
@@ -299,7 +300,18 @@ function ProfileCard({ profile }: { profile: Profile }) {
             label="Last sign-in"
             value={profile.lastLoginAt ? fmtDateTime(profile.lastLoginAt) : 'Never'}
           />
+          <ReadOnly
+            label="Google Workspace sign-in"
+            value={profile.googleLinked ? 'Linked' : 'Not linked'}
+          />
         </div>
+        {!profile.googleLinked && (
+          <div className="note" style={{ marginTop: 12 }}>
+            Sign in with Google once from the sign-in screen to link this account — the first
+            Google sign-in for this email address links it automatically, there is no separate
+            "connect" step.
+          </div>
+        )}
         <div className="note" style={{ marginTop: 12 }}>
           Your email address is how you sign in and where security codes are sent, so it is
           changed by an administrator rather than here. Your role is a permission grant and
@@ -404,6 +416,189 @@ function PasswordCard() {
         >
           {change.isPending ? 'Changing…' : 'Change password'}
         </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Two-factor authentication (TOTP)
+// ---------------------------------------------------------------------------
+
+/**
+ * Enroll / disable a TOTP authenticator app.
+ *
+ * Enrollment is two calls, not one: `enroll` mints a secret and shows it (as
+ * a copyable setup key + otpauth:// URI — no QR image, to avoid adding a
+ * frontend dependency for this; most authenticator apps accept a pasted
+ * otpauth:// link or a manually-typed key just as well as a scanned code),
+ * then `confirm` requires one valid code from that app before the server
+ * flips `totpEnabled`. Skipping straight to "enabled" would let someone lock
+ * themselves out with a secret they never actually saved.
+ */
+function TwoFactorCard({ profile }: { profile: Profile }) {
+  const qc = useQueryClient();
+  const [enrollment, setEnrollment] = useState<{ secret: string; otpauthUrl: string } | null>(null);
+  const [code, setCode] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [disabling, setDisabling] = useState(false);
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  function land() {
+    void qc.invalidateQueries({ queryKey: ['profile'] });
+  }
+
+  const enroll = useMutation({
+    mutationFn: () => api.post<{ secret: string; otpauthUrl: string }>('/api/profile/totp/enroll'),
+    onSuccess: (r) => {
+      setEnrollment(r);
+      setCode('');
+      setError(null);
+    },
+    onError: (e) => setError(e instanceof Error ? e.message : 'Could not start enrollment'),
+  });
+
+  const confirm = useMutation({
+    mutationFn: () => api.post('/api/profile/totp/confirm', { code }),
+    onSuccess: () => {
+      setEnrollment(null);
+      setCode('');
+      setError(null);
+      land();
+    },
+    onError: (e) => setError(e instanceof Error ? e.message : 'That code is incorrect'),
+  });
+
+  const disable = useMutation({
+    mutationFn: () => api.post('/api/profile/totp/disable', { password }),
+    onSuccess: () => {
+      setDisabling(false);
+      setPassword('');
+      setError(null);
+      land();
+    },
+    onError: (e) => setError(e instanceof Error ? e.message : 'Could not disable two-factor authentication'),
+  });
+
+  async function copySecret() {
+    try {
+      await navigator.clipboard.writeText(enrollment?.secret ?? '');
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard access can be blocked; the key is still selectable text.
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="hd"><h3>Two-factor authentication</h3></div>
+      <div className="bd">
+        {profile.totpEnabled ? (
+          <>
+            <div className="note" style={{ marginBottom: 12 }}>
+              Enabled. Every sign-in asks for a code from your authenticator app after your
+              password (or after Google sign-in, if this account is linked).
+            </div>
+            {!disabling ? (
+              <button className="btn" onClick={() => { setDisabling(true); setError(null); }}>
+                Disable two-factor authentication
+              </button>
+            ) : (
+              <div>
+                <div className="f">
+                  <label>Current password</label>
+                  <input
+                    type="password"
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
+                  <div className="help">Required to turn two-factor authentication off.</div>
+                </div>
+                {error && <div className="errbox" style={{ marginTop: 12 }}>{error}</div>}
+                <div className="rowflex" style={{ gap: 8, marginTop: 12 }}>
+                  <button
+                    className="btn primary"
+                    disabled={!password || disable.isPending}
+                    onClick={() => disable.mutate()}
+                  >
+                    {disable.isPending ? 'Disabling…' : 'Confirm disable'}
+                  </button>
+                  <button
+                    className="btn"
+                    onClick={() => { setDisabling(false); setPassword(''); setError(null); }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        ) : enrollment ? (
+          <div>
+            <div className="mut sm" style={{ marginBottom: 12 }}>
+              Scan this with your authenticator app (Google Authenticator, Authy, 1Password, …),
+              or add it manually with the setup key below. Then enter a code from the app to
+              turn two-factor authentication on.
+            </div>
+            <div className="f">
+              <label>Setup key</label>
+              <div className="rowflex" style={{ gap: 8 }}>
+                <input value={enrollment.secret} readOnly className="mono" />
+                <button type="button" className="btn sm" onClick={copySecret}>
+                  {copied ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+            </div>
+            <div className="f" style={{ marginTop: 12 }}>
+              <label>Setup link</label>
+              <input value={enrollment.otpauthUrl} readOnly className="mono" style={{ fontSize: 12 }} />
+              <div className="help">
+                On the same device, opening this link launches most authenticator apps directly.
+              </div>
+            </div>
+            <div className="f" style={{ marginTop: 12 }}>
+              <label>Code from your app</label>
+              <input
+                inputMode="numeric"
+                maxLength={6}
+                className="mono"
+                style={{ letterSpacing: 4 }}
+                value={code}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              />
+            </div>
+            {error && <div className="errbox" style={{ marginTop: 12 }}>{error}</div>}
+            <div className="rowflex" style={{ gap: 8, marginTop: 12 }}>
+              <button
+                className="btn primary"
+                disabled={code.length !== 6 || confirm.isPending}
+                onClick={() => confirm.mutate()}
+              >
+                {confirm.isPending ? 'Verifying…' : 'Activate'}
+              </button>
+              <button
+                className="btn"
+                onClick={() => { setEnrollment(null); setCode(''); setError(null); }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="note" style={{ marginBottom: 12 }}>
+              Not enabled. Add an authenticator app for a second step at sign-in, beyond your
+              password.
+            </div>
+            {error && <div className="errbox" style={{ marginBottom: 12 }}>{error}</div>}
+            <button className="btn primary" disabled={enroll.isPending} onClick={() => enroll.mutate()}>
+              {enroll.isPending ? 'Starting…' : 'Enable two-factor authentication'}
+            </button>
+          </>
+        )}
       </div>
     </div>
   );

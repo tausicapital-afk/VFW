@@ -1,11 +1,12 @@
-import { useState, type FormEvent } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useState, type FormEvent } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { useToast } from '../shell/Toast';
 
 export function Login() {
-  const { login } = useAuth();
+  const { login, completeTotp } = useAuth();
   const { showSuccess, showError } = useToast();
+  const [params, setParams] = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [remember, setRemember] = useState(false);
@@ -13,12 +14,35 @@ export function Login() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // The password step (below) can also hand back a challenge, but a Google
+  // sign-in has no SPA request to return one to — it lands here as a full
+  // page redirect, so GoogleSsoService/AuthController pass it as a query
+  // param instead. Either path ends up in the same state.
+  const [challenge, setChallenge] = useState<string | null>(() => params.get('totp'));
+
+  useEffect(() => {
+    const ssoError = params.get('ssoError');
+    if (ssoError) {
+      showError(ssoError);
+      const next = new URLSearchParams(params);
+      next.delete('ssoError');
+      setParams(next, { replace: true });
+    }
+    // Only on the params this page was actually loaded with.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      await login(email, password, remember);
+      const result = await login(email, password, remember);
+      if (result.totpRequired) {
+        setChallenge(result.challenge);
+        setBusy(false);
+        return;
+      }
       // No navigate() here: once the session lands, App swaps the whole tree.
       // The toast provider sits outside the router, so this survives the swap
       // and lands on the dashboard.
@@ -31,6 +55,31 @@ export function Login() {
       setError(message);
       setBusy(false);
     }
+  }
+
+  if (challenge) {
+    return (
+      <TotpChallenge
+        onBack={() => {
+          setChallenge(null);
+          const next = new URLSearchParams(params);
+          next.delete('totp');
+          setParams(next, { replace: true });
+        }}
+        onSubmit={async (code) => {
+          await completeTotp(challenge, code);
+          // The challenge travelled here as `?totp=` for the Google-redirect
+          // path (see the field above) and, unlike a plain navigate, nothing
+          // else clears it once the session lands — App swaps the whole tree
+          // instead of routing away. Strip it so a bearer-like token does not
+          // linger in the address bar/history after it has been consumed.
+          const next = new URLSearchParams(params);
+          next.delete('totp');
+          setParams(next, { replace: true });
+          showSuccess('Signed in.', 'Welcome back');
+        }}
+      />
+    );
   }
 
   return (
@@ -127,6 +176,116 @@ export function Login() {
             disabled={busy}
           >
             {busy ? 'Signing in…' : 'Sign in'}
+          </button>
+        </form>
+
+        <div className="rowflex" style={{ margin: '16px 0', alignItems: 'center', gap: 10 }}>
+          <div style={{ flex: 1, height: 1, background: 'var(--line, #2a2a30)' }} />
+          <span className="mut sm">or</span>
+          <div style={{ flex: 1, height: 1, background: 'var(--line, #2a2a30)' }} />
+        </div>
+
+        {/* Full page nav, not a fetch: this hands the browser off to Google and
+            comes back via a server redirect (see AuthController.googleCallback),
+            so there is no SPA request to attach a handler to. */}
+        <a
+          className="btn"
+          style={{ width: '100%', justifyContent: 'center' }}
+          href="/api/auth/google"
+        >
+          Sign in with Google Workspace
+        </a>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The second step of a TOTP login. Shown either after a password login comes
+ * back `totpRequired`, or straight away when the page loads with `?totp=` —
+ * which is how a Google sign-in for a 2FA-enrolled account arrives here (see
+ * Login()'s `challenge` state above).
+ */
+function TotpChallenge({
+  onSubmit,
+  onBack,
+}: {
+  onSubmit: (code: string) => Promise<void>;
+  onBack: () => void;
+}) {
+  const { showError } = useToast();
+  const [code, setCode] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await onSubmit(code);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'That code could not be verified';
+      showError(message);
+      setError(message);
+      setCode('');
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section id="login">
+      <div className="stage">
+        <div className="mark">VFW</div>
+        <div>
+          <h1>
+            One more<br />step.
+          </h1>
+          <p className="sub">
+            Enter the 6-digit code from your authenticator app to finish signing in.
+          </p>
+        </div>
+      </div>
+
+      <div className="panel">
+        <form onSubmit={submit}>
+          <h2>Enter your code</h2>
+          <div className="f">
+            <label htmlFor="totp">Authentication code</label>
+            <input
+              id="totp"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
+              className="mono"
+              style={{ letterSpacing: 4, fontSize: 20, textAlign: 'center' }}
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              autoFocus
+              required
+            />
+          </div>
+
+          {error && (
+            <div className="note bad" style={{ marginTop: 12 }}>
+              {error}
+            </div>
+          )}
+
+          <button
+            className="btn primary"
+            style={{ marginTop: 16, width: '100%', justifyContent: 'center' }}
+            disabled={busy || code.length !== 6}
+          >
+            {busy ? 'Verifying…' : 'Verify & continue'}
+          </button>
+          <button
+            type="button"
+            className="btn sm"
+            style={{ marginTop: 12, width: '100%', justifyContent: 'center' }}
+            onClick={onBack}
+          >
+            ← Back to sign in
           </button>
         </form>
       </div>

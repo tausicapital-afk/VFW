@@ -92,6 +92,17 @@ export async function verifySession(
     throw new UnauthorizedException('Session expired');
   }
 
+  // A valid signature is not proof this is a *session*. This app now also
+  // mints narrower, short-lived JWTs for a single purpose (the TOTP login
+  // challenge — see AuthService.signTotpChallenge, `typ: 'totp-challenge'`,
+  // no `id`/`tv`). Those verify with the same key, so without this check one
+  // pasted into the session cookie would reach the `prisma.user.findUnique`
+  // below with an undefined id and fail as an unhandled error instead of the
+  // plain "not signed in" every other bad token gets.
+  if (typeof claims.id !== 'string' || typeof claims.tv !== 'number') {
+    throw new UnauthorizedException('Session expired');
+  }
+
   const user = await prisma.user.findUnique({
     where: { id: claims.id },
     select: {

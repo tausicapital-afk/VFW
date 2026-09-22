@@ -70,6 +70,17 @@ export class SignupDto {
   role?: string;
 }
 
+/** Step 2 of a TOTP login: the challenge minted when step 1 (password or Google) succeeded. */
+export class LoginTotpDto {
+  @IsString()
+  @MinLength(1)
+  challenge: string;
+
+  @IsString()
+  @Matches(/^\d{6}$/, { message: 'Enter the 6-digit code' })
+  code: string;
+}
+
 export class VerifyOtpDto {
   @IsEmail()
   email: string;
