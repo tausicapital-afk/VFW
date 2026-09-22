@@ -21,8 +21,14 @@ const REJECT_REASONS = [
 
 const COST_CENTRES = ['CC-100 Vancouver', 'CC-200 Kids', 'CC-300 Global', 'CC-400 Media'];
 
-// Above this, the discount needs explicit sign-off (Settings.discountApprovalPct).
-const DISCOUNT_THRESHOLD = 15;
+// Discount% for a sale, measured against the PACKAGE price — matches
+// PricingService.discountApproval (discountAmount / packagePrice), never the
+// subtotal. See the comment on the table cell below for why.
+function discountPct(s: Submission): number {
+  return Number(s.packagePrice) > 0
+    ? (Number(s.discountAmount) / Number(s.packagePrice)) * 100
+    : 0;
+}
 
 // How long a submission can sit in "pending accounting approval" before the
 // queue calls it out. A flat calendar-day count rather than a business-day
@@ -118,11 +124,17 @@ export function Queue() {
                   // (PricingService: discountAmount / packagePrice). Dividing by
                   // the subtotal made every sale with add-ons look cheaper than
                   // the rule considers it — a sale 15.4% off the package could
-                  // render as under the 15% bar and then be refused at approval,
-                  // quoting a percentage the approver was never shown.
-                  const pct = Number(s.packagePrice) > 0
-                    ? (Number(s.discountAmount) / Number(s.packagePrice)) * 100
-                    : 0;
+                  // render as under the threshold and then be refused at
+                  // approval, quoting a percentage the approver was never shown.
+                  const pct = discountPct(s);
+                  const threshold = Number(catalog?.discountApprovalPct ?? 0);
+                  const overThreshold = pct > threshold;
+                  // Someone (maybe this user) has already asked for the second
+                  // sign-off this sale needs. Defense in depth: the backend
+                  // refuses a self-confirm with a 400 regardless, but the
+                  // requester should never even be offered the button.
+                  const awaitingSignoff = overThreshold && !!s.discountOverrideRequestedById;
+                  const isOwnRequest = s.discountOverrideRequestedById === user?.id;
                   return (
                     <tr key={s.id} className={testRow(s)}>
                       <td className="mono">
@@ -143,10 +155,19 @@ export function Queue() {
                       <td className="sm">{s.rep.name}</td>
                       <td className="num">
                         {pct > 0 ? (
-                          pct > DISCOUNT_THRESHOLD
+                          overThreshold
                             ? <span className="pill REJECTED">{pct.toFixed(1)}%</span>
                             : pct.toFixed(1) + '%'
                         ) : '—'}
+                        {awaitingSignoff && (
+                          <div style={{ marginTop: 4 }}>
+                            <span className="pill PENDING" title={fmtDate(s.discountOverrideRequestedAt)}>
+                              {isOwnRequest
+                                ? 'Awaiting 2nd sign-off (you asked)'
+                                : `Awaiting 2nd sign-off — ${s.discountOverrideRequestedBy?.name ?? 'requested'}`}
+                            </span>
+                          </div>
+                        )}
                       </td>
                       <td className="num">{money(s.total, s.currency)}</td>
                       <td className="sm mut">
@@ -173,9 +194,13 @@ export function Queue() {
                             <button className="btn sm" onClick={() => nav(`/submissions/${s.id}/edit`)}>
                               Edit
                             </button>
-                            <button className="btn sm primary" onClick={() => setAction({ kind: 'approve', sub: s })}>
-                              Approve
-                            </button>
+                            {/* The maker cannot also be the checker — don't even
+                                offer a way to confirm your own override request. */}
+                            {!isOwnRequest && (
+                              <button className="btn sm primary" onClick={() => setAction({ kind: 'approve', sub: s })}>
+                                {awaitingSignoff ? 'Confirm' : overThreshold ? 'Request sign-off' : 'Approve'}
+                              </button>
+                            )}
                             <button className="btn sm" onClick={() => setAction({ kind: 'return', sub: s })}>
                               Return
                             </button>
@@ -238,6 +263,7 @@ function ActionModal({
   onDone: () => void;
 }) {
   const { kind, sub } = action;
+  const { user } = useAuth();
   // Default to the GL account the package is mapped to; Accounting can override.
   const [gl, setGl] = useState(sub.package.glCode);
   const [costCentre, setCostCentre] = useState(COST_CENTRES[0]);
@@ -245,6 +271,20 @@ function ActionModal({
   const [note, setNote] = useState('');
   const [ackCustomPackage, setAckCustomPackage] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Two-person sign-off on an over-threshold discount (Settings.discountApprovalPct,
+  // via catalog — see the Queue table for why this is fetched live rather than
+  // hardcoded). Four approve states: a normal under-threshold sale; the FIRST
+  // touch on an over-threshold one (this call only *requests* sign-off); a
+  // SECOND, different approver confirming an outstanding request; and — defense
+  // in depth, since the Queue table already hides this modal's Approve button
+  // from whoever made the request — the requester somehow reaching this modal
+  // for their own request, which is blocked client-side too.
+  const pct = discountPct(sub);
+  const overThreshold = pct > Number(catalog?.discountApprovalPct ?? 0);
+  const selfBlocked = overThreshold && sub.discountOverrideRequestedById === user?.id;
+  const confirmingSignoff = overThreshold && !!sub.discountOverrideRequestedById && !selfBlocked;
+  const requestingSignoff = overThreshold && !sub.discountOverrideRequestedById;
 
   const run = useMutation({
     mutationFn: () => {
@@ -265,7 +305,12 @@ function ActionModal({
   });
 
   const title =
-    kind === 'approve' ? `Approve ${sub.ref}`
+    kind === 'approve'
+      ? requestingSignoff
+        ? `Request sign-off — ${sub.ref}`
+        : confirmingSignoff
+          ? `Confirm and approve ${sub.ref}`
+          : `Approve ${sub.ref}`
     : kind === 'reject' ? `Reject ${sub.ref}`
     : `Return ${sub.ref} to sales`;
 
@@ -285,6 +330,43 @@ function ActionModal({
             <div className="r"><span>Tax ({sub.taxRate}%)</span><span>{money(sub.taxAmount, sub.currency)}</span></div>
             <div className="r big"><span>Total</span><span>{money(sub.total, sub.currency)}</span></div>
           </div>
+
+          {kind === 'approve' && overThreshold && (
+            <div className={'note ' + (selfBlocked ? 'bad' : 'warn')} style={{ marginBottom: 16 }}>
+              {selfBlocked ? (
+                <>
+                  <b>You requested this override — you cannot confirm it yourself.</b>
+                  <div className="sm" style={{ marginTop: 6 }}>
+                    This sale is discounted <b>{pct.toFixed(2)}%</b>, above the{' '}
+                    <b>{Number(catalog?.discountApprovalPct ?? 0).toFixed(2)}%</b> that needs
+                    accounting sign-off. You asked for sign-off on{' '}
+                    {fmtDate(sub.discountOverrideRequestedAt)}; a different ACCT/ADMIN must confirm it.
+                  </div>
+                </>
+              ) : confirmingSignoff ? (
+                <>
+                  <b>Second sign-off needed.</b>
+                  <div className="sm" style={{ marginTop: 6 }}>
+                    This sale is discounted <b>{pct.toFixed(2)}%</b>, above the{' '}
+                    <b>{Number(catalog?.discountApprovalPct ?? 0).toFixed(2)}%</b> that needs
+                    accounting sign-off. <b>{sub.discountOverrideRequestedBy?.name ?? 'A colleague'}</b>{' '}
+                    requested this on {fmtDate(sub.discountOverrideRequestedAt)}. Confirming below
+                    approves the sale.
+                  </div>
+                </>
+              ) : (
+                <>
+                  <b>This discount needs a second person's sign-off.</b>
+                  <div className="sm" style={{ marginTop: 6 }}>
+                    This sale is discounted <b>{pct.toFixed(2)}%</b>, above the{' '}
+                    <b>{Number(catalog?.discountApprovalPct ?? 0).toFixed(2)}%</b> threshold. Continuing
+                    will record your request and notify accounting — it will NOT approve the sale.
+                    A different ACCT/ADMIN will need to confirm it before it is final.
+                  </div>
+                </>
+              )}
+            </div>
+          )}
 
           {kind === 'approve' && sub.packageCustomized && (
             <div className="note warn" style={{ marginBottom: 16 }}>
@@ -313,7 +395,7 @@ function ActionModal({
             </div>
           )}
 
-          {kind === 'approve' && (
+          {kind === 'approve' && !requestingSignoff && !selfBlocked && (
             <div className="fields">
               <div className="f">
                 <label>GL account</label>
@@ -369,11 +451,22 @@ function ActionModal({
             disabled={
               run.isPending ||
               (kind === 'return' && !note.trim()) ||
-              (kind === 'approve' && sub.packageCustomized && !ackCustomPackage)
+              // The custom-package sign-off only gates an actual approval —
+              // requesting the discount override does not approve anything yet,
+              // so it doesn't need this acknowledgment (the backend agrees: that
+              // check runs after the override-request branch returns).
+              (kind === 'approve' && sub.packageCustomized && !ackCustomPackage && !requestingSignoff) ||
+              // The core guarantee of the two-person flow, enforced client-side
+              // too: the requester cannot submit a confirmation of their own request.
+              (kind === 'approve' && selfBlocked)
             }
             onClick={() => { setError(null); run.mutate(); }}
           >
-            {run.isPending ? 'Working…' : title}
+            {run.isPending
+              ? 'Working…'
+              : kind === 'approve' && requestingSignoff
+                ? 'Request sign-off'
+                : title}
           </button>
         </div>
       </div>

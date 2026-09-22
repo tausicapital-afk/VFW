@@ -33,6 +33,10 @@ const MAX_SEQUENCE = 2_147_483_646;
 
 const DETAIL = {
   rep: { select: { id: true, name: true, colour: true, role: true } },
+  // Who asked for a second sign-off on an over-threshold discount, so the
+  // Queue can render "awaiting second sign-off — requested by X" without a
+  // second round trip. Null unless a request is currently outstanding.
+  discountOverrideRequestedBy: { select: { id: true, name: true } },
   contact: true,
   event: { include: { city: true } },
   package: { include: { prices: true } },
@@ -435,21 +439,30 @@ export class SubmissionsService {
   }
 
   /**
-   * Approve, subject to the discount threshold.
+   * Approve, subject to the discount threshold and (now) a maker/checker split
+   * on that threshold.
    *
    * A rep may propose any discount up to 100% — sales discretion is not being
    * removed, and create/update stay untouched. The gate is here, at sign-off:
-   * a discount deeper than `Settings.discountApprovalPct` cannot be approved
-   * silently. The approver must send `acknowledgeDiscountOverride: true`, and
-   * the audit entry then records *why* sign-off was needed — the threshold that
-   * was in force and the discount that beat it — rather than a bare "APPROVED".
+   * a discount deeper than `Settings.discountApprovalPct` cannot be approved by
+   * one person acting alone. The FIRST call from anyone with `submission.approve`
+   * on such a sale does not approve it — it records who is asking
+   * (`discountOverrideRequestedById`/`At`) and returns 200 with the still-PENDING
+   * submission plus a `message`, so the caller sees this as a valid waypoint, not
+   * a 400. A SECOND call from a genuinely different user then approves it exactly
+   * as a normal sale would, and the audit entry names both people. The same user
+   * trying to also be the second sign-off is refused (400) — that refusal is the
+   * whole point of the feature.
    *
    * The threshold is read here rather than stamped on the submission, so
    * Accounting editing it in Settings changes the next approval with no
    * migration and no backfill.
    */
   async approve(id: string, dto: ApproveDto, user: AuthUser) {
-    const submission = await this.prisma.submission.findUnique({ where: { id } });
+    const submission = await this.prisma.submission.findUnique({
+      where: { id },
+      include: { discountOverrideRequestedBy: { select: { id: true, name: true } } },
+    });
     if (!submission) throw new NotFoundException('Submission not found');
     if (submission.status !== SubmissionStatus.PENDING) {
       throw new BadRequestException(
@@ -467,17 +480,73 @@ export class SubmissionsService {
       settings.discountApprovalPct,
     );
 
-    if (discount.exceedsThreshold && !dto.acknowledgeDiscountOverride) {
-      throw new BadRequestException(
-        `This sale is discounted ${discount.discountPct.toFixed(2)}%, above the ` +
-          `${discount.thresholdPct.toFixed(2)}% that needs accounting sign-off. ` +
-          'Re-send with acknowledgeDiscountOverride: true to approve it anyway.',
-      );
+    if (discount.exceedsThreshold) {
+      // The maker cannot also be the checker: refuse outright, before anything
+      // else is considered (including a not-yet-supplied acknowledgeCustomPackage
+      // — that gate does not even get a chance to run for a self-confirm attempt).
+      if (submission.discountOverrideRequestedById === user.id) {
+        throw new BadRequestException(
+          `You requested sign-off on this ${discount.discountPct.toFixed(2)}% discount ` +
+            `override yourself. A different ACCT/ADMIN must confirm it before this sale ` +
+            'can be approved — the same person cannot be both the maker and the checker.',
+        );
+      }
+
+      if (!submission.discountOverrideRequestedById) {
+        // First touch on an over-threshold sale: record the request, but do not
+        // approve. Still PENDING — this is a waypoint, not a decision.
+        return this.prisma.$transaction(async (tx) => {
+          const updated = await tx.submission.update({
+            where: { id },
+            data: {
+              discountOverrideRequestedById: user.id,
+              discountOverrideRequestedAt: new Date(),
+            },
+            include: DETAIL,
+          });
+
+          await this.audit.log(
+            {
+              submissionId: id,
+              actorId: user.id,
+              action: 'DISCOUNT_OVERRIDE_REQUESTED',
+              detail:
+                `discount override requested: ${discount.discountPct.toFixed(2)}% exceeds the ` +
+                `${discount.thresholdPct.toFixed(2)}% approval threshold — awaiting a second, ` +
+                `different approver's sign-off`,
+              payload: {
+                discountOverride: {
+                  thresholdPct: discount.thresholdPct.toFixed(2),
+                  discountPct: discount.discountPct.toFixed(2),
+                  discountAmount: submission.discountAmount.toString(),
+                  discountType: submission.discountType,
+                  subtotal: submission.subtotal.toString(),
+                  currency: submission.currency,
+                },
+              },
+            },
+            tx,
+          );
+
+          return {
+            ...updated,
+            outcome: 'override_requested' as const,
+            message:
+              `This sale is discounted ${discount.discountPct.toFixed(2)}%, above the ` +
+              `${discount.thresholdPct.toFixed(2)}% that needs accounting sign-off. Recorded — ` +
+              'a different ACCT/ADMIN must approve it before it is final.',
+          };
+        });
+      }
+
+      // Else: requested by someone else already — this call is the second,
+      // different sign-off, and falls through to the real approval below.
     }
 
     // The same "say it out loud" gate as the discount one above, for the same
     // reason: a rep-typed price or description must never reach approval
-    // indistinguishably from a catalogue sale.
+    // indistinguishably from a catalogue sale. Untouched by the two-person
+    // discount flow — still single-step, still whoever is approving right now.
     if (submission.packageCustomized && !dto.acknowledgeCustomPackage) {
       throw new BadRequestException(
         'This sale uses a customized or non-catalogue package. ' +
@@ -486,7 +555,9 @@ export class SubmissionsService {
     }
 
     // Only present when the threshold was actually beaten, so a normal approval
-    // is byte-for-byte the audit row it was before.
+    // is byte-for-byte the audit row it was before. Reaching here with
+    // exceedsThreshold true means a second, different approver is confirming an
+    // outstanding request (the first-touch case already returned above).
     const override = discount.exceedsThreshold
       ? {
           thresholdPct: discount.thresholdPct.toFixed(2),
@@ -495,6 +566,10 @@ export class SubmissionsService {
           discountType: submission.discountType,
           subtotal: submission.subtotal.toString(),
           currency: submission.currency,
+          requestedBy: submission.discountOverrideRequestedBy
+            ? { id: submission.discountOverrideRequestedBy.id, name: submission.discountOverrideRequestedBy.name }
+            : null,
+          confirmedBy: { id: user.id, name: user.name },
         }
       : null;
 
@@ -507,6 +582,10 @@ export class SubmissionsService {
           approvedById: user.id,
           glCode: dto.glAccount ?? submission.glCode,
           costCentre: dto.costCentre ?? submission.costCentre,
+          // Resolved — clear the request markers so they don't linger once the
+          // sale is actually decided.
+          discountOverrideRequestedById: null,
+          discountOverrideRequestedAt: null,
         },
         include: DETAIL,
       });
@@ -516,7 +595,8 @@ export class SubmissionsService {
       if (override) {
         notes.push(
           `discount override: ${override.discountPct}% exceeds the ${override.thresholdPct}% ` +
-            `approval threshold, signed off by ${user.name}`,
+            `approval threshold — requested by ${override.requestedBy?.name ?? 'unknown'}, ` +
+            `confirmed by ${user.name}`,
         );
       }
       if (submission.packageCustomized) {
@@ -543,6 +623,15 @@ export class SubmissionsService {
     });
   }
 
+  /**
+   * Rejecting (or returning, below) a sale sitting in "override requested"
+   * limbo is deliberately NOT gated behind the same two-person rule as
+   * approving it. This undoes the sale rather than committing it — the risk the
+   * maker/checker split guards against (one person unilaterally pushing a deep
+   * discount over the line) does not apply to killing or bouncing the sale back
+   * to the rep, so whoever holds `submission.reject`/`submission.return` may act
+   * on it, including the same person who requested the override.
+   */
   async reject(id: string, dto: RejectDto, user: AuthUser) {
     const submission = await this.prisma.submission.findUnique({ where: { id } });
     if (!submission) throw new NotFoundException('Submission not found');
@@ -559,6 +648,9 @@ export class SubmissionsService {
           status: SubmissionStatus.REJECTED,
           rejectedAt: new Date(),
           rejectReason: dto.reason,
+          // A rejected sale is done — no sign-off can still be "outstanding".
+          discountOverrideRequestedById: null,
+          discountOverrideRequestedAt: null,
         },
         include: DETAIL,
       });
@@ -583,7 +675,15 @@ export class SubmissionsService {
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.submission.update({
         where: { id },
-        data: { status: SubmissionStatus.RETURNED, returnNote: note },
+        data: {
+          status: SubmissionStatus.RETURNED,
+          returnNote: note,
+          // Back to the rep for changes — any outstanding sign-off request no
+          // longer applies to whatever comes back in. See reject() above for
+          // why this is not gated behind the two-person rule.
+          discountOverrideRequestedById: null,
+          discountOverrideRequestedAt: null,
+        },
         include: DETAIL,
       });
       await this.audit.log(
@@ -1340,6 +1440,12 @@ export class SubmissionsService {
           // Only a sale arriving in the queue is stamped. See the note above.
           submittedAt: entering ? new Date() : existing.submittedAt,
           returnNote: null,
+          // The figures below are about to be re-priced, so any outstanding
+          // discount-override request (and its discount%) is stale — a fresh
+          // edit/resubmission starts the two-person sign-off flow over, judged
+          // against whatever discount the sale carries now.
+          discountOverrideRequestedById: null,
+          discountOverrideRequestedAt: null,
           contactId: contact.id,
           eventId: event.id,
           cityId: event.cityId,
