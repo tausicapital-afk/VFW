@@ -1,5 +1,7 @@
 import { Body, Controller, Get, Module, Param, Post, Query } from '@nestjs/common';
 import { AuthUser, Can, CurrentUser } from '../common/auth.guard';
+import { PortalModule } from '../portal/portal.controller';
+import { PortalService } from '../portal/portal.service';
 import { SubmissionsModule } from '../submissions/submissions.controller';
 import { ContactsService } from './contacts.service';
 import { CreateContactDto } from './dto';
@@ -14,7 +16,10 @@ import { CreateContactDto } from './dto';
  */
 @Controller('api/contacts')
 export class ContactsController {
-  constructor(private readonly contacts: ContactsService) {}
+  constructor(
+    private readonly contacts: ContactsService,
+    private readonly portal: PortalService,
+  ) {}
 
   @Can('contacts.view')
   @Get()
@@ -33,10 +38,20 @@ export class ContactsController {
   create(@Body() dto: CreateContactDto, @CurrentUser() user: AuthUser) {
     return this.contacts.create(dto, user);
   }
+
+  // Mints and emails a magic link into the read-only contact portal — the same
+  // permission as sending an invoice (`email.send`, ACCT/ADMIN), since it is
+  // the same kind of act: handing the customer a document/view of their own
+  // account.
+  @Can('email.send')
+  @Post(':id/portal-link')
+  sendPortalLink(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.portal.sendLink(id, user);
+  }
 }
 
 @Module({
-  imports: [SubmissionsModule],
+  imports: [SubmissionsModule, PortalModule],
   controllers: [ContactsController],
   providers: [ContactsService],
   // ExportModule reads the customer book through the same scoped `list` this

@@ -1031,19 +1031,46 @@ export class SubmissionsService {
    * PDF and the screen can never disagree.
    */
   async invoicePdf(id: string, user: AuthUser): Promise<{ buffer: Buffer; filename: string }> {
+    const s = await this.loadForInvoicePdf(id);
+    // Same row scope as findOne: a rep can pull their own invoice, no one else's.
+    if (!can('submission.viewAll', user.role) && s.repId !== user.id) {
+      throw new NotFoundException('Submission not found');
+    }
+    return this.renderInvoicePdf(s);
+  }
+
+  /**
+   * The same document, scoped for the unauthenticated contact portal instead of
+   * a signed-in user: the caller has already resolved a live portal token down
+   * to a contactId (see PortalService), and the only check left is that THIS
+   * submission belongs to THAT contact — never a `repId`, since the portal has
+   * no concept of a rep. A submission that belongs to another contact 404s,
+   * same existence-hiding shape as every other out-of-scope read in this file.
+   */
+  async invoicePdfForPortal(
+    id: string,
+    contactId: string,
+  ): Promise<{ buffer: Buffer; filename: string }> {
+    const s = await this.loadForInvoicePdf(id);
+    if (s.contactId !== contactId) throw new NotFoundException('Submission not found');
+    return this.renderInvoicePdf(s);
+  }
+
+  private async loadForInvoicePdf(id: string) {
     const s = await this.prisma.submission.findUnique({
       where: { id },
       include: { ...DETAIL, city: true },
     });
     if (!s) throw new NotFoundException('Submission not found');
-    // Same row scope as findOne: a rep can pull their own invoice, no one else's.
-    if (!can('submission.viewAll', user.role) && s.repId !== user.id) {
-      throw new NotFoundException('Submission not found');
-    }
     if (!s.invoiceNo) {
       throw new BadRequestException('Generate the invoice number first, then download the PDF.');
     }
+    return s;
+  }
 
+  private async renderInvoicePdf(
+    s: Prisma.SubmissionGetPayload<{ include: typeof DETAIL & { city: true } }>,
+  ): Promise<{ buffer: Buffer; filename: string }> {
     const settings = await this.prisma.settings.findUniqueOrThrow({ where: { id: 1 } });
     const discountLabel =
       Number(s.discountAmount) > 0
@@ -1055,7 +1082,7 @@ export class SubmissionsService {
     const data: InvoicePdfData = {
       brand: this.invoiceBrand(s.city.name),
       companyName: settings.company,
-      invoiceNo: s.invoiceNo,
+      invoiceNo: s.invoiceNo!,
       docType: s.payStatus === 'PAID' ? 'Sales Receipt' : 'Invoice',
       issuedAt: new Date(),
       currency: s.currency,

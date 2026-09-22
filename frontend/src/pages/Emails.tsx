@@ -17,6 +17,7 @@ const KIND_LABEL: Record<EmailKind, string> = {
   PASSWORD_CHANGED: 'Password changed',
   INVITATION: 'Invitation',
   INVOICE: 'Invoice',
+  PORTAL_LINK: 'Portal link',
   TEST: 'Test',
   INBOUND: 'Received',
   OTHER: 'Other',
