@@ -15,6 +15,23 @@ export class AuthController {
     private readonly googleSso: GoogleSsoService,
   ) {}
 
+  /**
+   * The frontend base to redirect the browser back to, tolerating APP_URL
+   * itself being unconfigured. `GoogleSsoService.frontendUrl()` throws in
+   * that case — reasonable for a value that must be right when it IS used —
+   * but both Google handlers below must always end in a redirect, never a
+   * raw exception, since a full-page navigation has no fetch caller to hand
+   * a JSON error to. A relative base still lands the browser back on this
+   * app's own origin, so nothing here needs APP_URL to have a fallback.
+   */
+  private frontendBase(): string {
+    try {
+      return this.googleSso.frontendUrl();
+    } catch {
+      return '';
+    }
+  }
+
   @Public()
   @Post('login')
   async login(
@@ -78,7 +95,7 @@ export class AuthController {
       // back to the login screen with a readable reason rather than a raw JSON
       // error page, since this is a full-page navigation, not a fetch call.
       const message = e instanceof Error ? e.message : 'Google sign-in is not available';
-      res.redirect(`${this.googleSso.frontendUrl()}/?ssoError=${encodeURIComponent(message)}`);
+      res.redirect(`${this.frontendBase()}/?ssoError=${encodeURIComponent(message)}`);
     }
   }
 
@@ -97,7 +114,7 @@ export class AuthController {
     @Res() res: Response,
   ) {
     const ctx = { ip: req.ip, userAgent: req.headers['user-agent'] };
-    const frontend = this.googleSso.frontendUrl();
+    const frontend = this.frontendBase();
     try {
       const result = await this.auth.loginWithGoogle(query, ctx);
       if ('totpRequired' in result) {

@@ -191,7 +191,16 @@ export class PortalService {
       });
       for (const r of requests) {
         if (!latestSignatureBySubmission.has(r.submissionId)) {
-          latestSignatureBySubmission.set(r.submissionId, r);
+          // Reshaped, not the raw row: submissionId is already this map's
+          // key, and the allowlist discipline this class exists for (see the
+          // PortalSubmission doc comment) means every field reaching the
+          // portal is chosen on purpose, not whatever the select happened to
+          // include for the dedup logic above.
+          latestSignatureBySubmission.set(r.submissionId, {
+            status: r.status,
+            sentAt: r.sentAt,
+            completedAt: r.completedAt,
+          });
         }
       }
     }

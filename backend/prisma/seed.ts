@@ -240,6 +240,21 @@ async function main() {
     });
   }
 
+  // One baseline Contact. Nothing else here creates one, and several call
+  // sites (e.g. PayrollService's tests, and any ad hoc script) reasonably
+  // assume "some contact exists" the way they assume "some event/package
+  // exists" — without this, that assumption silently depends on some OTHER
+  // seed or test having created one first, which is exactly the kind of
+  // order-dependency that broke when adding new test files shifted Jest's
+  // default file-scheduling order (see the CI failure this fixed: payroll's
+  // and payslip's specs, which grab `prisma.contact.findFirstOrThrow()`,
+  // started running before any test that happened to create one).
+  await prisma.contact.upsert({
+    where: { brand: 'Atelier Rowan' },
+    update: {},
+    create: { brand: 'Atelier Rowan', designer: 'Rowan Sinclair', type: 'Designer' },
+  });
+
   const settingsRow = await prisma.settings.upsert({ where: { id: 1 }, update: {}, create: { id: 1 } });
 
   // Mirrors the backfill INSERT in migration 20260922004804_fx_rate_snapshot.
@@ -290,6 +305,7 @@ async function main() {
     glAccounts: await prisma.glAccount.count(),
     users: await prisma.user.count(),
     commissionTiers: await prisma.commissionTier.count(),
+    contacts: await prisma.contact.count(),
   };
   console.log('Seed complete:', counts);
   // Never echo a password that was passed in — it would land in the shell

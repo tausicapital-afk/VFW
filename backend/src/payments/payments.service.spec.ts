@@ -34,7 +34,16 @@ const STRIPE_WEBHOOK_SECRET = 'whsec_test_mock';
 function make() {
   const prisma = {
     submission: { findUnique: jest.fn() },
-    stripeCheckoutSession: { create: jest.fn().mockResolvedValue(undefined) },
+    stripeCheckoutSession: {
+      create: jest.fn().mockResolvedValue(undefined),
+      // Unconfigured by default (resolves undefined) so existing webhook
+      // tests exercise the pre-check's "no local row to compare against, fall
+      // through to the transaction's own claim guard" branch — the same
+      // no-op it takes for an event this database never created a session
+      // for. Tests of the amount-mismatch behaviour itself configure this
+      // explicitly; see below.
+      findUnique: jest.fn(),
+    },
     user: { findUnique: jest.fn(), create: jest.fn() },
     $transaction: jest.fn(),
   };
@@ -299,5 +308,28 @@ describe('PaymentsService.handleWebhook', () => {
     // A real hash, not a plaintext placeholder — argon2 hashes always start this way.
     expect(created.passwordHash).toMatch(/^\$argon2/);
     expect(tx.payment.create.mock.calls[0][0].data.recordedById).toBe('u-new-stripe');
+  });
+
+  it('refuses to post a Payment when Stripe\'s confirmed amount_total disagrees with the local record', async () => {
+    const { svc, prisma, submissions } = make();
+    prisma.user.findUnique.mockResolvedValue({ id: 'u-stripe' });
+    mockConstructEvent.mockReturnValue({
+      type: 'checkout.session.completed',
+      // The session was created for 250.00 USD (25000 minor units); Stripe
+      // confirms a different amount — should never happen given this app's
+      // fixed-quantity, no-discount Checkout Session, but the ledger must not
+      // trust an unconfirmed figure either way.
+      data: { object: { id: 'cs_1', payment_intent: 'pi_1', amount_total: 1900 } },
+    });
+    prisma.stripeCheckoutSession.findUnique.mockResolvedValue({
+      id: 'row1', stripeSessionId: 'cs_1', submissionId: 's1',
+      amount: '250.00', currency: 'USD', status: 'PENDING',
+    });
+
+    const res = await svc.handleWebhook(Buffer.from('{}'), 'sig');
+
+    expect(res).toEqual({ received: true });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(submissions.recomputeMoney).not.toHaveBeenCalled();
   });
 });

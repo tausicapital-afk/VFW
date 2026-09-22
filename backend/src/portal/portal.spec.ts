@@ -85,6 +85,7 @@ describe('Contact portal (unauthenticated, token-gated)', () => {
       [
         'id', 'ref', 'status', 'currency', 'total', 'paidAmount', 'balance',
         'payStatus', 'invoiceNo', 'event', 'package', 'showDate', 'createdAt',
+        'signature',
       ].sort(),
     );
     expect(row.invoiceNo).toBe(a.invoiceNo);

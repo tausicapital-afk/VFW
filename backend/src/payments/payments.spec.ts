@@ -130,7 +130,11 @@ describe('Online payment collection (Stripe)', () => {
         .set('Cookie', acct)
         .send({ date: '2026-01-01', amount: Number(a.total), method: 'Bank Transfer / Wire' });
       expect(paid.status).toBe(201);
-      expect(paid.body.balance).toBe('0.00');
+      // Pre-existing behaviour, not a Stripe-feature concern: the response's
+      // Decimal.toJSON (main.ts) serialises via .toString(), which — like
+      // every Decimal field in this API — drops a value's trailing zeros
+      // (Decimal('0.00').toString() === '0'), not just for zero.
+      expect(paid.body.balance).toBe('0');
 
       const token = await mintToken(a.contactId);
       const res = await http(app)
@@ -171,7 +175,22 @@ describe('Online payment collection (Stripe)', () => {
       stripe = new Stripe(STRIPE_SECRET_KEY);
     });
 
-    function completedEventPayload(stripeSessionId: string, paymentIntentId = 'pi_test_1') {
+    // Stripe's real payload always carries the confirmed amount_total, which
+    // PaymentsService cross-checks against the StripeCheckoutSession row
+    // before posting anything (see payments.service.ts's postPayment) — so a
+    // realistic fixture has to include it too, computed the same way the app
+    // itself derives minor units (JPY is the one zero-decimal currency this
+    // app prices in; none of these test fixtures use it, but this stays
+    // correct if that ever changes).
+    function minorUnits(amount: string, currency: Currency): number {
+      return currency === 'JPY' ? Math.round(Number(amount)) : Math.round(Number(amount) * 100);
+    }
+
+    function completedEventPayload(
+      stripeSessionId: string,
+      amountTotal: number,
+      paymentIntentId = 'pi_test_1',
+    ) {
       return JSON.stringify({
         id: `evt_${randomBytes(8).toString('hex')}`,
         object: 'event',
@@ -181,6 +200,7 @@ describe('Online payment collection (Stripe)', () => {
             id: stripeSessionId,
             object: 'checkout.session',
             payment_intent: paymentIntentId,
+            amount_total: amountTotal,
           },
         },
       });
@@ -206,7 +226,7 @@ describe('Online payment collection (Stripe)', () => {
     it('refuses a request with no signature at all, before writing anything', async () => {
       const a = await newInvoicedSubmission('stripe-nosig@example.com');
       const sessionId = await pendingSession(a);
-      const payload = completedEventPayload(sessionId);
+      const payload = completedEventPayload(sessionId, minorUnits(a.total, a.currency));
 
       const res = await http(app)
         .post('/api/payments/stripe/webhook')
@@ -227,7 +247,7 @@ describe('Online payment collection (Stripe)', () => {
     it('refuses a forged/garbage signature, before writing anything', async () => {
       const a = await newInvoicedSubmission('stripe-badsig@example.com');
       const sessionId = await pendingSession(a);
-      const payload = completedEventPayload(sessionId);
+      const payload = completedEventPayload(sessionId, minorUnits(a.total, a.currency));
 
       const res = await http(app)
         .post('/api/payments/stripe/webhook')
@@ -248,7 +268,7 @@ describe('Online payment collection (Stripe)', () => {
     it('a validly signed checkout.session.completed posts exactly one Payment and settles the balance', async () => {
       const a = await newInvoicedSubmission('stripe-valid@example.com');
       const sessionId = await pendingSession(a);
-      const payload = completedEventPayload(sessionId, 'pi_test_valid_1');
+      const payload = completedEventPayload(sessionId, minorUnits(a.total, a.currency), 'pi_test_valid_1');
       const signature = sign(payload);
 
       const res = await http(app)
@@ -291,7 +311,7 @@ describe('Online payment collection (Stripe)', () => {
     it('does not double-post when the same event is redelivered (Stripe retry)', async () => {
       const a = await newInvoicedSubmission('stripe-replay@example.com');
       const sessionId = await pendingSession(a);
-      const payload = completedEventPayload(sessionId, 'pi_test_replay_1');
+      const payload = completedEventPayload(sessionId, minorUnits(a.total, a.currency), 'pi_test_replay_1');
       const signature = sign(payload);
 
       const first = await http(app)
