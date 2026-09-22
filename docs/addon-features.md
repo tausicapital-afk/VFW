@@ -52,10 +52,36 @@ All six landed with no Prisma schema changes, fully tested, merged to `main`.
   a placeholder; a dedicated `REMINDER` kind is a natural follow-up once
   schema changes are back on the table).
 
+## Shipped — Batch A (schema-changing)
+
+Three more landed, each on its own isolated Postgres instance during
+development to avoid colliding with the other two mid-migration, merged and
+fully tested together afterward.
+
+- **FX rate history.** New `FxRateSnapshot` model. Editing `Settings.fxRates`
+  now appends a snapshot instead of overwriting history; reports resolve the
+  rate in force for the period being reported, falling back to the live rate
+  when no snapshot predates it. `GET /api/admin/settings/fx-history`.
+- **Multi-level approval on over-threshold discounts.** `Submission` gains
+  `discountOverrideRequestedAt`/`discountOverrideRequestedById`. A first
+  approve() on an over-threshold sale records the request (200, not an
+  error); a second, *different* ACCT/ADMIN completes it; the same user
+  cannot confirm their own request (400) — tested explicitly. Along the way,
+  fixed a real bug: Queue.tsx's discount-threshold display was a hardcoded
+  frontend constant that could silently drift from the real
+  `Settings.discountApprovalPct` — it now reads the live value.
+- **Commission tiers.** Global `CommissionTier` table, applied progressively
+  as a bonus **on top of** the existing flat per-sale commission — the
+  per-sale stamped rate itself is never touched, preserving the "never
+  rewrites a booked sale" guarantee. Seeded with a placeholder (0% under
+  $50k net revenue/month, +2% above); tune the real numbers in the new
+  Payroll → Commission tiers tab (`payroll.manageTiers`, ACCT/ADMIN). Frozen
+  into `PayrollInvoice.tierBonus` at submit time, same as base/commission.
+
 ## Decided, not yet built
 
-Provider/design decisions are made — these are ready to scope and dispatch as
-soon as schema-changing work resumes:
+Provider/design decisions are made — these are ready to scope and dispatch in
+the next batches:
 
 | Feature | Decision |
 |---|---|
@@ -63,13 +89,11 @@ soon as schema-changing work resumes:
 | E-signature on contracts | **DocuSign** |
 | SSO | **Google Workspace** |
 | 2FA | **TOTP authenticator app** |
-| Commission tiers | Build the engine now with **placeholder tiers**, tune real numbers later in Administration |
-| Multi-level approval on over-threshold discounts | **Yes** — a second, different ACCT/ADMIN must sign off, reusing the existing `Settings.discountApprovalPct` trigger |
 | Client portal for contacts | **View-only via magic link** (no password account) |
 
-All seven need a Prisma schema change (new columns/tables/enum values) and
-were deliberately held back from the schema-free batch above to avoid
-concurrent migrations colliding against one shared dev database.
+All five still need a Prisma schema change and are held back from full
+parallelism for the same reason Batch A's three were run on isolated
+Postgres instances.
 
 ## Deferred — own session, not a quick add
 
@@ -82,8 +106,11 @@ concurrent migrations colliding against one shared dev database.
   PWA would need; there's no client to push to yet either way. Commit
   `5b908da` ("Mobile setup") already laid the CORS/auth groundwork.
 - **Message search, edit/delete, reactions** on Messages — `docs/roadmap.md`'s
-  known follow-ups from the original messaging build; not yet touched in this
-  round.
+  known follow-ups from the original messaging build. Not yet touched, but
+  scoping found `Message.editedAt`/`deletedAt` already exist in the schema
+  (half-built — `deletedAt` is even filtered in one query already) with no
+  endpoint that ever sets them, so edit/delete needs **no migration**, only
+  wiring. Reactions still need a new `MessageReaction` table.
 - **Custom / ad hoc report builder** — a pivot-style builder beyond the 10
   canned report types; not yet scoped.
 

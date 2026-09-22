@@ -120,6 +120,12 @@ Two things the queue does beyond approve/return:
   **Custom package** pill, and the approve dialog will not submit until the approver ticks an explicit
   acknowledgement that they are approving a non-catalogue package *as priced*. Approving blind is the
   failure this prevents.
+- **Second sign-off on a deep discount.** A row discounted past `Settings.discountApprovalPct` cannot
+  be approved by one person alone. The first `submission.approve` call records who's asking and leaves
+  the sale `PENDING`, showing "Awaiting 2nd sign-off — requested by X"; a *different* ACCT/ADMIN's
+  approve call is what actually moves it to `APPROVED`. The requester never sees an Approve button on
+  their own request — the same maker/checker split as Payroll submit/approve, enforced both in the UI
+  and (the real guarantee) server-side: the same user trying to confirm their own request is refused.
 - **Direct Edit shortcut** on a row, so a returned sale can be corrected without opening it first.
 
 ### QuickBooks — `/qbo`
@@ -171,8 +177,16 @@ period, and the arithmetic it came from.
 | My pay | all roles | Your own statement: base, commission, gross — beside your full profile, the hours and sales it was derived from, and your lifetime earnings. Also where you submit the period for approval, and where you download it as a **payslip**. |
 | Payroll run | `payroll.viewAll` (ACCT, ADMIN) | Every active account for the period, with run totals, and a row that opens into that person's statement. |
 | Approvals | `payroll.approve` (ACCT, ADMIN) | The queue of submitted payroll invoices — edit the figures, then approve or reject. |
+| Commission tiers | `payroll.manageTiers` (ACCT, ADMIN) | The global tier table — a revenue threshold and a bonus %, applied progressively on top of the flat per-sale commission every rep already earns. Seeded with a placeholder pending real numbers. |
 
-A rep with neither permission sees no tab bar at all, just their own statement.
+A rep with neither `payroll.viewAll` nor `payroll.approve` sees no tab bar at all, just their own statement.
+
+**Tier bonus is additive, never a rewrite.** `gross = base + commission + tierBonus`. The per-sale
+commission stamped on each `Submission` at creation is never touched by the tier table — only the
+aggregate bonus, computed once per period from the rep's total commission-eligible revenue, moves. A
+rep who never crosses a threshold sees no tier-bonus line at all, not a $0.00 one. Once a payroll
+invoice is submitted, its `tierBonus` freezes exactly like base and commission already did — editing
+the tier table afterward never moves a figure already submitted for approval.
 
 **The period defaults to a calendar month but is not limited to one.** The picker steps month by
 month, or drops into a custom `from`/`to` range typed in directly — a genuinely custom range spells
@@ -319,7 +333,7 @@ roles can raise its own to ADMIN**, so this grant is effectively a grant of ever
 | Users & roles | Lists staff accounts and changes each one's role, pay basis (pay type plus whether they earn commission) and rates. Opening a user also shows their **Sales this period** — the same panel Payroll → My pay uses. |
 | Packages & pricing | Three cards: **Shows**, the package catalogue, and the add-on catalogue. New rows are created from the button on each card, or bulk-created via **Import CSV** (same underlying create call, per-row error reporting, no schema bypassed); package and show ids are derived from the brand (and city/season), and stay fixed once created because that is what submissions point at. |
 | Tax rates | Adds to and maintains the tax rates applied at pricing time. New profiles are created from the button on the card; the code is typed, not derived, because it is the key packages and cities point at. |
-| Settings | Discount approval threshold, invoice prefix and next invoice number (read-only, allocated transactionally), and the FX rates every report converts through. |
+| Settings | Discount approval threshold, invoice prefix and next invoice number (read-only, allocated transactionally), and the FX rates every report converts through — editing them appends to a rate history rather than overwriting it, so a report for an old period keeps using the rate that was actually in force then, not whatever's live today. |
 | Configuration | Edits runtime config straight to the database — no redeploy — for values that aren't needed before the database is reachable. Passwords and secrets stay in env. Also where QuickBooks itself is connected: OAuth connect/disconnect, and a mapping card pointing VFW tax profiles, GL accounts and departments at their QuickBooks counterparts. See `docs/quickbooks-integration.md`. |
 
 Tabs are defined in `frontend/src/pages/Admin.tsx` (`TABS`); the Configuration tab lives in `frontend/src/pages/AdminConfig.tsx`.
