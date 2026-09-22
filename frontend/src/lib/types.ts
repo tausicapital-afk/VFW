@@ -135,6 +135,8 @@ export interface Catalog {
   glAccounts: GlAccount[];
   cities: City[];
   seasons: Season[];
+  /** Settings.discountApprovalPct, live — see Queue's discount column. */
+  discountApprovalPct: Money;
 }
 
 export interface Contact extends TestFlagged {
@@ -252,6 +254,15 @@ export interface Submission extends TestFlagged {
   submittedAt: string | null;
   approvedAt: string | null;
   exportedAt: string | null;
+  /**
+   * Two-person sign-off on an over-threshold discount (Settings.discountApprovalPct).
+   * Set by the FIRST approve() call on such a sale; null once a different
+   * approver confirms it (or the sale leaves PENDING some other way). See
+   * SubmissionsService.approve.
+   */
+  discountOverrideRequestedAt: string | null;
+  discountOverrideRequestedById: string | null;
+  discountOverrideRequestedBy: { id: string; name: string } | null;
   rep: { id: string; name: string; colour: string; role?: Role };
   contact: Contact;
   event: EventRow;

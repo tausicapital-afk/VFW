@@ -61,10 +61,24 @@ export class SubmissionsController {
     return this.submissions.create(dto, user);
   }
 
+  // A normal (or second-signoff) approval stays 201, as it always has. An
+  // over-threshold sale's FIRST approve() call is a valid waypoint rather than
+  // a decision — it records who is asking and comes back 200, not an error, so
+  // the frontend can render it distinctly from either a 400 or a completed
+  // approval. See SubmissionsService.approve.
   @Post(':id/approve')
   @Can('submission.approve')
-  approve(@Param('id') id: string, @Body() dto: ApproveDto, @CurrentUser() user: AuthUser) {
-    return this.submissions.approve(id, dto, user);
+  async approve(
+    @Param('id') id: string,
+    @Body() dto: ApproveDto,
+    @CurrentUser() user: AuthUser,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.submissions.approve(id, dto, user);
+    if ((result as { outcome?: string }).outcome === 'override_requested') {
+      res.status(200);
+    }
+    return result;
   }
 
   @Post(':id/reject')

@@ -100,20 +100,15 @@ export class ApproveDto {
   costCentre?: string;
 
   /**
-   * Sign-off that this sale's discount exceeds Settings.discountApprovalPct.
-   * Named and explicit, like everything else on this API: an approver has to say
-   * out loud that they are overriding the threshold, and the audit entry records
-   * that they did. Submissions at or under the threshold ignore it entirely.
-   */
-  @IsOptional() @IsBoolean()
-  acknowledgeDiscountOverride?: boolean;
-
-  /**
    * Sign-off that this sale's package was customized or built ad-hoc rather
-   * than sold straight off the rate card — the same "say it out loud"
-   * mechanism as acknowledgeDiscountOverride, for the same reason: a rep-typed
-   * price or description must never reach approval indistinguishably from a
-   * catalogue sale.
+   * than sold straight off the rate card — a "say it out loud" mechanism: a
+   * rep-typed price or description must never reach approval indistinguishably
+   * from a catalogue sale.
+   *
+   * A discount past Settings.discountApprovalPct is gated differently — not by
+   * a same-call acknowledgment like this one, but by requiring a second,
+   * different ACCT/ADMIN to call approve() again. See
+   * SubmissionsService.approve.
    */
   @IsOptional() @IsBoolean()
   acknowledgeCustomPackage?: boolean;

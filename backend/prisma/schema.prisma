@@ -134,6 +134,7 @@ model User {
   submissions       Submission[]       @relation("SubmissionRep")
   approvals         Submission[]       @relation("SubmissionApprover")
   voided            Submission[]       @relation("SubmissionVoider")
+  discountOverridesRequested Submission[] @relation("SubmissionDiscountOverrideRequester")
   contactsCreated   Contact[]
   paymentsRecorded  Payment[]
   installmentsPaid  Installment[]      @relation("InstallmentPayer")
@@ -514,6 +515,23 @@ model Submission {
   approvedAt   DateTime?
   approvedById String?
   approvedBy   User?     @relation("SubmissionApprover", fields: [approvedById], references: [id])
+
+  // Two-person sign-off for a discount past Settings.discountApprovalPct (see
+  // SubmissionsService.approve). The FIRST approve() call on an over-threshold
+  // sale does not approve it — it stamps who asked for the override and when,
+  // and the submission stays PENDING carrying these two fields as a visible
+  // "needs a second sign-off" marker. A SECOND, different user with
+  // submission.approve then calls approve() again to actually approve it;
+  // approvedById on the row is that second person, kept distinct from the
+  // requester here so the audit trail shows both identities even after the
+  // request fields would otherwise be indistinguishable from a normal approval.
+  // Cleared (both fields) whenever a submission leaves PENDING — approved,
+  // rejected or returned — so a resubmitted/returned-then-resent sale starts
+  // the two-person flow fresh rather than remembering a stale requester.
+  discountOverrideRequestedAt   DateTime?
+  discountOverrideRequestedById String?
+  discountOverrideRequestedBy   User?     @relation("SubmissionDiscountOverrideRequester", fields: [discountOverrideRequestedById], references: [id])
+
   rejectedAt   DateTime?
   rejectReason String?
   returnNote   String?

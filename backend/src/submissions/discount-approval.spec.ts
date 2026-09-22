@@ -3,20 +3,26 @@ import { createTestApp, http, loginCookie } from '../../test/app';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
- * Settings.discountApprovalPct, enforced. A rep may still propose any discount
- * up to 100% — the gate is Accounting's sign-off, not the rep's keyboard — so
- * these drive the real approve endpoint through the real guard, exactly as
+ * Settings.discountApprovalPct, enforced — and, on top of it, a maker/checker
+ * split: a discount past the threshold cannot be approved by one person acting
+ * alone. The FIRST approve() call on such a sale only *requests* a second
+ * sign-off (200, still PENDING); a SECOND, genuinely different ACCT/ADMIN must
+ * call approve() again to actually approve it. The same person cannot be both
+ * (400) — that refusal is the core guarantee of the whole feature.
+ *
+ * These drive the real approve endpoint through the real guard, exactly as
  * acl.spec.ts does, rather than unit-testing the service in isolation.
  *
  * The threshold itself is derived at approval time from the stored money (see
- * PricingService.discountApproval), which is what makes the last case here work
- * with no migration and no backfill.
+ * PricingService.discountApproval), which is what makes the "moving the
+ * threshold" case below work with no migration and no backfill.
  */
 describe('discount approval threshold', () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let sales: string;
   let acct: string;
+  let admin: string;
   let originalThreshold: string;
 
   /** A fresh PENDING submission discounted by `pct`% off the package price. */
@@ -51,6 +57,7 @@ describe('discount approval threshold', () => {
     prisma = app.get(PrismaService);
     sales = await loginCookie(app, 'marielle@vanfashionweek.com');
     acct = await loginCookie(app, 'accounting@vanfashionweek.com');
+    admin = await loginCookie(app, 'it@vanfashionweek.com');
 
     const settings = await prisma.settings.findUniqueOrThrow({ where: { id: 1 } });
     originalThreshold = settings.discountApprovalPct.toString();
@@ -63,7 +70,7 @@ describe('discount approval threshold', () => {
     await app?.close();
   });
 
-  it('at or under the threshold: approves exactly as before, no new field required', async () => {
+  it('at or under the threshold: approves exactly as before, no second sign-off required', async () => {
     const id = await pending(10);
 
     const res = await http(app).post(`/api/submissions/${id}/approve`).set('Cookie', acct).send();
@@ -77,65 +84,104 @@ describe('discount approval threshold', () => {
     expect(entry.payload.discountOverride).toBeUndefined();
   });
 
-  it('over the threshold, with no acknowledgment: 400', async () => {
+  it('over the threshold: the first approve() call only requests sign-off — 200, still PENDING', async () => {
     const id = await pending(25);
 
-    const res = await http(app).post(`/api/submissions/${id}/approve`).set('Cookie', acct).send();
-
-    expect(res.status).toBe(400);
-    const msg = JSON.stringify(res.body.message);
-    expect(msg).toMatch(/25\.00%/);
-    expect(msg).toMatch(/15\.00%/);
-    expect(msg).toMatch(/acknowledgeDiscountOverride/);
-
-    // Refused, not half-applied: still pending, and nothing was audited.
-    const still = await prisma.submission.findUniqueOrThrow({ where: { id } });
-    expect(still.status).toBe('PENDING');
-    expect((await auditFor(id)).some((e) => e.action === 'APPROVED')).toBe(false);
-  });
-
-  it('over the threshold, acknowledged: 201, and the audit says why sign-off was needed', async () => {
-    const id = await pending(25);
-
-    const refused = await http(app)
-      .post(`/api/submissions/${id}/approve`)
-      .set('Cookie', acct)
-      .send({ glAccount: '4050' });
-    expect(refused.status).toBe(400);
-
-    // Same submission, same approver — now with the override said out loud.
     const res = await http(app)
       .post(`/api/submissions/${id}/approve`)
       .set('Cookie', acct)
-      .send({ glAccount: '4050', acknowledgeDiscountOverride: true });
+      .send({ glAccount: '4050' });
 
-    expect(res.status).toBe(201);
-    expect(res.body.status).toBe('APPROVED');
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('PENDING');
+    expect(res.body.discountOverrideRequestedById).toBeTruthy();
+    expect(res.body.discountOverrideRequestedBy).toMatchObject({ name: 'Hannah Okafor' });
+    expect(res.body.message).toMatch(/second sign-off|different ACCT\/ADMIN|second approver/i);
+
+    // Refused-not-yet-decided, not half-applied: still pending, and nothing was
+    // approved. GL account is untouched too — it is only set once actually approved.
+    const still = await prisma.submission.findUniqueOrThrow({ where: { id } });
+    expect(still.status).toBe('PENDING');
+    expect(still.glCode).not.toBe('4050');
+    expect((await auditFor(id)).some((e) => e.action === 'APPROVED')).toBe(false);
+
+    const [entry] = await auditFor(id);
+    expect(entry.action).toBe('DISCOUNT_OVERRIDE_REQUESTED');
+    expect(entry.detail).toMatch(/25\.00%/);
+    expect(entry.detail).toMatch(/15\.00%/);
+  });
+
+  it('the SAME user cannot confirm their own override request: 400', async () => {
+    const id = await pending(25);
+
+    const first = await http(app).post(`/api/submissions/${id}/approve`).set('Cookie', acct).send();
+    expect(first.status).toBe(200);
+
+    const second = await http(app).post(`/api/submissions/${id}/approve`).set('Cookie', acct).send();
+
+    expect(second.status).toBe(400);
+    const msg = JSON.stringify(second.body.message);
+    expect(msg).toMatch(/different ACCT\/ADMIN|cannot.*confirm|maker.*checker|yourself/i);
+
+    // Still pending, still carrying the original request untouched.
+    const still = await prisma.submission.findUniqueOrThrow({ where: { id } });
+    expect(still.status).toBe('PENDING');
+    expect(still.discountOverrideRequestedById).toBeTruthy();
+    expect((await auditFor(id)).some((e) => e.action === 'APPROVED')).toBe(false);
+  });
+
+  it('a DIFFERENT user can confirm: 201, approved, and the audit shows both identities', async () => {
+    const id = await pending(25);
+
+    const requested = await http(app)
+      .post(`/api/submissions/${id}/approve`)
+      .set('Cookie', acct)
+      .send();
+    expect(requested.status).toBe(200);
+
+    // A different approver — admin, not accounting — confirms.
+    const confirmed = await http(app)
+      .post(`/api/submissions/${id}/approve`)
+      .set('Cookie', admin)
+      .send({ glAccount: '4050' });
+
+    expect(confirmed.status).toBe(201);
+    expect(confirmed.body.status).toBe('APPROVED');
+    expect(confirmed.body.glCode).toBe('4050');
+    // Resolved — the request markers are cleared once actually approved.
+    expect(confirmed.body.discountOverrideRequestedById).toBeNull();
 
     const [entry] = await auditFor(id);
     expect(entry.action).toBe('APPROVED');
-    // Self-explanatory on its face — an accountant reading the trail sees the
-    // threshold that was in force and the discount that beat it, not "APPROVED".
+    // The audit trail names BOTH people: who asked, and who confirmed.
     expect(entry.detail).toMatch(/discount override/i);
     expect(entry.detail).toMatch(/25\.00%/);
     expect(entry.detail).toMatch(/15\.00%/);
+    expect(entry.detail).toMatch(/Hannah Okafor/); // requested by
+    expect(entry.detail).toMatch(/System Administrator/); // confirmed by
     expect(entry.payload.discountOverride).toMatchObject({
       thresholdPct: '15.00',
       discountPct: '25.00',
       discountType: 'PCT',
+      requestedBy: { name: 'Hannah Okafor' },
+      confirmedBy: { name: 'System Administrator' },
     });
   });
 
   it('moving the threshold re-judges the next approval — no migration, no backfill', async () => {
     const id = await pending(25);
 
-    // Refused at 15%...
-    expect(
-      (await http(app).post(`/api/submissions/${id}/approve`).set('Cookie', acct).send()).status,
-    ).toBe(400);
+    // At 15%, the first touch only requests sign-off...
+    const requested = await http(app)
+      .post(`/api/submissions/${id}/approve`)
+      .set('Cookie', acct)
+      .send();
+    expect(requested.status).toBe(200);
+    expect(requested.body.status).toBe('PENDING');
 
-    // ...and with Accounting having raised the bar to 30%, the very same
-    // submission approves with no acknowledgment at all.
+    // ...but with Accounting having raised the bar to 30% before anyone
+    // confirms, the very same submission approves outright on the next call —
+    // even from the very same user, since it is no longer over threshold at all.
     await setThreshold('30');
     const res = await http(app).post(`/api/submissions/${id}/approve`).set('Cookie', acct).send();
 
@@ -165,19 +211,58 @@ describe('discount approval threshold', () => {
     expect(created.status).toBe(201);
     const id = created.body.id as string;
 
-    const refused = await http(app)
+    const requested = await http(app)
       .post(`/api/submissions/${id}/approve`)
       .set('Cookie', acct)
       .send();
-    expect(refused.status).toBe(400);
+    expect(requested.status).toBe(200);
+    expect(requested.body.status).toBe('PENDING');
 
-    const res = await http(app)
-      .post(`/api/submissions/${id}/approve`)
-      .set('Cookie', acct)
-      .send({ acknowledgeDiscountOverride: true });
+    const res = await http(app).post(`/api/submissions/${id}/approve`).set('Cookie', admin).send();
     expect(res.status).toBe(201);
 
     const [entry] = await auditFor(id);
     expect(entry.payload.discountOverride).toMatchObject({ discountType: 'AMT' });
+  });
+
+  it('rejecting a sale awaiting a second sign-off works normally, even for the requester', async () => {
+    const id = await pending(25);
+
+    const requested = await http(app)
+      .post(`/api/submissions/${id}/approve`)
+      .set('Cookie', acct)
+      .send();
+    expect(requested.status).toBe(200);
+
+    // Rejecting undoes the sale rather than committing it — not gated behind
+    // the two-person rule, and the same person who requested the override may
+    // do it.
+    const rejected = await http(app)
+      .post(`/api/submissions/${id}/reject`)
+      .set('Cookie', acct)
+      .send({ reason: 'Discount exceeds authority' });
+
+    expect(rejected.status).toBe(201);
+    expect(rejected.body.status).toBe('REJECTED');
+    expect(rejected.body.discountOverrideRequestedById).toBeNull();
+  });
+
+  it('returning a sale awaiting a second sign-off works normally, and clears the request', async () => {
+    const id = await pending(25);
+
+    const requested = await http(app)
+      .post(`/api/submissions/${id}/approve`)
+      .set('Cookie', acct)
+      .send();
+    expect(requested.status).toBe(200);
+
+    const returned = await http(app)
+      .post(`/api/submissions/${id}/return`)
+      .set('Cookie', acct)
+      .send({ note: 'Please re-check pricing with the client' });
+
+    expect(returned.status).toBe(201);
+    expect(returned.body.status).toBe('RETURNED');
+    expect(returned.body.discountOverrideRequestedById).toBeNull();
   });
 });
