@@ -19,6 +19,13 @@ import { RepStats, ScoreWeights, parseWeights, rating, score, scoreParts } from 
  *    Settings.fxRates BEFORE it is summed — inside the SUM(), not after it. The
  *    rates live in the database so Accounting can change them without a deploy,
  *    so they are read on every request and never hardcoded here.
+ *
+ *    Which rate, though, depends on when the report is FOR, not when it is
+ *    RUN: a report scoped to a past period resolves through the FxRateSnapshot
+ *    in force at the end of that period (falling back to the live
+ *    Settings.fxRates if the period predates the oldest snapshot), so a report
+ *    someone ran in March keeps producing the same numbers in September even
+ *    after the rate has moved on. See resolveFxRates below.
  */
 
 export const REPORTS = {
@@ -80,12 +87,55 @@ const int = (v: unknown): number => Number(v ?? 0);
 export class ReportsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  private async settings() {
+  /**
+   * `weights` always comes from the live Settings row — score weights are a
+   * ranking rule, not a historical fact, so there is nothing to backdate. `fx`
+   * is different: see resolveFxRates.
+   */
+  private async settings(f?: ReportFilters) {
     const s = await this.prisma.settings.findUniqueOrThrow({ where: { id: 1 } });
     return {
-      fx: this.parseRates(s.fxRates),
+      fx: this.parseRates(await this.resolveFxRates(s.fxRates, f)),
       weights: parseWeights(s.scoreWeights),
     };
+  }
+
+  /**
+   * The FX rate set in force for the period being reported — the whole point
+   * of FxRateSnapshot. A report run today for last March must consolidate
+   * through March's rate, not whatever Accounting has typed into Settings
+   * since, or a March report silently re-prices itself the next time the rate
+   * moves.
+   *
+   * The period's END date is what "as of" means here: a report for
+   * 2026-03-01..2026-03-31 uses the rate in force by 2026-03-31, matching how
+   * an accountant would read "the March rate." A report with only `from` (an
+   * open-ended window) uses that date instead, and a report with neither
+   * filter — "everything, as of now" — has no period to backdate to and reads
+   * Settings.fxRates directly, which is always the CURRENT rate: it and the
+   * latest snapshot are written together by AdminService.updateSettings, so
+   * they never disagree.
+   *
+   * Falls back to the live `liveRates` when no snapshot predates the period —
+   * the case for any report whose period ends before this feature existed (or
+   * before Accounting ever changed a rate). That fallback is what keeps a
+   * report for a period that predates FxRateSnapshot producing the exact same
+   * numbers it always did; the migration that introduced this table backfills
+   * one snapshot from the then-current Settings.fxRates so that gap is as
+   * small as it can be, but it can never close it entirely for periods before
+   * that backfill date.
+   */
+  private async resolveFxRates(liveRates: unknown, f?: ReportFilters): Promise<unknown> {
+    const asOf = f?.to ?? f?.from;
+    if (!asOf) return liveRates;
+
+    const snapshot = await this.prisma.fxRateSnapshot.findFirst({
+      where: { effectiveFrom: { lte: new Date(`${asOf}T00:00:00.000Z`) } },
+      // Same-day edits are possible (Accounting corrects a typo minutes after
+      // saving); createdAt breaks the tie so the query is deterministic.
+      orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
+    });
+    return snapshot ? snapshot.rates : liveRates;
   }
 
   /** Settings.fxRates is JSON, so it is not type-checked. CAD is pinned at 1. */
@@ -139,7 +189,7 @@ export class ReportsService {
 
   async summary(key: ReportKey, f: ReportFilters): Promise<ReportTable> {
     if (!REPORT_KEYS.includes(key)) throw new BadRequestException(`Unknown report "${key}"`);
-    const { fx, weights } = await this.settings();
+    const { fx, weights } = await this.settings(f);
 
     const build: Record<ReportKey, () => Promise<Omit<ReportTable, 'key' | 'name'>>> = {
       revenue: () => this.revenue(f),
@@ -622,7 +672,7 @@ export class ReportsService {
   }
 
   async leaderboard(f: ReportFilters) {
-    const { fx, weights } = await this.settings();
+    const { fx, weights } = await this.settings(f);
     const reps = await this.repRows(f, fx, weights);
     return { weights, reps };
   }

@@ -760,6 +760,38 @@ model Settings {
   updatedAt           DateTime @updatedAt
 }
 
+// A dated history of Settings.fxRates. Settings.fxRates itself stays the
+// *live* rate — what the dashboard shows on every load — but a report needs
+// the rate that was actually in force for the period it is summarizing, not
+// whatever Accounting has since typed in. Every write to Settings.fxRates
+// (AdminService.updateSettings) inserts one of these rather than overwriting
+// history, and ReportsService resolves a report's rate by finding the latest
+// snapshot at or before the period being reported (falling back to the live
+// Settings.fxRates when no snapshot predates it — see the migration that
+// creates this table for the backfill that guarantees that fallback is rare).
+model FxRateSnapshot {
+  id String @id @default(cuid())
+
+  // The calendar date this rate set took effect. @db.Date, not a timestamp —
+  // a rate applies to a whole day, and a report period is date-granular too.
+  effectiveFrom DateTime @db.Date
+
+  // Same shape as Settings.fxRates: one rate per Currency, CAD pinned at 1.
+  rates Json
+
+  createdAt DateTime @default(now())
+
+  // Who entered this rate set. Deliberately a plain column, not a Prisma
+  // relation to User — this table only ever needs the id for the audit trail,
+  // and a relation field would mean also editing the User model, which is out
+  // of scope for this change.
+  createdById String?
+
+  // Reports look this up by "latest effectiveFrom <= period date" — see
+  // ReportsService.resolveFxRates.
+  @@index([effectiveFrom])
+}
+
 // ---------------------------------------------------------------------------
 // System configuration — the operational credentials (SMTP, object storage)
 // that used to live only in .env / Railway variables, moved into the database

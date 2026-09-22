@@ -221,6 +221,12 @@ export class AdminController {
   updateSettings(@Body() dto: UpdateSettingsDto, @CurrentUser() user: AuthUser) {
     return this.admin.updateSettings(dto, user);
   }
+
+  @Get('admin/settings/fx-history')
+  @Can('admin.manage')
+  fxRateHistory() {
+    return this.admin.fxRateHistory();
+  }
 }
 
 @Module({

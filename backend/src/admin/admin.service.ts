@@ -1296,6 +1296,23 @@ export class AdminService {
 
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.settings.update({ where: { id: 1 }, data });
+
+      // A new FX rate set is a new page of history, not an overwrite of the
+      // last one — ReportsService.resolveFxRates depends on every past rate
+      // set still being findable by the date it took effect. Only written
+      // when fxRates was actually part of this edit; a save that only touched
+      // the discount threshold or score weights does not manufacture a rate
+      // change that never happened.
+      if (data.fxRates !== undefined) {
+        await tx.fxRateSnapshot.create({
+          data: {
+            effectiveFrom: new Date(),
+            rates: data.fxRates,
+            createdById: actor.id,
+          },
+        });
+      }
+
       await this.audit.log(
         {
           actorId: actor.id,
@@ -1306,6 +1323,17 @@ export class AdminService {
         tx,
       );
       return updated;
+    });
+  }
+
+  /**
+   * The FX rate history for Administration -> Settings: every snapshot ever
+   * written, newest first, so Accounting can see when a rate last changed
+   * without having to reconstruct it from the audit log.
+   */
+  async fxRateHistory() {
+    return this.prisma.fxRateSnapshot.findMany({
+      orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
     });
   }
 
