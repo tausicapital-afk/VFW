@@ -1,10 +1,11 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { SubmissionStatus } from '@prisma/client';
+import { SignatureRequestStatus, SubmissionStatus } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/auth.guard';
 import { EmailNotConfiguredError, EmailService } from '../common/email';
 import { PrismaService } from '../prisma/prisma.service';
+import { StorageService } from '../storage/storage.service';
 import { SubmissionsService } from '../submissions/submissions.service';
 
 /**
@@ -40,6 +41,12 @@ export interface PortalSubmission {
   package: string;
   showDate: Date | null;
   createdAt: Date;
+  // The most recent DocuSign request against this sale's contract, if any —
+  // lets the portal show "sent for signature" / "signed" without exposing
+  // anything about the request beyond that (no envelope id, no internal doc
+  // id — see PortalService.signedContractUrl for how the signed copy itself
+  // is fetched, on demand, rather than handed out here).
+  signature: { status: SignatureRequestStatus; sentAt: Date; completedAt: Date | null } | null;
 }
 
 export interface PortalData {
@@ -54,6 +61,7 @@ export class PortalService {
     private readonly email: EmailService,
     private readonly audit: AuditService,
     private readonly submissions: SubmissionsService,
+    private readonly storage: StorageService,
   ) {}
 
   /**
@@ -167,6 +175,27 @@ export class PortalService {
       },
     });
 
+    // One extra query rather than a nested `include` with `take: 1` — kept as
+    // a plain findMany + reduce so "which one is latest" is explicit here
+    // rather than resting on a nested-relation ordering guarantee. A
+    // contact's own submission list is never large enough for this to matter.
+    const latestSignatureBySubmission = new Map<
+      string,
+      { status: SignatureRequestStatus; sentAt: Date; completedAt: Date | null }
+    >();
+    if (submissions.length) {
+      const requests = await this.prisma.signatureRequest.findMany({
+        where: { submissionId: { in: submissions.map((s) => s.id) } },
+        orderBy: { sentAt: 'desc' },
+        select: { submissionId: true, status: true, sentAt: true, completedAt: true },
+      });
+      for (const r of requests) {
+        if (!latestSignatureBySubmission.has(r.submissionId)) {
+          latestSignatureBySubmission.set(r.submissionId, r);
+        }
+      }
+    }
+
     return {
       contact,
       submissions: submissions.map((s) => ({
@@ -183,6 +212,7 @@ export class PortalService {
         package: s.packageNameOverride ?? s.package.name,
         showDate: s.showDate,
         createdAt: s.createdAt,
+        signature: latestSignatureBySubmission.get(s.id) ?? null,
       })),
     };
   }
@@ -191,5 +221,37 @@ export class PortalService {
   async invoicePdf(token: string, submissionId: string): Promise<{ buffer: Buffer; filename: string }> {
     const contactId = await this.resolveContactId(token);
     return this.submissions.invoicePdfForPortal(submissionId, contactId);
+  }
+
+  /**
+   * A short-lived download link for the signed contract, once one exists.
+   * Scoped exactly like invoicePdf above: the token resolves to a contactId,
+   * and the submission — and, through it, the completed SignatureRequest and
+   * its signedDocument — must belong to that same contact, or this 404s the
+   * same way a bad token does. Read-only, like everything else the portal
+   * exposes: this hands back a presigned GET URL rather than embedding any
+   * signing capability in the portal itself (there is nothing here for the
+   * contact to sign — DocuSign already emailed them their own signing link
+   * when the request was sent; this is only for retrieving the result).
+   */
+  async signedContractUrl(token: string, submissionId: string): Promise<{ url: string; filename: string }> {
+    const contactId = await this.resolveContactId(token);
+    const notFound = new NotFoundException('No signed contract found for this sale.');
+
+    const submission = await this.prisma.submission.findFirst({
+      where: { id: submissionId, contactId },
+      select: { id: true },
+    });
+    if (!submission) throw notFound;
+
+    const request = await this.prisma.signatureRequest.findFirst({
+      where: { submissionId, status: SignatureRequestStatus.COMPLETED, signedDocumentId: { not: null } },
+      orderBy: { completedAt: 'desc' },
+      select: { signedDocument: { select: { storageKey: true, filename: true } } },
+    });
+    if (!request?.signedDocument) throw notFound;
+
+    const url = await this.storage.presignDownload(request.signedDocument.storageKey, request.signedDocument.filename);
+    return { url, filename: request.signedDocument.filename };
   }
 }

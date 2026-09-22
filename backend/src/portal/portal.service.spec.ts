@@ -14,7 +14,8 @@ import { PortalService } from './portal.service';
 const acct: AuthUser = { id: 'u-acct', email: 'a@x.com', name: 'A', role: 'ACCT' };
 
 function make() {
-  const prisma = {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const prisma: any = {
     contact: {
       findUnique: jest.fn(),
       findUniqueOrThrow: jest.fn(),
@@ -24,6 +25,7 @@ function make() {
       findFirst: jest.fn(),
     },
     submission: { findMany: jest.fn().mockResolvedValue([]) },
+    signatureRequest: { findMany: jest.fn().mockResolvedValue([]) },
     $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(prisma)),
   };
   const email = {
@@ -33,9 +35,10 @@ function make() {
   };
   const audit = { log: jest.fn().mockResolvedValue(undefined) };
   const submissions = { invoicePdfForPortal: jest.fn() };
+  const storage = { presignDownload: jest.fn() };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const svc = new PortalService(prisma as any, email as any, audit as any, submissions as any);
-  return { svc, prisma, email, audit, submissions };
+  const svc = new PortalService(prisma as any, email as any, audit as any, submissions as any, storage as any);
+  return { svc, prisma, email, audit, submissions, storage };
 }
 
 describe('PortalService.sendLink', () => {
@@ -129,12 +132,41 @@ describe('PortalService.getPortalData', () => {
       [
         'id', 'ref', 'status', 'currency', 'total', 'paidAmount', 'balance',
         'payStatus', 'invoiceNo', 'event', 'package', 'showDate', 'createdAt',
+        'signature',
       ].sort(),
     );
     expect(data.submissions[0]).toMatchObject({
       id: 's1', ref: 'VFW-0001', total: '1000.00', paidAmount: '500.00', balance: '500.00',
       event: 'Vancouver Fashion Week', package: 'Bronze Package',
+      // No signature request was stubbed for this submission — null, not
+      // omitted, so the frontend never has to guard against a missing key.
+      signature: null,
     });
+  });
+
+  it('surfaces the latest signature request status alongside the sale it belongs to', async () => {
+    const { svc, prisma } = make();
+    prisma.contactPortalToken.findFirst.mockResolvedValue({ contactId: 'c1' });
+    prisma.contact.findUniqueOrThrow.mockResolvedValue({ brand: 'Maison X', designer: 'Jamie Lee', company: null });
+    prisma.submission.findMany.mockResolvedValue([
+      {
+        id: 's1', ref: 'VFW-0001', status: 'APPROVED', currency: 'USD',
+        total: { toFixed: () => '1000.00' }, paidAmount: { toFixed: () => '1000.00' }, balance: { toFixed: () => '0.00' },
+        payStatus: 'PAID', invoiceNo: 'VFW-2041', showDate: null, createdAt: new Date('2026-01-01'),
+        event: { name: 'Vancouver Fashion Week' }, package: { name: 'Bronze Package' }, packageNameOverride: null,
+      },
+    ]);
+    const completedAt = new Date('2026-01-05');
+    prisma.signatureRequest.findMany.mockResolvedValue([
+      { submissionId: 's1', status: 'COMPLETED', sentAt: new Date('2026-01-02'), completedAt },
+    ]);
+
+    const data = await svc.getPortalData('tok');
+
+    expect(prisma.signatureRequest.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { submissionId: { in: ['s1'] } } }),
+    );
+    expect(data.submissions[0].signature).toEqual({ status: 'COMPLETED', sentAt: new Date('2026-01-02'), completedAt });
   });
 
   it('gives the exact same "invalid or expired" error for a token that never existed', async () => {

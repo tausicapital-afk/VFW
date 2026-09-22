@@ -22,6 +22,14 @@ import { SentryExceptionFilter } from './common/sentry';
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: true,
+    // Exposes `req.rawBody` (a Buffer) alongside the normal JSON-parsed
+    // `req.body` — it does not change body parsing for any route. The one
+    // consumer today is the DocuSign Connect webhook's optional HMAC check
+    // (see docusign-webhook.service.ts), which — like a Stripe-style
+    // signature — has to hash the exact bytes DocuSign sent, not a
+    // re-serialization of the parsed JSON (key order/number formatting/
+    // whitespace are not guaranteed to round-trip identically).
+    rawBody: true,
   });
 
   // Replace Nest's default logger with pino, so framework logs are structured

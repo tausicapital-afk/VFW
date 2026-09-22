@@ -52,3 +52,10 @@ process.env.DEV_ECHO_LINKS = 'true';
 for (const key of ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET']) {
   process.env[key] = '';
 }
+
+// Same trick again, for DocuSign — docusign-connection.spec.ts asserts on the
+// "not configured" path the same way auth.google.spec.ts does, and a
+// developer's dev .env may well carry real DOCUSIGN_CLIENT_ID/SECRET values.
+for (const key of ['DOCUSIGN_CLIENT_ID', 'DOCUSIGN_CLIENT_SECRET', 'DOCUSIGN_HMAC_KEY']) {
+  process.env[key] = '';
+}

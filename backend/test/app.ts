@@ -21,7 +21,9 @@ import { SESSION_COOKIE } from '../src/common/cookie';
  */
 export async function createTestApp(): Promise<INestApplication> {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-  const app = moduleRef.createNestApplication();
+  // rawBody: true mirrors main.ts — needed so a spec can exercise the
+  // DocuSign Connect webhook's HMAC check against `req.rawBody`.
+  const app = moduleRef.createNestApplication({ rawBody: true });
   app.use(cookieParser());
   app.useGlobalPipes(
     new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),

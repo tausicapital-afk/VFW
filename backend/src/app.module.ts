@@ -21,6 +21,7 @@ import { loggerOptions } from './common/logging';
 import { VfwThrottlerGuard, throttlerOptions } from './common/throttler';
 import { ContactsModule } from './contacts/contacts.controller';
 import { DocumentsModule } from './documents/documents.controller';
+import { DocuSignModule } from './docusign/docusign.controller';
 import { EmailsModule } from './emails/emails.module';
 import { ExportModule } from './export/export.controller';
 import { MessagingModule } from './messaging/messaging.module';
@@ -72,6 +73,7 @@ import { TestDataModule } from './testdata/test-data.controller';
     TestDataModule,
     ExportModule,
     QboModule,
+    DocuSignModule,
     SearchModule,
   ],
   controllers: [AuthController],

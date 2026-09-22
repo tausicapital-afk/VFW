@@ -198,6 +198,7 @@ export interface PortalSubmission {
   package: string;
   showDate: string | null;
   createdAt: string;
+  signature: { status: SignatureRequestStatus; sentAt: string; completedAt: string | null } | null;
 }
 
 export interface PortalData {
@@ -833,7 +834,7 @@ export interface ConfigField {
 }
 
 export interface ConfigGroup {
-  id: 'email' | 'storage' | 'quickbooks' | 'data';
+  id: 'email' | 'storage' | 'quickbooks' | 'docusign' | 'data';
   title: string;
   blurb: string;
   /** null when the group requires nothing — draw no status pill. */
@@ -900,6 +901,36 @@ export interface QboBrowseOption {
   id: string;
   name: string;
   subType?: string;
+}
+
+// ---------------------------------------------------------------------------
+// DocuSign — the OAuth connection (Administration → Configuration →
+// DocuSign) and per-submission signature status (Documents card).
+// ---------------------------------------------------------------------------
+
+/** The admin connection card. GET /api/admin/docusign/status. */
+export interface DocuSignStatus {
+  connected: boolean;
+  environment?: 'demo' | 'production';
+  accountId?: string;
+  accountName?: string | null;
+  connectedAt?: string;
+  accessTokenExpiresAt?: string;
+  refreshTokenExpiresAt?: string;
+  refreshTokenExpired?: boolean;
+}
+
+export type SignatureRequestStatus = 'SENT' | 'DELIVERED' | 'COMPLETED' | 'DECLINED' | 'VOIDED';
+
+/** One row per "this document was sent for signature". Shown on DocumentsCard. */
+export interface SignatureRequestSummary {
+  id: string;
+  documentId: string;
+  status: SignatureRequestStatus;
+  sentAt: string;
+  completedAt: string | null;
+  sentBy: { id: string; name: string } | null;
+  signedDocumentId: string | null;
 }
 
 // ---------------------------------------------------------------------------

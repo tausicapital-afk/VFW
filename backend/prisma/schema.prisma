@@ -184,6 +184,9 @@ model User {
   qboConnections      QboConnection[]
   qboMappingsUpdated  QboMapping[]
 
+  docusignConnections   DocuSignConnection[]
+  signatureRequestsSent SignatureRequest[]   @relation("SignatureRequestSender")
+
   @@index([role, status])
 }
 
@@ -633,6 +636,7 @@ model Submission {
   comments     InternalComment[]
   audit        AuditEntry[]
   emails       EmailMessage[]    @relation("EmailSubmission")
+  signatureRequests SignatureRequest[]
 
   @@index([status])
   @@index([repId, status])
@@ -741,6 +745,15 @@ model Document {
 
   uploadedById String
   uploadedBy   User   @relation(fields: [uploadedById], references: [id])
+
+  // The other side of e-signature: this document as the thing sent out to be
+  // signed (a submission may send the same uploaded contract more than once,
+  // e.g. a re-send after a decline), and this document as the signed PDF that
+  // came back for exactly one completed SignatureRequest. Two distinct
+  // relations on the same model, so "documents I was sent out as" and "the one
+  // request I am the result of" don't collide.
+  sentForSignature   SignatureRequest[] @relation("SignatureSourceDocument")
+  signedForSignature SignatureRequest?  @relation("SignatureSignedDocument")
 
   @@index([submissionId])
 }
@@ -1018,6 +1031,116 @@ model QboMapping {
   updatedBy   User?          @relation(fields: [updatedById], references: [id])
 
   @@unique([kind, localCode])
+}
+
+// ---------------------------------------------------------------------------
+// DocuSign — e-signature on an uploaded contract. Same shape as QuickBooks
+// above: a singleton OAuth connection (id fixed at 1) that authorizes this
+// console against one DocuSign account, plus the records the console itself
+// owns (SignatureRequest) that track a submission's contract from "sent" to
+// "signed and stored back as a Document".
+//
+// `accessToken`/`refreshToken` are AES-256-GCM ciphertext, same convention as
+// QboConnection — see config.crypto.ts. DocuSign's access token is short-lived
+// (~1 hour) and refreshed automatically; the refresh token is long-lived but
+// (like Intuit's) goes stale after a stretch of disuse, tracked the same way
+// via `refreshTokenExpiresAt` so a dead connection fails with "reconnect",
+// never a silent retry loop.
+// ---------------------------------------------------------------------------
+model DocuSignConnection {
+  id Int @id @default(1)
+
+  // demo | production — which DocuSign OAuth/API host this connection talks
+  // to. Decided at connect time by the DOCUSIGN_ENVIRONMENT config field,
+  // stored here too so a later config change doesn't retroactively reinterpret
+  // a live token (same reasoning as QboConnection.environment).
+  environment String
+
+  // DocuSign hands both of these back from GET /oauth/userinfo right after the
+  // token exchange — unlike QBO's realmId, there is nothing for an admin to
+  // type in. `accountId` is the DocuSign account (their "realm"); every
+  // eSignature API call is scoped under {baseUri}/restapi/v2.1/accounts/{accountId}/...
+  // `baseUri` is the account's actual API host (DocuSign accounts are
+  // provisioned onto one of several regional hosts — na1/na2/na3/eu/…), which
+  // is why it has to come from userinfo rather than being derived from
+  // `environment` alone.
+  accountId   String
+  baseUri     String
+  accountName String?
+
+  accessToken           String
+  accessTokenExpiresAt  DateTime
+  refreshToken          String
+  refreshTokenExpiresAt DateTime
+
+  connectedAt   DateTime @default(now())
+  connectedById String?
+  connectedBy   User?    @relation(fields: [connectedById], references: [id])
+
+  updatedAt DateTime @updatedAt
+}
+
+// Mirrors the envelope statuses DocuSign's eSignature API actually uses
+// (Envelope.status / the Connect "event" a webhook delivers), not a vocabulary
+// invented here. Deliberately a subset: DocuSign also has `created`,
+// `correct`, `deleted`, `template` and a couple of others that never apply to
+// an envelope this console created and sent immediately (see
+// DocuSignApiService.sendForSignature — every envelope is created with
+// status "sent" in the same call, so `created`/`draft` are never reachable
+// from this codebase's own flow, only from the DocuSign side).
+enum SignatureRequestStatus {
+  SENT
+  DELIVERED
+  COMPLETED
+  DECLINED
+  VOIDED
+}
+
+// One row per "this uploaded Document was sent to DocuSign for signature".
+// A submission may have several over time (a decline, then a re-send with a
+// corrected contract), which is why this hangs off `documentId` (the specific
+// upload that was sent) rather than the submission alone.
+model SignatureRequest {
+  id String @id @default(cuid())
+
+  submissionId String
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  // The uploaded contract that was sent out. NOT the signed result — see
+  // `signedDocumentId` below for that.
+  documentId String
+  document   Document @relation("SignatureSourceDocument", fields: [documentId], references: [id])
+
+  // DocuSign's own envelope id. This is the ONLY thing a webhook notification
+  // is trusted to name — see DocuSignController's webhook handler: the
+  // envelope id is looked up against a row this console itself created via
+  // sendForSignature, and every write that follows (status, submissionId,
+  // documentId) comes from THIS row, never from the webhook payload's own
+  // claims about which submission or document it concerns. A payload cannot
+  // mark a submission "signed" that it was never issued an envelope for.
+  docusignEnvelopeId String @unique
+
+  status SignatureRequestStatus @default(SENT)
+
+  sentAt      DateTime  @default(now())
+  completedAt DateTime?
+
+  sentById String
+  sentBy   User   @relation("SignatureRequestSender", fields: [sentById], references: [id])
+
+  // The signed PDF DocuSign returns once the envelope completes, stored back
+  // as its own Document row (type "Signed Contract") and attributed to the
+  // hidden system user — see docusign.service.ts's `systemUser()`. Null until
+  // COMPLETED; unique because a given signed Document is the result of
+  // exactly one request, never shared.
+  signedDocumentId String?   @unique
+  signedDocument   Document? @relation("SignatureSignedDocument", fields: [signedDocumentId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([submissionId])
+  @@index([documentId])
 }
 
 // ---------------------------------------------------------------------------

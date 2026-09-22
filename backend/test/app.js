@@ -18,7 +18,7 @@ library_1.Decimal.prototype.toJSON = function () {
 };
 async function createTestApp() {
     const moduleRef = await testing_1.Test.createTestingModule({ imports: [app_module_1.AppModule] }).compile();
-    const app = moduleRef.createNestApplication();
+    const app = moduleRef.createNestApplication({ rawBody: true });
     app.use((0, cookie_parser_1.default)());
     app.useGlobalPipes(new common_1.ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     await app.init();
