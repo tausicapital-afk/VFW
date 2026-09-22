@@ -4,7 +4,14 @@ import { AuthUser, CurrentUser } from '../common/auth.guard';
 import { SESSION_COOKIE, sessionCookie } from '../common/cookie';
 import { PayrollModule } from '../payroll/payroll.controller';
 import { ProfileService } from './profile.service';
-import { AvatarCommitDto, AvatarPresignDto, ChangePasswordDto, UpdateProfileDto } from './dto';
+import {
+  AvatarCommitDto,
+  AvatarPresignDto,
+  ChangePasswordDto,
+  ConfirmTotpDto,
+  DisableTotpDto,
+  UpdateProfileDto,
+} from './dto';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -68,6 +75,25 @@ export class ProfileController {
     const { token } = await this.profile.changePassword(dto, user);
     res.cookie(SESSION_COOKIE, token, sessionCookie(DAY_MS));
     return { ok: true };
+  }
+
+  // ---------------------------------------------------------------------
+  // Two-factor authentication (TOTP)
+  // ---------------------------------------------------------------------
+
+  @Post('totp/enroll')
+  enrollTotp(@CurrentUser() user: AuthUser) {
+    return this.profile.enrollTotp(user);
+  }
+
+  @Post('totp/confirm')
+  confirmTotp(@Body() dto: ConfirmTotpDto, @CurrentUser() user: AuthUser) {
+    return this.profile.confirmTotp(dto, user);
+  }
+
+  @Post('totp/disable')
+  disableTotp(@Body() dto: DisableTotpDto, @CurrentUser() user: AuthUser) {
+    return this.profile.disableTotp(dto, user);
   }
 }
 

@@ -11,6 +11,7 @@ import { AttendanceModule } from './attendance/attendance.controller';
 import { AuditModule } from './audit/audit.controller';
 import { AuthController } from './auth/auth.controller';
 import { AuthService } from './auth/auth.service';
+import { GoogleSsoService } from './auth/google-sso.service';
 import { CatalogModule } from './catalog/catalog.controller';
 import { AuthGuard } from './common/auth.guard';
 import { EmailModule } from './common/email';
@@ -72,6 +73,7 @@ import { TestDataModule } from './testdata/test-data.controller';
   controllers: [AuthController],
   providers: [
     AuthService,
+    GoogleSsoService,
     // Order matters: global guards run in the order they are registered.
     // Throttle first, so a flood is turned away before it costs us a JWT
     // verification, a database round-trip, or an argon2 hash.

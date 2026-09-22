@@ -43,6 +43,10 @@ export interface Profile extends User {
   lastLoginAt?: string | null;
   /** Every APPROVED payroll invoice's gross, summed — since joining, in effect. */
   lifetimeEarned: Money;
+  /** Whether a Google account is linked for "Sign in with Google". */
+  googleLinked: boolean;
+  /** Whether a TOTP authenticator app is enrolled and required at login. */
+  totpEnabled: boolean;
 }
 
 // --- Attendance ------------------------------------------------------------

@@ -11,6 +11,24 @@ import {
   ValidateIf,
 } from 'class-validator';
 
+/** Step 2 of TOTP enrollment: proof the app was actually set up. */
+export class ConfirmTotpDto {
+  @IsString()
+  @Matches(/^\d{6}$/, { message: 'Enter the 6-digit code' })
+  code: string;
+}
+
+/**
+ * Turning 2FA off. Like ChangePasswordDto, the current password is required
+ * even from an already-authenticated session — disabling a second factor is a
+ * security-lowering action and should not be one click.
+ */
+export class DisableTotpDto {
+  @IsString()
+  @MinLength(1)
+  password: string;
+}
+
 /**
  * What a profile picture may be. A whitelist rather than a `startsWith('image/')`
  * check: the content type is what R2 will serve the object back with, and

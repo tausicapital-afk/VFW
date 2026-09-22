@@ -128,6 +128,26 @@ model User {
   lastSeenAt    DateTime?
   // When this user most recently authenticated. Null = has never logged in.
   lastLoginAt   DateTime?
+  // --- SSO (Google Workspace) ------------------------------------------------
+  // The Google account's stable subject id ("sub"), set the first time this
+  // user signs in with Google. A single nullable column, not a separate
+  // UserIdentity model: this app supports exactly one external provider today,
+  // so a join table would model a generality nothing exercises. Revisit if a
+  // second provider is ever added.
+  //
+  // Never set by account creation — see AuthService.loginWithGoogle. An email
+  // match links an EXISTING invited user's row; it never creates one. The
+  // invitation system is the only way an account comes to exist.
+  googleId      String?    @unique
+  // --- 2FA (TOTP authenticator app) ------------------------------------------
+  // The shared secret, encrypted at rest with config.crypto's encryptSecret —
+  // the same helper already used for stored SMTP/R2/QBO credentials, so a
+  // database dump does not hand over a way to generate valid codes.
+  totpSecret    String?
+  // Flips true only after Otp possession is proven once at enrollment (see
+  // ProfileService.confirmTotp) — never set directly by the enroll step, so a
+  // user cannot lock themselves out with a secret they never actually saved.
+  totpEnabled   Boolean    @default(false)
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 

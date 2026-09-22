@@ -7,10 +7,13 @@ import { ActivityService, ActivityContext } from '../activity/activity.service';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser, SessionClaims } from '../common/auth.guard';
 import { EmailNotConfiguredError, EmailService } from '../common/email';
+import { decryptSecret } from '../config/config.crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { avatarUrl } from '../profile/avatar';
 import { StorageService } from '../storage/storage.service';
 import { ForgotDto, ResetDto, SignupDto, VerifyOtpDto } from './dto';
+import { GoogleSsoService } from './google-sso.service';
+import { verifyTotpCode } from './totp';
 
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 15 * 60 * 1000;
@@ -34,6 +37,22 @@ const FORGOT_REPLY = {
   message: 'If an account exists for that address, a reset link has been sent.',
 };
 
+/**
+ * A password (or Google) check that succeeded is not always a login: a user
+ * with TOTP enabled has one more thing to prove. `totpRequired` carries a
+ * short-lived challenge token scoped to exactly that — see signTotpChallenge.
+ */
+export type LoginResult = { user: AuthUser; token: string } | { totpRequired: true; challenge: string };
+
+/** What {@link AuthService.signTotpChallenge} signs and {@link AuthService.completeTotpLogin} expects back. */
+interface TotpChallengeClaims {
+  uid: string;
+  typ: 'totp-challenge';
+}
+
+/** The challenge only has to survive someone typing a 6-digit code from their phone. */
+const TOTP_CHALLENGE_TTL = '5m';
+
 @Injectable()
 export class AuthService {
   private readonly log = new Logger(AuthService.name);
@@ -45,13 +64,10 @@ export class AuthService {
     private readonly audit: AuditService,
     private readonly activity: ActivityService,
     private readonly storage: StorageService,
+    private readonly googleSso: GoogleSsoService,
   ) {}
 
-  async login(
-    rawEmail: string,
-    password: string,
-    ctx?: ActivityContext,
-  ): Promise<{ token: string; user: AuthUser }> {
+  async login(rawEmail: string, password: string, ctx?: ActivityContext): Promise<LoginResult> {
     const email = rawEmail.trim().toLowerCase();
 
     const attempt = await this.prisma.loginAttempt.findUnique({ where: { email } });
@@ -88,14 +104,134 @@ export class AuthService {
 
     await this.prisma.loginAttempt.deleteMany({ where: { email } });
 
+    return this.completeFirstFactor(user, ctx);
+  }
+
+  /**
+   * Google Workspace sign-in.
+   *
+   * SSO establishes *identity* (this browser belongs to this Google account) —
+   * it is not a substitute for whatever this app already decided about that
+   * person's session, so a user with TOTP enrolled still has to clear it here,
+   * exactly like a password login. What SSO replaces is only the password
+   * step.
+   *
+   * Never creates an account. Every VFW account comes from the invitation
+   * system (see signup() above and docs/roadmap.md §4.4: "the role comes from
+   * the invitation, never the request") — a Google login that could conjure a
+   * new row would be a backdoor around that. The only two outcomes for an
+   * unmatched Google account are (a) it matches an existing user by `googleId`
+   * (already linked), (b) it matches an existing user by email — in which case
+   * this call links `googleId` on that row so future logins skip the email
+   * lookup — or (c) it matches nobody, and is refused.
+   */
+  async loginWithGoogle(
+    query: { code?: string; state?: string; error?: string },
+    ctx?: ActivityContext,
+  ): Promise<LoginResult> {
+    const info = await this.googleSso.resolveCallback(query);
+    const email = info.email!.trim().toLowerCase();
+
+    let user = await this.prisma.user.findUnique({ where: { googleId: info.sub } });
+
+    if (!user) {
+      const byEmail = await this.prisma.user.findUnique({ where: { email } });
+      if (!byEmail) {
+        throw new UnauthorizedException(
+          'No VFW account exists for that Google address. Ask an administrator for an invitation.',
+        );
+      }
+      // First Google sign-in for an already-provisioned account: link it. Not
+      // a separate "connect" step — an invited/active user's email matching
+      // is exactly the proof needed, the same trust the invitation itself
+      // already places in that inbox.
+      user = await this.prisma.user.update({
+        where: { id: byEmail.id },
+        data: { googleId: info.sub },
+      });
+      await this.audit.log({
+        actorId: user.id,
+        action: 'GOOGLE_SSO_LINKED',
+        detail: `${user.name} signed in with Google (${email}) — account linked`,
+      });
+    }
+
+    if (user.deletedAt) throw new UnauthorizedException('This account is not active');
+    if (user.status !== UserStatus.ACTIVE) {
+      const reason =
+        user.status === UserStatus.PENDING
+          ? 'Please verify your email to activate your account'
+          : 'This account is not active';
+      throw new UnauthorizedException(reason);
+    }
+
+    await this.prisma.loginAttempt.deleteMany({ where: { email: user.email } });
+
+    return this.completeFirstFactor(user, ctx);
+  }
+
+  /**
+   * Shared tail of both first factors (password, Google): the account is
+   * confirmed real, active and not deleted — now decide whether a second
+   * factor stands between here and a session.
+   */
+  private async completeFirstFactor(
+    user: { id: string; email: string; name: string; role: AuthUser['role']; tokenVersion: number; totpEnabled: boolean },
+    ctx?: ActivityContext,
+  ): Promise<LoginResult> {
+    if (user.totpEnabled) {
+      return { totpRequired: true, challenge: await this.signTotpChallenge(user.id) };
+    }
+
     // Telemetry for the Logs screen: stamp lastLoginAt and record the sign-in.
     // Best-effort — a logging hiccup must never turn a valid login into a 500.
-    await this.activity
-      .recordLogin(user.id, user.name, ctx)
-      .catch(() => undefined);
+    await this.activity.recordLogin(user.id, user.name, ctx).catch(() => undefined);
+
+    const authUser: AuthUser = { id: user.id, email: user.email, name: user.name, role: user.role };
+    return { user: authUser, token: await this.sign(authUser, user.tokenVersion) };
+  }
+
+  /**
+   * The second step of a TOTP login: exchange a challenge (minted by
+   * {@link completeFirstFactor} above, proving the password or Google step
+   * already succeeded for this specific user) plus a fresh 6-digit code for a
+   * real session.
+   *
+   * The challenge is not the session token wearing a disguise — it carries no
+   * `tv` and a distinct `typ`, so AuthGuard's verifySession() cannot be handed
+   * one and mistake it for a signed-in cookie; it is only ever consumed here.
+   */
+  async completeTotpLogin(challenge: string, code: string, ctx?: ActivityContext): Promise<{ token: string; user: AuthUser }> {
+    const invalid = new UnauthorizedException('Invalid or expired sign-in attempt. Please sign in again.');
+
+    let claims: TotpChallengeClaims;
+    try {
+      claims = await this.jwt.verifyAsync<TotpChallengeClaims>(challenge);
+    } catch {
+      throw invalid;
+    }
+    if (claims.typ !== 'totp-challenge') throw invalid;
+
+    const user = await this.prisma.user.findUnique({ where: { id: claims.uid } });
+    if (!user || user.deletedAt || user.status !== UserStatus.ACTIVE) throw invalid;
+    if (!user.totpEnabled || !user.totpSecret) throw invalid;
+
+    const secret = decryptSecret(user.totpSecret);
+    const ok = await verifyTotpCode(secret, code.trim());
+    if (!ok) throw new UnauthorizedException('That code is incorrect or has expired.');
+
+    await this.prisma.loginAttempt.deleteMany({ where: { email: user.email } });
+    await this.activity.recordLogin(user.id, user.name, ctx).catch(() => undefined);
 
     const authUser: AuthUser = { id: user.id, email: user.email, name: user.name, role: user.role };
     return { token: await this.sign(authUser, user.tokenVersion), user: authUser };
+  }
+
+  private async signTotpChallenge(userId: string): Promise<string> {
+    return this.jwt.signAsync(
+      { uid: userId, typ: 'totp-challenge' } satisfies TotpChallengeClaims,
+      { expiresIn: TOTP_CHALLENGE_TTL },
+    );
   }
 
   /**

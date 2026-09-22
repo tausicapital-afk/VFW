@@ -6,11 +6,20 @@ import { randomUUID } from 'crypto';
 import { ActivityService } from '../activity/activity.service';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser, SessionClaims } from '../common/auth.guard';
+import { decryptSecret, encryptSecret } from '../config/config.crypto';
 import { PayrollService } from '../payroll/payroll.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
+import { generateTotpSecret, totpUri, verifyTotpCode } from '../auth/totp';
 import { avatarKeyPrefix, avatarUrl } from './avatar';
-import { AvatarCommitDto, AvatarPresignDto, ChangePasswordDto, UpdateProfileDto } from './dto';
+import {
+  AvatarCommitDto,
+  AvatarPresignDto,
+  ChangePasswordDto,
+  ConfirmTotpDto,
+  DisableTotpDto,
+  UpdateProfileDto,
+} from './dto';
 
 /**
  * The shape of a profile as its owner sees it. Deliberately wider than the
@@ -32,6 +41,11 @@ const PROFILE_FIELDS = {
   status: true,
   createdAt: true,
   lastLoginAt: true,
+  totpEnabled: true,
+  // The raw Google subject id never leaves the server — withAvatar() below
+  // collapses it to a boolean. The client needs "is this account linked?",
+  // never the identifier itself.
+  googleId: true,
 } satisfies Prisma.UserSelect;
 
 @Injectable()
@@ -52,13 +66,19 @@ export class ProfileService {
    * fields are attached — an update or an avatar change must not make
    * lifetimeEarned disappear from the screen until the next full reload.
    */
-  private async withAvatar<T extends { id: string; avatarKey: string | null }>(row: T) {
-    const { avatarKey, ...rest } = row;
+  private async withAvatar<T extends { id: string; avatarKey: string | null; googleId?: string | null }>(row: T) {
+    const { avatarKey, googleId, ...rest } = row;
     const [signedUrl, lifetimeEarned] = await Promise.all([
       avatarUrl(this.storage, avatarKey),
       this.payroll.lifetimeEarned(row.id),
     ]);
-    return { ...rest, hasAvatar: avatarKey !== null, avatarUrl: signedUrl, lifetimeEarned };
+    return {
+      ...rest,
+      hasAvatar: avatarKey !== null,
+      avatarUrl: signedUrl,
+      lifetimeEarned,
+      googleLinked: Boolean(googleId),
+    };
   }
 
   private async load(userId: string) {
@@ -257,6 +277,105 @@ export class ProfileService {
     await this.record(user, `${row.name} changed their password`);
 
     return { token: await this.jwt.signAsync(claims) };
+  }
+
+  // -------------------------------------------------------------------------
+  // Two-factor authentication (TOTP)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Start (or restart) enrollment: mint a fresh secret, store it encrypted,
+   * and hand back the plaintext once so it can be shown as a QR / copyable
+   * setup key.
+   *
+   * `totpEnabled` is NOT set here — see {@link confirmTotp}. Storing the
+   * secret before it is proven is what lets a user re-scan if the first QR
+   * did not take, without the secret going live from a scan nobody actually
+   * completed. Calling this again before confirming overwrites the previous
+   * (never-activated) secret, which is the right behaviour for "the QR code
+   * didn't scan, let me try again."
+   */
+  async enrollTotp(user: AuthUser) {
+    const row = await this.prisma.user.findFirst({
+      where: { id: user.id, deletedAt: null },
+      select: { id: true, email: true, totpEnabled: true },
+    });
+    if (!row) throw new NotFoundException('Account not found');
+    if (row.totpEnabled) {
+      throw new BadRequestException('Two-factor authentication is already enabled. Disable it first to re-enroll.');
+    }
+
+    const secret = generateTotpSecret();
+    await this.prisma.user.update({
+      where: { id: row.id },
+      data: { totpSecret: encryptSecret(secret) },
+    });
+
+    return { secret, otpauthUrl: totpUri(secret, row.email) };
+  }
+
+  /**
+   * The proof-of-possession step: one valid code against the secret stored by
+   * {@link enrollTotp}, or `totpEnabled` never flips. Without this, a user
+   * could "enable" 2FA from a secret they never actually captured in an app —
+   * and lock themselves out of their own account on the very next login.
+   */
+  async confirmTotp(dto: ConfirmTotpDto, user: AuthUser) {
+    const row = await this.prisma.user.findFirst({
+      where: { id: user.id, deletedAt: null },
+      select: { id: true, name: true, totpEnabled: true, totpSecret: true },
+    });
+    if (!row) throw new NotFoundException('Account not found');
+    if (row.totpEnabled) return { ok: true };
+    if (!row.totpSecret) {
+      throw new BadRequestException('Start enrollment first — no code has been generated yet.');
+    }
+
+    const ok = await verifyTotpCode(decryptSecret(row.totpSecret), dto.code);
+    if (!ok) throw new BadRequestException('That code is incorrect. Check your authenticator app and try again.');
+
+    await this.prisma.user.update({ where: { id: row.id }, data: { totpEnabled: true } });
+
+    await this.audit.log({
+      actorId: row.id,
+      action: 'TOTP_ENABLED',
+      detail: `${row.name} enabled two-factor authentication`,
+    });
+    await this.record(user, `${row.name} enabled two-factor authentication`);
+
+    return { ok: true };
+  }
+
+  /**
+   * Turn 2FA off. Requires the current password, not just a click — this is a
+   * security-*lowering* action, so it gets the same proof a password change
+   * asks for, not less.
+   */
+  async disableTotp(dto: DisableTotpDto, user: AuthUser) {
+    const row = await this.prisma.user.findFirst({
+      where: { id: user.id, deletedAt: null },
+      select: { id: true, name: true, passwordHash: true, totpEnabled: true },
+    });
+    if (!row) throw new NotFoundException('Account not found');
+
+    const ok = await argon2.verify(row.passwordHash, dto.password).catch(() => false);
+    if (!ok) throw new UnauthorizedException('Your current password is incorrect');
+
+    if (!row.totpEnabled) return { ok: true };
+
+    await this.prisma.user.update({
+      where: { id: row.id },
+      data: { totpEnabled: false, totpSecret: null },
+    });
+
+    await this.audit.log({
+      actorId: row.id,
+      action: 'TOTP_DISABLED',
+      detail: `${row.name} disabled two-factor authentication`,
+    });
+    await this.record(user, `${row.name} disabled two-factor authentication`);
+
+    return { ok: true };
   }
 
   /** A telemetry line for the Logs screen. Best-effort, like every other one. */
