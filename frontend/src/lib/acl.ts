@@ -40,6 +40,7 @@ export const ACL = {
   'payroll.viewAll': ['ACCT', 'ADMIN'],
   'payroll.submit': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
   'payroll.approve': ['ACCT', 'ADMIN'],
+  'payroll.manageTiers': ['ACCT', 'ADMIN'],
   'admin.manage': ['ACCT', 'ADMIN'],
   'activity.view': ['ACCT', 'ADMIN'],
 } as const satisfies Record<string, readonly Role[]>;

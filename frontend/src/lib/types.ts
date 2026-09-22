@@ -512,6 +512,21 @@ export interface UserSalesClient {
 
 export type PayType = 'SALARY' | 'HOURLY' | 'COMMISSION_ONLY';
 
+/**
+ * One bracket's contribution to a rep's tier bonus — see the schema comment
+ * on backend's `CommissionTier`. Only brackets that actually earned something
+ * appear here, which is what lets the screens omit the whole "Tier bonus"
+ * line cleanly for a rep who never crossed a threshold, rather than showing
+ * it as a stray $0.00.
+ */
+export interface TierBonusBreakdownEntry {
+  thresholdRevenue: Money;
+  bonusPct: Money;
+  /** The slice of revenue between this threshold and the next that earned it. */
+  portion: Money;
+  amount: Money;
+}
+
 export interface PayrollStatement {
   user: {
     id: string;
@@ -550,6 +565,12 @@ export interface PayrollStatement {
     commission: Money;
     /** Of the commission above, how much sits against invoices not yet settled. */
     commissionUnpaid: Money;
+    /** The bonus layer from the commission-tier table, on top of `commission`
+     *  above. `"0.00"` with an empty `tierBonusBreakdown` for a rep whose
+     *  revenue never crossed a threshold — the screens treat that as nothing
+     *  to show, not a zero to print. */
+    tierBonus: Money;
+    tierBonusBreakdown: TierBonusBreakdownEntry[];
     gross: Money;
   };
 }
@@ -572,6 +593,9 @@ export interface PayrollInvoiceRow extends TestFlagged {
   /** The pay basis as it stood when the period was frozen. */
   earnsCommission: boolean;
   commission: Money;
+  /** The tier bonus as it was computed at submit time — frozen the same way
+   *  everything else here is, and untouched by a later edit to the tier table. */
+  tierBonus: Money;
   gross: Money;
   note: string | null;
   submittedAt: string;
@@ -603,9 +627,22 @@ export interface PayrollRun {
     base: Money;
     commission: Money;
     commissionUnpaid: Money;
+    tierBonus: Money;
     gross: Money;
     hours: string;
   };
+}
+
+/**
+ * One bracket of the global commission-tier table — see the schema comment on
+ * backend's `CommissionTier`. Administered from Payroll → Commission tiers.
+ */
+export interface CommissionTier {
+  id: string;
+  thresholdRevenue: Money;
+  bonusPct: Money;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Invitation {

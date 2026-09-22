@@ -19,6 +19,18 @@ const TAXES = [
   { code: 'ZERO', label: 'Zero-rated / Exempt', rate: 0, gst: 0, pst: 0, hst: 0, note: 'Sponsored & exempt entities' },
 ];
 
+// Placeholder commission tiers — see the schema comment on CommissionTier for
+// what these mean and why there is one table for the whole company. Two
+// brackets, picked only to exercise the mechanism end to end: 0 to $50,000 of
+// a rep's net revenue for the period earns no bonus, and $50,000 and up earns
+// +2% on the portion above it. Real breakpoints and rates are Administration's
+// to tune from Payroll → Commission tiers — these numbers are not a business
+// decision, only a working default.
+const COMMISSION_TIERS = [
+  { thresholdRevenue: 0, bonusPct: 0 },
+  { thresholdRevenue: 50000, bonusPct: 2 },
+];
+
 const CITIES = [
   { id: 'VAN', name: 'Vancouver', country: 'Canada', currency: Currency.CAD, taxCode: 'GST-5' },
   { id: 'TYO', name: 'Tokyo', country: 'Japan', currency: Currency.USD, taxCode: 'GFC-8' },
@@ -185,6 +197,13 @@ async function main() {
   for (const g of GL_ACCOUNTS) {
     await prisma.glAccount.upsert({ where: { code: g.code }, update: g, create: g });
   }
+  for (const t of COMMISSION_TIERS) {
+    await prisma.commissionTier.upsert({
+      where: { thresholdRevenue: t.thresholdRevenue },
+      update: { bonusPct: t.bonusPct },
+      create: t,
+    });
+  }
   for (const c of CITIES) {
     await prisma.city.upsert({ where: { id: c.id }, update: c, create: c });
   }
@@ -254,6 +273,7 @@ async function main() {
     addons: await prisma.addon.count(),
     glAccounts: await prisma.glAccount.count(),
     users: await prisma.user.count(),
+    commissionTiers: await prisma.commissionTier.count(),
   };
   console.log('Seed complete:', counts);
   // Never echo a password that was passed in — it would land in the shell

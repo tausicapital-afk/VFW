@@ -1268,6 +1268,14 @@ model PayrollInvoice {
   base          Decimal @db.Decimal(14, 2)
   commissionPct Decimal @db.Decimal(5, 2)
   commission    Decimal @db.Decimal(14, 2)
+  // The bonus layer computed from CommissionTier at submit time, on top of the
+  // ordinary per-sale commission above — see the model comment on
+  // CommissionTier for why this is a separate figure rather than a change to
+  // `commission` itself. Frozen exactly like every other figure here: editing
+  // the tier table after this invoice was submitted must not move it.
+  // Defaulted for the rows that predate this column, which never had a tier
+  // table to compute a bonus from.
+  tierBonus     Decimal @default(0) @db.Decimal(14, 2)
   gross         Decimal @db.Decimal(14, 2)
   // Frozen alongside the rate so a zero commission on an old invoice can say
   // WHICH zero it is: a rep who earned nothing this month, or someone who is
@@ -1298,6 +1306,71 @@ model PayrollInvoice {
   @@unique([userId, periodStart, periodEnd])
   @@index([status])
   @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Commission tiers — a bonus layer on top of the per-sale commission above,
+// applied at payroll aggregation time rather than to any individual sale.
+//
+// `Submission.commissionPct`/`commissionAmount` are stamped once, at the
+// moment a sale is created, and are never rewritten — that is the load-bearing
+// guarantee the whole Payroll module rests on (see the comment on
+// PayrollService: "changing someone's percentage today moves their next sale
+// and not one already booked"). A tiered rate CANNOT live there: if a sale's
+// commission depended on what other sales happened later in the same month, it
+// would move every time a colleague — or the same rep — closed another deal,
+// and a number that keeps changing after the sale it belongs to is exactly
+// the thing that guarantee exists to prevent.
+//
+// So the tiers apply one level up, in PayrollService.statement(): once a rep's
+// total commission-eligible revenue for the period is known (the same
+// `sales.revenue` the ordinary commission is struck on), the table below is
+// walked to work out a bonus on top — additive, and shown on the statement and
+// the payslip as its own "Tier bonus" line, never folded into `commission`.
+// Nothing before that point changes: every sale still carries the rate it was
+// struck at, every existing report still reads `commissionAmount` exactly as
+// it always has.
+//
+// One table for the whole company, not one per user. `commissionPct` is
+// per-user because reps are hired at different rates; a tier table is a
+// step-up in the *company's* pay policy once a period's revenue crosses a
+// threshold, and there is exactly one such policy in force at a time — the
+// same reason there is one `Settings.discountApprovalPct`, not one per rep.
+// Splitting it per user would also make "who gets which tiers" a second thing
+// an administrator has to keep in sync with `commissionPct`, for a feature
+// that is explicitly a placeholder pending real numbers from Administration.
+//
+// Ordered by `thresholdRevenue` ascending and applied progressively — like a
+// tax bracket, not a cliff: the portion of a period's revenue between one
+// threshold and the next earns that tier's `bonusPct`, so crossing into a
+// new tier is never a pay cut in disguise for the dollars below it. See
+// PayrollService.computeTierBonus for the exact walk.
+//
+// Seeded with a placeholder two-tier table by prisma/seed.ts — 0 to $50,000
+// net revenue earns no bonus, $50,000 and up earns +2% on the portion above —
+// numbers picked only to exercise the mechanism. Real breakpoints and rates
+// are Administration's to tune from the Payroll → Commission tiers screen,
+// which is the whole point of building this now rather than later.
+model CommissionTier {
+  id String @id @default(cuid())
+
+  // The bracket's floor, in CAD net revenue for the period — the same
+  // consolidated figure `PayrollService.salesByRep` already totals per rep.
+  // Unique: two tiers starting at the same revenue would be ambiguous about
+  // which bonusPct applies to the dollar that crosses it.
+  thresholdRevenue Decimal @unique @db.Decimal(14, 2)
+  // The extra percentage earned on the slice of revenue between this
+  // threshold and the next one up (or, for the highest tier, everything
+  // above it). Not added to `commissionPct` — it is a bonus on revenue, kept
+  // in its own column so it can never be confused with the per-sale rate.
+  bonusPct Decimal @db.Decimal(5, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // No separate @@index: the @unique above already gives `orderBy:
+  // thresholdRevenue` and the lookups in createTier/updateTier an index to
+  // use, and a second one on the same column would just be dead weight.
 }
 
 // ---------------------------------------------------------------------------

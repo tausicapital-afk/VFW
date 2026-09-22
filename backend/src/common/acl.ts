@@ -106,6 +106,11 @@ export const ACL = {
   // approving, rejecting. Mirrors submission.approve — the maker (submit) and
   // the checker (approve) must not be the same permission.
   'payroll.approve': ['ACCT', 'ADMIN'],
+  // Administering the commission-tier table — see the schema comment on
+  // CommissionTier. Company-wide pay policy, not any one person's pay, so it
+  // sits with the same two roles as `payroll.approve` and `admin.manage`
+  // rather than opening it to everyone who can merely view their own pay.
+  'payroll.manageTiers': ['ACCT', 'ADMIN'],
   // The activity/logs screen is user-monitoring — who signed in, what they
   // opened, who they messaged. HR/security-sensitive, and long held by ADMIN
   // alone; ACCT now holds it too, so Accounting and Admin carry an identical,

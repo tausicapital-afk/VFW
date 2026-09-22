@@ -59,3 +59,30 @@ export class RejectPayrollInvoiceDto {
   @IsString() @MinLength(1) @MaxLength(2000)
   reason: string;
 }
+
+// --- Commission tiers -------------------------------------------------------
+// See the schema comment on CommissionTier for what these numbers mean and
+// why there is one table for the whole company rather than one per user.
+
+/**
+ * A new bracket. Both figures arrive as strings and are parsed with Decimal in
+ * the service, the same way tax rates are (`admin/dto.ts` CreateTaxDto) — a JS
+ * number would round a rate typed with more precision than it can represent.
+ */
+export class CreateCommissionTierDto {
+  @IsString()
+  thresholdRevenue: string;
+
+  @IsString()
+  bonusPct: string;
+}
+
+/** Editing an existing bracket. Either figure alone is a valid edit — raising
+ *  a threshold without touching its rate, or vice versa. */
+export class UpdateCommissionTierDto {
+  @IsOptional() @IsString()
+  thresholdRevenue?: string;
+
+  @IsOptional() @IsString()
+  bonusPct?: string;
+}
