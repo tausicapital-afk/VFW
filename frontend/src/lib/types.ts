@@ -637,6 +637,8 @@ export interface PayrollStatement {
      *  to show, not a zero to print. */
     tierBonus: Money;
     tierBonusBreakdown: TierBonusBreakdownEntry[];
+    /** Expenses paid back for the period, entered by Accounting on the run. */
+    reimbursement: Money;
     gross: Money;
   };
 }
@@ -662,6 +664,8 @@ export interface PayrollInvoiceRow extends TestFlagged {
   /** The tier bonus as it was computed at submit time — frozen the same way
    *  everything else here is, and untouched by a later edit to the tier table. */
   tierBonus: Money;
+  /** The reimbursement as it stood when the period was submitted. */
+  reimbursement: Money;
   gross: Money;
   note: string | null;
   submittedAt: string;
@@ -694,6 +698,7 @@ export interface PayrollRun {
     commission: Money;
     commissionUnpaid: Money;
     tierBonus: Money;
+    reimbursement: Money;
     gross: Money;
     hours: string;
   };

@@ -630,4 +630,53 @@ describe('payroll', () => {
       .set('Cookie', mgr)
       .expect(403);
   });
+
+  describe('reimbursement', () => {
+    afterEach(() =>
+      prisma.payrollReimbursement.deleteMany({
+        where: { periodStart: new Date(`${FROM}T00:00:00Z`), periodEnd: new Date(`${TO}T00:00:00Z`) },
+      }),
+    );
+
+    const reimburse = (cookie: string, amount: string, userId = salesId) =>
+      http(app).put('/api/payroll/reimbursement').set('Cookie', cookie).send({ userId, from: FROM, to: TO, amount });
+
+    it('adds the reimbursement into gross: hours x rate + reimbursement + commission', async () => {
+      await setPay('HOURLY', '20.00');
+      await day('2032-05-04', '8.00');
+      await day('2032-05-05', '2.00');
+      await sale({ approvedAt: IN_MONTH, taxable: '1000', commissionAmount: '80' });
+
+      await reimburse(acct, '45.50').expect(200);
+
+      const body = await statement(sales);
+      expect(body.pay.base).toBe('200.00');
+      expect(body.pay.reimbursement).toBe('45.50');
+      expect(body.pay.commission).toBe('80.00');
+      expect(body.pay.gross).toBe('325.50');
+
+      const run = await http(app).get(`/api/payroll/run?from=${FROM}&to=${TO}`).set('Cookie', acct).expect(200);
+      const mine = run.body.rows.find((r: { user: { id: string } }) => r.user.id === salesId);
+      expect(mine.pay.reimbursement).toBe('45.50');
+      expect(Number(run.body.totals.reimbursement)).toBeCloseTo(45.5, 2);
+    });
+
+    it('is zero until someone sets it, and setting it again replaces it', async () => {
+      expect((await statement(sales)).pay.reimbursement).toBe('0.00');
+
+      await reimburse(acct, '10').expect(200);
+      await reimburse(acct, '12.25').expect(200);
+      expect((await statement(sales)).pay.reimbursement).toBe('12.25');
+
+      await reimburse(acct, '0').expect(200);
+      expect((await statement(sales)).pay.reimbursement).toBe('0.00');
+    });
+
+    it('is set by Accounting and Administration only, and refuses a negative amount', async () => {
+      await reimburse(sales, '100').expect(403);
+      await reimburse(mgr, '100').expect(403);
+      await reimburse(admin, '-5').expect(400);
+      await reimburse(admin, '5').expect(200);
+    });
+  });
 });

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Module, Param, Patch, Post, Query, Res } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Module, Param, Patch, Post, Put, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { AuthUser, Can, CurrentUser } from '../common/auth.guard';
 import { PayrollService } from './payroll.service';
@@ -7,6 +7,7 @@ import {
   EditPayrollInvoiceDto,
   PayrollQueryDto,
   RejectPayrollInvoiceDto,
+  SetReimbursementDto,
   SubmitPayrollDto,
   UpdateCommissionTierDto,
 } from './dto';
@@ -138,6 +139,13 @@ export class PayrollController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.payroll.rejectInvoice(id, dto, user);
+  }
+
+  /** One person's expenses paid back for one period — entered on the run. */
+  @Put('reimbursement')
+  @Can('payroll.approve')
+  setReimbursement(@Body() dto: SetReimbursementDto, @CurrentUser() user: AuthUser) {
+    return this.payroll.setReimbursement(dto, user);
   }
 
   // --- Commission tiers ------------------------------------------------------

@@ -17,6 +17,7 @@ import {
   EditPayrollInvoiceDto,
   PayrollQueryDto,
   RejectPayrollInvoiceDto,
+  SetReimbursementDto,
   SubmitPayrollDto,
   UpdateCommissionTierDto,
 } from './dto';
@@ -200,7 +201,8 @@ function computeTierBonus(revenue: Decimal, tiers: Tier[]): { bonus: Decimal; br
  *
  *   base       from the account's pay type and rate (× hours, if hourly)
  *   commission from the sales they closed, at the rate on each sale
- *   gross      base + commission
+ *   reimbursement  expenses paid back, entered by Accounting (the one stored input)
+ *   gross      base + commission + reimbursement
  *
  * **The pay basis is two fields, not one.** `payType` decides how base pay is
  * worked out; `earnsCommission` decides whether there is commission at all. An
@@ -441,6 +443,7 @@ export class PayrollService {
     attendance: AttendanceDay[] | undefined,
     lifetimeEarned: Decimal | undefined,
     tiers: Tier[],
+    reimbursement: Decimal | undefined,
   ) {
     const summary = summarise(attendance ?? []);
     const hours = new Decimal(summary.hours);
@@ -456,6 +459,7 @@ export class PayrollService {
       sales?.revenue ?? new Decimal(0),
       tiers,
     );
+    const reimbursed = (reimbursement ?? new Decimal(0)).toDecimalPlaces(2);
     const { avatarKey, ...profile } = person;
 
     return {
@@ -511,7 +515,11 @@ export class PayrollService {
         // omit it cleanly rather than asserting a bonus that was not earned.
         tierBonus: tierBonus.toFixed(2),
         tierBonusBreakdown,
-        gross: base.plus(commission).plus(tierBonus).toFixed(2),
+        // Expenses paid back for the period, as Accounting entered them on the
+        // run — see the schema comment on PayrollReimbursement. Not earned, but
+        // paid, so it is part of the total the person receives.
+        reimbursement: reimbursed.toFixed(2),
+        gross: base.plus(commission).plus(tierBonus).plus(reimbursed).toFixed(2),
       },
     };
   }
@@ -533,6 +541,7 @@ export class PayrollService {
     const attendance = (await this.attendanceByUser(range, [userId])).get(userId);
     const lifetime = (await this.lifetimeEarnedByUser([userId])).get(userId);
     const tiers = await this.tierTable();
+    const reimbursement = (await this.reimbursementsByUser(from, to, [userId])).get(userId);
     // This period's payroll invoice, if one has been submitted — lets the
     // screen show a status pill and compare the frozen snapshot against the
     // live figure.
@@ -547,7 +556,7 @@ export class PayrollService {
       to,
       self: userId === actor.id,
       invoice,
-      ...(await this.statement(person, sales, attendance, lifetime, tiers)),
+      ...(await this.statement(person, sales, attendance, lifetime, tiers, reimbursement)),
     };
   }
 
@@ -617,6 +626,7 @@ export class PayrollService {
         commissionUnpaid: sheet.pay.commissionUnpaid,
         tierBonus: sheet.pay.tierBonus,
         tierBonusBreakdown: sheet.pay.tierBonusBreakdown,
+        reimbursement: sheet.pay.reimbursement,
         gross: sheet.pay.gross,
       },
       invoice: sheet.invoice
@@ -711,10 +721,18 @@ export class PayrollService {
     // paid against the same table at the same instant, the same way one FX
     // table prices every currency in it.
     const tiers = await this.tierTable();
+    const reimbursements = await this.reimbursementsByUser(from, to, people.map((p) => p.id));
 
     const rows = await Promise.all(
       people.map((person) =>
-        this.statement(person, sales.get(person.id), attendance.get(person.id), lifetime.get(person.id), tiers),
+        this.statement(
+          person,
+          sales.get(person.id),
+          attendance.get(person.id),
+          lifetime.get(person.id),
+          tiers,
+          reimbursements.get(person.id),
+        ),
       ),
     );
 
@@ -731,6 +749,7 @@ export class PayrollService {
         commission: total((r) => r.pay.commission),
         commissionUnpaid: total((r) => r.pay.commissionUnpaid),
         tierBonus: total((r) => r.pay.tierBonus),
+        reimbursement: total((r) => r.pay.reimbursement),
         gross: total((r) => r.pay.gross),
         hours: total((r) => r.attendance.hours),
       },
@@ -745,6 +764,69 @@ export class PayrollService {
       _sum: { gross: true },
     });
     return new Map(rows.map((r) => [r.userId, new Decimal(r._sum.gross ?? 0)]));
+  }
+
+  /** Each person's reimbursement for exactly this period, in one query. */
+  private async reimbursementsByUser(from: string, to: string, userIds: string[]): Promise<Map<string, Decimal>> {
+    const rows = await this.prisma.payrollReimbursement.findMany({
+      where: { userId: { in: userIds }, periodStart: parseDay(from), periodEnd: parseDay(to) },
+      select: { userId: true, amount: true },
+    });
+    return new Map(rows.map((r) => [r.userId, new Decimal(r.amount.toString())]));
+  }
+
+  /**
+   * Accounting setting what someone is paid back for a period. Zero clears it.
+   *
+   * Moves the live statement only. A period already submitted keeps the
+   * reimbursement it was frozen with, the same as every other figure — the
+   * screen flags the difference and the person resubmits. Refused outright once
+   * that invoice is approved, because approved pay is not edited from here.
+   */
+  async setReimbursement(dto: SetReimbursementDto, actor: AuthUser) {
+    if (!can('payroll.approve', actor.role)) {
+      throw new ForbiddenException('Your role cannot set reimbursements');
+    }
+    periodRange(dto.from, dto.to);
+    const amount = decimal(dto.amount, 'Reimbursement').toDecimalPlaces(2);
+
+    const person = await this.prisma.user.findFirst({
+      where: { id: dto.userId, deletedAt: null },
+      select: { id: true, name: true },
+    });
+    if (!person) throw new NotFoundException('User not found');
+
+    const periodStart = parseDay(dto.from);
+    const periodEnd = parseDay(dto.to);
+    const key = { userId_periodStart_periodEnd: { userId: person.id, periodStart, periodEnd } };
+
+    const invoice = await this.prisma.payrollInvoice.findUnique({ where: key, select: { status: true } });
+    if (invoice?.status === PayrollInvoiceStatus.APPROVED) {
+      throw new BadRequestException('This period has already been approved — its reimbursement can no longer change');
+    }
+
+    const existing = await this.prisma.payrollReimbursement.findUnique({ where: key });
+    const before = existing ? existing.amount.toFixed(2) : '0.00';
+
+    return this.prisma.$transaction(async (tx) => {
+      const row = await tx.payrollReimbursement.upsert({
+        where: key,
+        create: {
+          userId: person.id, periodStart, periodEnd, amount: amount.toFixed(2), note: dto.note, updatedById: actor.id,
+        },
+        update: { amount: amount.toFixed(2), note: dto.note ?? null, updatedById: actor.id },
+      });
+      await this.audit.log(
+        {
+          actorId: actor.id,
+          action: 'PAYROLL_REIMBURSEMENT_SET',
+          detail: `Reimbursement for ${person.name}, ${dto.from} to ${dto.to}: ${before} -> ${amount.toFixed(2)} CAD`,
+          payload: { userId: person.id, from: dto.from, to: dto.to, before, after: amount.toFixed(2), note: dto.note ?? null },
+        },
+        tx,
+      );
+      return { ...row, amount: row.amount.toFixed(2) };
+    });
   }
 
   /**
@@ -870,6 +952,7 @@ export class PayrollService {
         // here, at submit time, and never again for this invoice — editing it
         // afterwards must not move a period that has already been claimed.
         tierBonus: sheet.pay.tierBonus,
+        reimbursement: sheet.pay.reimbursement,
         gross: sheet.pay.gross,
       };
       const invoice = await tx.payrollInvoice.upsert({
@@ -958,7 +1041,8 @@ export class PayrollService {
     // that instant. Only re-summed into gross, alongside whatever base and
     // commission were just corrected to.
     const tierBonus = new Decimal(invoice.tierBonus.toString());
-    const gross = base.plus(commission).plus(tierBonus);
+    const reimbursement = new Decimal(invoice.reimbursement.toString());
+    const gross = base.plus(commission).plus(tierBonus).plus(reimbursement);
 
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.payrollInvoice.update({

@@ -380,8 +380,17 @@ function Statement({ statement, period }: { statement: PayrollStatement; period:
               <span>{cad(pay.tierBonus)}</span>
             </div>
           )}
+          {Number(pay.reimbursement) > 0 && (
+            <div className="r">
+              <span>
+                Reimbursement
+                <span className="mut sm"> · expenses paid back this period</span>
+              </span>
+              <span>{cad(pay.reimbursement)}</span>
+            </div>
+          )}
           <div className="r big">
-            <span>Gross</span>
+            <span>Total</span>
             <span>{cad(pay.gross)}</span>
           </div>
         </div>
@@ -483,6 +492,8 @@ function Kpi({ label, value, note, accent }: { label: string; value: string; not
 // ---------------------------------------------------------------------------
 
 function Run() {
+  const { user } = useAuth();
+  const canReimburse = can('payroll.approve', user?.role);
   const [period, setPeriod] = useState<Period>(() => currentMonthPeriod());
   const [open, setOpen] = useState<{ id: string; name: string } | null>(null);
   const validRange = !!period.from && !!period.to && period.to >= period.from;
@@ -523,10 +534,11 @@ function Run() {
       {run && (
         <>
           <div className="kpis" style={{ marginBottom: 14 }}>
-            <Kpi label="Gross" value={cad(run.totals.gross)} note={`${run.totals.people} people`} accent />
-            <Kpi label="Base pay" value={cad(run.totals.base)} note="salary and hourly" />
-            <Kpi label="Commission" value={cad(run.totals.commission)} note={`${cad(run.totals.commissionUnpaid)} not yet collected`} />
+            <Kpi label="Total" value={cad(run.totals.gross)} note={`${run.totals.people} people`} accent />
             <Kpi label="Hours" value={run.totals.hours} note="from Attendance" />
+            <Kpi label="Base pay" value={cad(run.totals.base)} note="hours × base rate, plus salaries" />
+            <Kpi label="Reimbursement" value={cad(run.totals.reimbursement)} note="expenses paid back" />
+            <Kpi label="Commission" value={cad(run.totals.commission)} note={`${cad(run.totals.commissionUnpaid)} not yet collected`} />
           </div>
 
           <div className="card">
@@ -541,13 +553,12 @@ function Run() {
                   <thead>
                     <tr>
                       <th>Person</th>
-                      <th>Pay type</th>
                       <th style={{ textAlign: 'right' }}>Hours</th>
-                      <th style={{ textAlign: 'right' }}>Base</th>
+                      <th style={{ textAlign: 'right' }}>Base rate</th>
+                      <th style={{ textAlign: 'right' }}>Reimbursement</th>
                       <th style={{ textAlign: 'right' }}>Sales</th>
                       <th style={{ textAlign: 'right' }}>Commission</th>
-                      <th style={{ textAlign: 'right' }}>Tier bonus</th>
-                      <th style={{ textAlign: 'right' }}>Gross</th>
+                      <th style={{ textAlign: 'right' }}>Total</th>
                       <th />
                     </tr>
                   </thead>
@@ -563,27 +574,38 @@ function Run() {
                             </div>
                           </div>
                         </td>
-                        <td>
-                          <span className={`pill ${row.pay.payType === 'COMMISSION_ONLY' ? 'DRAFT' : 'EXPORTED'}`}>
-                            {payBasis(row.pay.payType, row.pay.earnsCommission)}
-                          </span>
-                        </td>
                         <td style={{ textAlign: 'right' }}>{row.attendance.hours}</td>
-                        <td style={{ textAlign: 'right' }}>{cad(row.pay.base)}</td>
-                        <td style={{ textAlign: 'right' }}>{row.sales.count}</td>
+                        <td style={{ textAlign: 'right' }}>
+                          <BaseRate pay={row.pay} />
+                        </td>
+                        <td style={{ textAlign: 'right' }}>
+                          <ReimbursementCell
+                            userId={row.user.id}
+                            period={period}
+                            amount={row.pay.reimbursement}
+                            editable={canReimburse}
+                          />
+                        </td>
+                        <td style={{ textAlign: 'right' }}>
+                          {cad(row.sales.revenue)}
+                          <div className="mut sm">{row.sales.count} sale{row.sales.count === 1 ? '' : 's'}</div>
+                        </td>
                         <td style={{ textAlign: 'right' }}>
                           {cad(row.pay.commission)}
+                          {/* The tier bonus is commission too, so it rides along
+                              here rather than taking a column most rows leave
+                              empty. */}
+                          {Number(row.pay.tierBonus) > 0 && (
+                            <div className="mut sm">+ {cad(row.pay.tierBonus)} tier bonus</div>
+                          )}
                           {Number(row.pay.commissionUnpaid) > 0 && (
                             <div className="mut sm">{cad(row.pay.commissionUnpaid)} unpaid</div>
                           )}
                         </td>
-                        {/* A dash rather than $0.00 — most rows never cross a
-                            tier, and a column of zeroes would bury the ones
-                            that did. */}
-                        <td style={{ textAlign: 'right' }}>
-                          {Number(row.pay.tierBonus) > 0 ? cad(row.pay.tierBonus) : <span className="mut">—</span>}
+                        <td style={{ textAlign: 'right' }} className="b">
+                          {cad(row.pay.gross)}
+                          <div className="mut sm" style={{ fontWeight: 400 }}>{totalFormula(row.pay)}</div>
                         </td>
-                        <td style={{ textAlign: 'right' }} className="b">{cad(row.pay.gross)}</td>
                         <td style={{ textAlign: 'right' }}>
                           <button
                             className="btn sm"
@@ -595,7 +617,7 @@ function Run() {
                       </tr>
                     ))}
                     {run.rows.length === 0 && (
-                      <tr><td colSpan={9} className="mut">No active accounts.</td></tr>
+                      <tr><td colSpan={8} className="mut">No active accounts.</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -604,12 +626,94 @@ function Run() {
           </div>
 
           <div className="note" style={{ marginTop: 14 }}>
-            Nothing here is stored — the period is worked out fresh from the sales, the timesheets and
-            the pay setup each time it is opened. Correcting an attendance day or amending a sale is
-            reflected immediately, so this is a view of the period rather than an approved run.
+            Total = (hours × base rate) + reimbursement + commission. A salaried person's base is their
+            monthly salary rather than hours × rate. Everything except the reimbursement is worked out
+            fresh from the sales, the timesheets and the pay setup each time the period is opened; the
+            reimbursement is typed in here{canReimburse ? ' — click a figure to change it' : ''}.
           </div>
         </>
       )}
+    </>
+  );
+}
+
+/** The rate with its unit, since an hourly and a monthly figure look alike. */
+function BaseRate({ pay }: { pay: PayrollStatement['pay'] }) {
+  if (pay.payType === 'COMMISSION_ONLY') return <span className="mut">—</span>;
+  return (
+    <>
+      {cad(pay.baseRate)}
+      <span className="mut sm">{pay.payType === 'HOURLY' ? ' /h' : ' /mo'}</span>
+    </>
+  );
+}
+
+/** The row's total as the sum it is, so the figure can be checked by eye. */
+function totalFormula(pay: PayrollStatement['pay']): string {
+  const base = pay.payType === 'HOURLY' ? `${pay.baseHours ?? '0.00'} h × ${cad(pay.baseRate)}` : cad(pay.base);
+  const commission = Number(pay.commission) + Number(pay.tierBonus);
+  return `${base} + ${cad(pay.reimbursement)} + ${cad(commission.toFixed(2))}`;
+}
+
+/**
+ * The reimbursement for one person and period, editable in place by whoever
+ * can approve payroll. It is the one stored figure on the run — everything
+ * else is derived — so it saves straight away and the run refetches.
+ */
+function ReimbursementCell({
+  userId, period, amount, editable,
+}: {
+  userId: string;
+  period: Period;
+  amount: string;
+  editable: boolean;
+}) {
+  const qc = useQueryClient();
+  const [draft, setDraft] = useState<string | null>(null);
+
+  const save = useMutation({
+    mutationFn: (value: string) =>
+      api.put('/api/payroll/reimbursement', { userId, from: period.from, to: period.to, amount: value }),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['payroll'] });
+      setDraft(null);
+    },
+  });
+
+  if (!editable) return <>{cad(amount)}</>;
+
+  if (draft === null) {
+    return (
+      <button className="btn sm" title="Change the reimbursement" onClick={() => { save.reset(); setDraft(amount); }}>
+        {cad(amount)}
+      </button>
+    );
+  }
+
+  const commit = () => {
+    const value = draft.trim() === '' ? '0' : draft.trim();
+    if (Number(value) === Number(amount)) setDraft(null);
+    else save.mutate(value);
+  };
+
+  return (
+    <>
+      <input
+        type="number"
+        min="0"
+        step="0.01"
+        autoFocus
+        style={{ width: 100, textAlign: 'right' }}
+        value={draft}
+        disabled={save.isPending}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') commit();
+          if (e.key === 'Escape') setDraft(null);
+        }}
+        onBlur={commit}
+      />
+      {save.isError && <div className="sm" style={{ color: 'var(--red)' }}>{(save.error as Error).message}</div>}
     </>
   );
 }
@@ -660,8 +764,9 @@ function Approvals() {
                   <th>Person</th><th>Period</th>
                   <th style={{ textAlign: 'right' }}>Hours</th>
                   <th style={{ textAlign: 'right' }}>Base</th>
+                  <th style={{ textAlign: 'right' }}>Reimbursement</th>
                   <th style={{ textAlign: 'right' }}>Commission</th>
-                  <th style={{ textAlign: 'right' }}>Gross</th>
+                  <th style={{ textAlign: 'right' }}>Total</th>
                   <th>Submitted</th><th />
                 </tr>
               </thead>
@@ -680,6 +785,7 @@ function Approvals() {
                     <td className="sm">{periodLabel(inv.periodStart.slice(0, 10), inv.periodEnd.slice(0, 10))}</td>
                     <td style={{ textAlign: 'right' }}>{inv.hours}</td>
                     <td style={{ textAlign: 'right' }}>{money(inv.base, 'CAD')}</td>
+                    <td style={{ textAlign: 'right' }}>{money(inv.reimbursement, 'CAD')}</td>
                     <td style={{ textAlign: 'right' }}>{money(inv.commission, 'CAD')}</td>
                     <td style={{ textAlign: 'right' }} className="b">{money(inv.gross, 'CAD')}</td>
                     <td className="sm mut">{fmtDate(inv.submittedAt)}</td>

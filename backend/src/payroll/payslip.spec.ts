@@ -438,7 +438,8 @@ describe('payslip', () => {
         tierBonusBreakdown: [
           { thresholdRevenue: '20000.00', bonusPct: '6.00', portion: '5000.00', amount: '300.00' },
         ],
-        gross: '6860.00',
+        reimbursement: '150.00',
+        gross: '7010.00',
       },
       invoice: null,
       preparedBy: 'Hannah Okafor',
@@ -464,6 +465,7 @@ describe('payslip', () => {
             commissionUnpaid: '0.00',
             tierBonus: '0.00',
             tierBonusBreakdown: [],
+            reimbursement: '0.00',
             gross: '0.00',
           },
         }),

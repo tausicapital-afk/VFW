@@ -55,6 +55,28 @@ export class EditPayrollInvoiceDto {
   note: string;
 }
 
+/**
+ * Setting one person's reimbursement for one period. `amount` arrives as a
+ * string and is parsed with Decimal in the service, like the tier figures
+ * below. "0" clears it.
+ */
+export class SetReimbursementDto {
+  @IsString() @MinLength(1) @MaxLength(60)
+  userId: string;
+
+  @Matches(DATE_RE, { message: 'from must look like 2026-08-01' })
+  from: string;
+
+  @Matches(DATE_RE, { message: 'to must look like 2026-08-31' })
+  to: string;
+
+  @IsString() @MaxLength(20)
+  amount: string;
+
+  @IsOptional() @IsString() @MaxLength(2000)
+  note?: string;
+}
+
 export class RejectPayrollInvoiceDto {
   @IsString() @MinLength(1) @MaxLength(2000)
   reason: string;

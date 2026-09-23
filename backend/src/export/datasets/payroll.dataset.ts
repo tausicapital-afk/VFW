@@ -70,6 +70,7 @@ const columns: ExportColumn<PayrollRow>[] = [
   // per-sale commission above — see the schema comment on CommissionTier.
   // Zero for anyone who did not cross a threshold this period.
   { header: 'Tier bonus (CAD)', value: (r) => Number(r.pay.tierBonus), money: true, width: 14 },
+  { header: 'Reimbursement (CAD)', value: (r) => Number(r.pay.reimbursement), money: true, width: 15 },
   { header: 'Gross (CAD)', value: (r) => Number(r.pay.gross), money: true, width: 14 },
 ];
 
@@ -113,6 +114,7 @@ const approvalColumns: ExportColumn<PayrollApprovalRow>[] = [
   { header: 'Commission %', value: (r) => Number(r.commissionPct), width: 12, spreadsheetOnly: true },
   { header: 'Commission (CAD)', value: (r) => Number(r.commission), money: true, width: 15 },
   { header: 'Tier bonus (CAD)', value: (r) => Number(r.tierBonus), money: true, width: 14 },
+  { header: 'Reimbursement (CAD)', value: (r) => Number(r.reimbursement), money: true, width: 15 },
   { header: 'Gross (CAD)', value: (r) => Number(r.gross), money: true, width: 14 },
   { header: 'Submitted', value: (r) => r.submittedAt, width: 14 },
   { header: 'Note', value: (r) => r.note, width: 30, spreadsheetOnly: true },

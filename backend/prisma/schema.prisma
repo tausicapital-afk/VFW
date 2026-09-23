@@ -180,6 +180,7 @@ model User {
 
   payrollInvoicesSubmitted PayrollInvoice[] @relation("PayrollInvoiceSubject")
   payrollInvoicesReviewed  PayrollInvoice[] @relation("PayrollInvoiceReviewer")
+  payrollReimbursements    PayrollReimbursement[] @relation("PayrollReimbursementSubject")
 
   qboConnections      QboConnection[]
   qboMappingsUpdated  QboMapping[]
@@ -1558,6 +1559,10 @@ model PayrollInvoice {
   // Defaulted for the rows that predate this column, which never had a tier
   // table to compute a bonus from.
   tierBonus     Decimal @default(0) @db.Decimal(14, 2)
+  // Expenses paid back for the period — copied from PayrollReimbursement at
+  // submit time and frozen like everything else here. Not earnings, but part
+  // of what the person is paid, so it is summed into `gross`.
+  reimbursement Decimal @default(0) @db.Decimal(14, 2)
   gross         Decimal @db.Decimal(14, 2)
   // Frozen alongside the rate so a zero commission on an old invoice can say
   // WHICH zero it is: a rep who earned nothing this month, or someone who is
@@ -1588,6 +1593,32 @@ model PayrollInvoice {
   @@unique([userId, periodStart, periodEnd])
   @@index([status])
   @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Payroll reimbursements — expenses paid back to someone for a period.
+//
+// The one figure on the statement that cannot be derived from anything else in
+// the system, so it is typed in by Accounting on the Payroll run and stored
+// here, keyed the same way PayrollInvoice is: one row per person per period.
+// PayrollService adds it into the live gross; submitting the period freezes
+// it onto the invoice.
+// ---------------------------------------------------------------------------
+
+model PayrollReimbursement {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation("PayrollReimbursementSubject", fields: [userId], references: [id])
+  periodStart DateTime @db.Date
+  periodEnd   DateTime @db.Date
+  amount      Decimal  @db.Decimal(14, 2)
+  note        String?
+  updatedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, periodStart, periodEnd])
 }
 
 // ---------------------------------------------------------------------------

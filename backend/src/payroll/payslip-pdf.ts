@@ -86,6 +86,8 @@ export interface PayslipPdfData {
      *  bonus that was not earned. */
     tierBonus: string;
     tierBonusBreakdown: TierBonusBreakdownEntry[];
+    /** Expenses paid back for the period. The line is omitted when zero. */
+    reimbursement: string;
     gross: string;
   };
 
@@ -385,13 +387,20 @@ export function buildPayslipPdf(d: PayslipPdfData): Promise<Buffer> {
     earning('Tier bonus', tierDerivation, cash(d.pay.tierBonus));
   }
 
+  if (Number(d.pay.reimbursement) > 0) {
+    earning('Reimbursement', 'Expenses paid back for this period, as entered by Accounting', cash(d.pay.reimbursement));
+  }
+
   rule(y, INK);
   y += 8;
   earning(
     'Gross pay',
-    Number(d.pay.tierBonus) > 0
-      ? `Base + commission + tier bonus, in ${d.currency}`
-      : `Base + commission, in ${d.currency}`,
+    [
+      'Base + commission',
+      Number(d.pay.tierBonus) > 0 ? ' + tier bonus' : '',
+      Number(d.pay.reimbursement) > 0 ? ' + reimbursement' : '',
+      `, in ${d.currency}`,
+    ].join(''),
     cash(d.pay.gross),
     true,
   );
