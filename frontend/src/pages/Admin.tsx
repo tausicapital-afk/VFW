@@ -1845,21 +1845,27 @@ function NewEventModal({
 }) {
   const [brand, setBrand] = useState(BRANDS[0]);
   const [name, setName] = useState('');
-  const [season, setSeason] = useState(seasons[0]?.label ?? '');
+  const [picked, setPicked] = useState<string[]>(seasons[0] ? [seasons[0].label] : []);
   const [cityId, setCityId] = useState(cities[0]?.id ?? '');
   const [venue, setVenue] = useState('');
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  const id = previewEventId(brand, cityId, season.trim());
+  const toggleSeason = (label: string) =>
+    setPicked((p) => (p.includes(label) ? p.filter((x) => x !== label) : [...p, label]));
+  // One show per ticked season, filed under that season's id.
+  const ids = seasons
+    .filter((s) => picked.includes(s.label))
+    .map((s) => previewEventId(brand, cityId, s.label))
+    .filter(Boolean);
 
   const create = useMutation({
     mutationFn: () =>
       api.post('/api/admin/events', {
         brand,
         name: name.trim(),
-        season: season.trim(),
+        seasons: picked,
         cityId,
         venue: venue.trim() || undefined,
         start,
@@ -1870,7 +1876,7 @@ function NewEventModal({
   });
 
   const ready =
-    name.trim() !== '' && season.trim() !== '' && !!cityId && start !== '' && end !== '';
+    name.trim() !== '' && picked.length > 0 && !!cityId && start !== '' && end !== '';
 
   return (
     <div className="modal" onClick={onClose}>
@@ -1902,16 +1908,32 @@ function NewEventModal({
                 placeholder="Vancouver Fashion Week"
               />
             </div>
-            <div className="f">
-              <label>Season</label>
+            <div className="f wide">
+              <label>Seasons</label>
               {seasons.length > 0 ? (
-                <select value={season} onChange={(e) => setSeason(e.target.value)}>
-                  {seasons.map((s) => <option key={s.id} value={s.label}>{s.label}</option>)}
-                </select>
+                <div className="checks">
+                  {seasons.map((s) => (
+                    <label key={s.id} className={'chk' + (picked.includes(s.label) ? ' on' : '')}>
+                      <input
+                        type="checkbox"
+                        checked={picked.includes(s.label)}
+                        onChange={() => toggleSeason(s.label)}
+                      />
+                      <span className="t">{s.label}</span>
+                    </label>
+                  ))}
+                </div>
               ) : (
                 <div className="help">Add a season above first.</div>
               )}
-              {id && <div className="help">Filed as <b className="mono">{id}</b>.</div>}
+              {ids.length > 0 && (
+                <div className="help">
+                  {ids.length > 1 ? `Adds ${ids.length} shows, filed as ` : 'Filed as '}
+                  {ids.map((id, i) => (
+                    <span key={id}>{i > 0 && ', '}<b className="mono">{id}</b></span>
+                  ))}.
+                </div>
+              )}
             </div>
             <div className="f">
               <label>Venue (optional)</label>
@@ -1935,7 +1957,7 @@ function NewEventModal({
             disabled={!ready || create.isPending}
             onClick={() => { setError(null); create.mutate(); }}
           >
-            {create.isPending ? 'Adding…' : 'Add show'}
+            {create.isPending ? 'Adding…' : picked.length > 1 ? `Add ${picked.length} shows` : 'Add show'}
           </button>
         </div>
       </div>

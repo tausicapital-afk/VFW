@@ -165,7 +165,7 @@ export class AdminController {
   @Post('admin/events')
   @Can('admin.manage')
   createEvent(@Body() dto: CreateEventDto, @CurrentUser() user: AuthUser) {
-    return this.admin.createEvent(dto, user);
+    return dto.seasons ? this.admin.createEvents(dto, user) : this.admin.createEvent(dto, user);
   }
 
   @Post('admin/events/import')

@@ -318,10 +318,23 @@ export class CreateEventDto {
   name: string;
 
   /** Free text with a trailing year, e.g. "Spring/Summer 27" — see lib/season.ts on the frontend. */
+  @ValidateIf((o: CreateEventDto) => o.seasons === undefined)
   @IsString()
   @MinLength(1)
   @MaxLength(40)
-  season: string;
+  season?: string;
+
+  /**
+   * The same show filed under several seasons at once — one show per season,
+   * since a show's id carries its season. Takes the place of `season`.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsString({ each: true })
+  @MinLength(1, { each: true })
+  @MaxLength(40, { each: true })
+  seasons?: string[];
 
   @IsString()
   cityId: string;

@@ -787,21 +787,36 @@ export class AdminService {
    * prisma/seed.ts.
    */
   async createEvent(dto: CreateEventDto, actor: AuthUser) {
+    const [created] = await this.createEvents(dto, actor);
+    return created;
+  }
+
+  /**
+   * The same show under every season in `dto.seasons` (or just `dto.season`)
+   * — one show per season, since the id carries the season. All or nothing:
+   * every season is checked before any show is written, so a clash on one
+   * season leaves none of them half-added.
+   */
+  async createEvents(dto: CreateEventDto, actor: AuthUser) {
     const brand = dto.brand.trim().toUpperCase();
     const name = dto.name.trim();
-    const season = dto.season.trim();
+    const seasons = [...new Set((dto.seasons ?? [dto.season ?? '']).map((s) => s.trim()))];
+    if (seasons.some((s) => s === '')) throw new BadRequestException('Pick at least one season');
 
     const city = await this.prisma.city.findUnique({ where: { id: dto.cityId } });
     if (!city) throw new BadRequestException(`Unknown city ${dto.cityId}`);
 
-    if (!(await this.prisma.season.findUnique({ where: { label: season } }))) {
-      throw new BadRequestException(`Unknown season "${season}" — add it under Seasons first`);
+    const known = await this.prisma.season.findMany({ where: { label: { in: seasons } } });
+    const unknown = seasons.find((s) => !known.some((k) => k.label === s));
+    if (unknown !== undefined) {
+      throw new BadRequestException(`Unknown season "${unknown}" — add it under Seasons first`);
     }
 
-    const id = eventId(brand, city.id, season);
-    if (await this.prisma.event.findUnique({ where: { id } })) {
+    const ids = seasons.map((season) => eventId(brand, city.id, season));
+    const taken = await this.prisma.event.findMany({ where: { id: { in: ids } } });
+    if (taken.length > 0) {
       throw new BadRequestException(
-        `${brand} already has a show with the id ${id} — give this one a different season or city`,
+        `${brand} already has a show with the id ${taken.map((e) => e.id).join(', ')} — give this one a different season or city`,
       );
     }
 
@@ -810,38 +825,44 @@ export class AdminService {
     if (end < start) throw new BadRequestException('A show cannot end before it starts');
 
     return this.prisma.$transaction(async (tx) => {
-      const created = await tx.event.create({
-        data: {
-          id,
-          brand,
-          name,
-          season,
-          venue: dto.venue?.trim() || null,
-          start,
-          end,
-          cityId: city.id,
-          isTestData: this.config.testDataMode,
-        },
-        include: { city: true },
-      });
-      await this.audit.log(
-        {
-          actorId: actor.id,
-          action: 'CATALOG_EVENT_CREATED',
-          detail: `Show added to the catalogue: ${brand} ${name} (${season})`,
-          payload: {
-            eventId: id,
-            brand,
-            name,
-            season,
-            cityId: city.id,
-            venue: dto.venue ?? null,
-            start: dto.start,
-            end: dto.end,
+      const created = [];
+      for (const [i, season] of seasons.entries()) {
+        const id = ids[i]!;
+        created.push(
+          await tx.event.create({
+            data: {
+              id,
+              brand,
+              name,
+              season,
+              venue: dto.venue?.trim() || null,
+              start,
+              end,
+              cityId: city.id,
+              isTestData: this.config.testDataMode,
+            },
+            include: { city: true },
+          }),
+        );
+        await this.audit.log(
+          {
+            actorId: actor.id,
+            action: 'CATALOG_EVENT_CREATED',
+            detail: `Show added to the catalogue: ${brand} ${name} (${season})`,
+            payload: {
+              eventId: id,
+              brand,
+              name,
+              season,
+              cityId: city.id,
+              venue: dto.venue ?? null,
+              start: dto.start,
+              end: dto.end,
+            },
           },
-        },
-        tx,
-      );
+          tx,
+        );
+      }
       return created;
     });
   }
