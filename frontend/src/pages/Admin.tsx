@@ -1286,6 +1286,7 @@ function PackagesTab() {
       {show && (
         <EventModal
           event={show}
+          events={data?.events ?? []}
           cities={data?.cities ?? []}
           seasons={data?.seasons ?? []}
           onClose={() => setEditingShow(null)}
@@ -1966,27 +1967,47 @@ function NewEventModal({
 }
 
 function EventModal({
-  event, cities, seasons, onClose, onSaved,
+  event, events, cities, seasons, onClose, onSaved,
 }: {
   event: EventRow;
+  events: EventRow[];
   cities: AdminCatalogue['cities'];
   seasons: Season[];
   onClose: () => void;
   onSaved: () => void;
 }) {
   const [name, setName] = useState(event.name);
-  const [season, setSeason] = useState(event.season);
+  const [picked, setPicked] = useState<string[]>([event.season]);
   const [cityId, setCityId] = useState(event.cityId);
   const [venue, setVenue] = useState(event.venue ?? '');
   const [start, setStart] = useState(event.start.slice(0, 10));
   const [end, setEnd] = useState(event.end.slice(0, 10));
   const [error, setError] = useState<string | null>(null);
 
+  // The show's current season may since have been renamed or deleted — kept
+  // as an extra choice so it never silently drops off.
+  const choices = seasons.some((s) => s.label === event.season)
+    ? seasons.map((s) => s.label)
+    : [event.season, ...seasons.map((s) => s.label)];
+  // Seasons this show already runs in as a separate show (same brand and city).
+  const siblingOf = (label: string) =>
+    label === event.season
+      ? undefined
+      : events.find((e) => e.id !== event.id && e.id === previewEventId(event.brand, cityId, label));
+  const toggleSeason = (label: string) =>
+    setPicked((p) => (p.includes(label) ? p.filter((x) => x !== label) : [...p, label]));
+  const own = picked.includes(event.season) ? event.season : picked[0];
+  // One new show per extra ticked season, filed under that season's id.
+  const copies = choices
+    .filter((l) => picked.includes(l) && l !== own && !siblingOf(l))
+    .map((l) => previewEventId(event.brand, cityId, l))
+    .filter(Boolean);
+
   const save = useMutation({
     mutationFn: () =>
       api.patch(`/api/admin/events/${event.id}`, {
         name: name.trim(),
-        season: season.trim(),
+        seasons: picked.filter((l) => !siblingOf(l)),
         cityId,
         venue: venue.trim() || null,
         start,
@@ -1998,7 +2019,7 @@ function EventModal({
 
   const dirty =
     name.trim() !== event.name ||
-    season.trim() !== event.season ||
+    picked.length !== 1 || picked[0] !== event.season ||
     cityId !== event.cityId ||
     (venue.trim() || null) !== event.venue ||
     start !== event.start.slice(0, 10) ||
@@ -2018,16 +2039,37 @@ function EventModal({
               <label>Show name</label>
               <input value={name} onChange={(e) => setName(e.target.value)} />
             </div>
-            <div className="f">
-              <label>Season</label>
-              <select value={season} onChange={(e) => setSeason(e.target.value)}>
-                {/* The show's current season may since have been renamed or deleted —
-                    kept as an extra option so the select never silently switches it. */}
-                {!seasons.some((s) => s.label === season) && (
-                  <option value={season}>{season}</option>
-                )}
-                {seasons.map((s) => <option key={s.id} value={s.label}>{s.label}</option>)}
-              </select>
+            <div className="f wide">
+              <label>Seasons</label>
+              <div className="checks">
+                {choices.map((label) => {
+                  const sibling = siblingOf(label);
+                  const on = !!sibling || picked.includes(label);
+                  return (
+                    <label key={label} className={'chk' + (on ? ' on' : '')}>
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        disabled={!!sibling}
+                        onChange={() => toggleSeason(label)}
+                      />
+                      <span className="t">{label}</span>
+                      {sibling && <span className="p">{sibling.id}</span>}
+                    </label>
+                  );
+                })}
+              </div>
+              {own && own !== event.season && (
+                <div className="help">This show moves to <b>{own}</b>.</div>
+              )}
+              {copies.length > 0 && (
+                <div className="help">
+                  {copies.length > 1 ? `Also adds ${copies.length} shows, filed as ` : 'Also adds a show filed as '}
+                  {copies.map((id, i) => (
+                    <span key={id}>{i > 0 && ', '}<b className="mono">{id}</b></span>
+                  ))}.
+                </div>
+              )}
             </div>
             <div className="f">
               <label>City</label>
@@ -2058,10 +2100,10 @@ function EventModal({
           <button className="btn" onClick={onClose}>Cancel</button>
           <button
             className="btn primary"
-            disabled={!dirty || save.isPending}
+            disabled={!dirty || picked.length === 0 || save.isPending}
             onClick={() => { setError(null); save.mutate(); }}
           >
-            {save.isPending ? 'Saving…' : 'Save show'}
+            {save.isPending ? 'Saving…' : copies.length ? `Save and add ${copies.length}` : 'Save show'}
           </button>
         </div>
       </div>

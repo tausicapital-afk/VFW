@@ -827,44 +827,56 @@ export class AdminService {
     return this.prisma.$transaction(async (tx) => {
       const created = [];
       for (const [i, season] of seasons.entries()) {
-        const id = ids[i]!;
         created.push(
-          await tx.event.create({
-            data: {
-              id,
-              brand,
-              name,
-              season,
-              venue: dto.venue?.trim() || null,
-              start,
-              end,
-              cityId: city.id,
-              isTestData: this.config.testDataMode,
-            },
-            include: { city: true },
-          }),
-        );
-        await this.audit.log(
-          {
-            actorId: actor.id,
-            action: 'CATALOG_EVENT_CREATED',
-            detail: `Show added to the catalogue: ${brand} ${name} (${season})`,
-            payload: {
-              eventId: id,
-              brand,
-              name,
-              season,
-              cityId: city.id,
-              venue: dto.venue ?? null,
-              start: dto.start,
-              end: dto.end,
-            },
-          },
-          tx,
+          await this.writeEvent(
+            tx,
+            { id: ids[i]!, brand, name, season, cityId: city.id, venue: dto.venue?.trim() || null, start, end },
+            actor,
+          ),
         );
       }
       return created;
     });
+  }
+
+  /** Writes one new show and its audit entry, inside the caller's transaction. */
+  private async writeEvent(
+    tx: Prisma.TransactionClient,
+    ev: {
+      id: string;
+      brand: string;
+      name: string;
+      season: string;
+      cityId: string;
+      venue: string | null;
+      start: Date;
+      end: Date;
+    },
+    actor: AuthUser,
+  ) {
+    const created = await tx.event.create({
+      data: { ...ev, isTestData: this.config.testDataMode },
+      include: { city: true },
+    });
+    await this.audit.log(
+      {
+        actorId: actor.id,
+        action: 'CATALOG_EVENT_CREATED',
+        detail: `Show added to the catalogue: ${ev.brand} ${ev.name} (${ev.season})`,
+        payload: {
+          eventId: ev.id,
+          brand: ev.brand,
+          name: ev.name,
+          season: ev.season,
+          cityId: ev.cityId,
+          venue: ev.venue,
+          start: ev.start.toISOString().slice(0, 10),
+          end: ev.end.toISOString().slice(0, 10),
+        },
+      },
+      tx,
+    );
+    return created;
   }
 
   // -------------------------------------------------------------------------
@@ -957,14 +969,28 @@ export class AdminService {
       after.name = dto.name.trim();
       data.name = dto.name.trim();
     }
-    if (dto.season !== undefined && dto.season.trim() !== event.season) {
-      const season = dto.season.trim();
-      if (!(await this.prisma.season.findUnique({ where: { label: season } }))) {
-        throw new BadRequestException(`Unknown season "${season}" — add it under Seasons first`);
+    // `seasons` = this show's own season (kept if listed, else the first) plus
+    // any others, each of which adds a copy of the show under its own id.
+    let ownSeason = dto.season?.trim();
+    let extraSeasons: string[] = [];
+    if (dto.seasons !== undefined) {
+      const seasons = [...new Set(dto.seasons.map((s) => s.trim()))];
+      if (seasons.some((s) => s === '')) throw new BadRequestException('Pick at least one season');
+      ownSeason = seasons.includes(event.season) ? event.season : seasons[0]!;
+      extraSeasons = seasons.filter((s) => s !== ownSeason);
+      const known = await this.prisma.season.findMany({ where: { label: { in: extraSeasons } } });
+      const unknown = extraSeasons.find((s) => !known.some((k) => k.label === s));
+      if (unknown !== undefined) {
+        throw new BadRequestException(`Unknown season "${unknown}" — add it under Seasons first`);
+      }
+    }
+    if (ownSeason !== undefined && ownSeason !== event.season) {
+      if (!(await this.prisma.season.findUnique({ where: { label: ownSeason } }))) {
+        throw new BadRequestException(`Unknown season "${ownSeason}" — add it under Seasons first`);
       }
       before.season = event.season;
-      after.season = season;
-      data.season = season;
+      after.season = ownSeason;
+      data.season = ownSeason;
     }
     if (dto.venue !== undefined && (dto.venue?.trim() || null) !== event.venue) {
       before.venue = event.venue;
@@ -996,19 +1022,47 @@ export class AdminService {
       }
     }
 
-    if (!Object.keys(after).length) throw new BadRequestException('Nothing was changed');
+    if (!Object.keys(after).length && !extraSeasons.length) {
+      throw new BadRequestException('Nothing was changed');
+    }
+
+    // The copies take the show as edited, not as it was.
+    const copy = {
+      brand: event.brand,
+      name: dto.name?.trim() || event.name,
+      cityId: dto.cityId ?? event.cityId,
+      venue: dto.venue !== undefined ? dto.venue?.trim() || null : event.venue,
+      start: dto.start !== undefined ? new Date(dto.start) : event.start,
+      end: dto.end !== undefined ? new Date(dto.end) : event.end,
+    };
+    const extraIds = extraSeasons.map((season) => eventId(copy.brand, copy.cityId, season));
+    if (extraIds.length) {
+      const taken = await this.prisma.event.findMany({ where: { id: { in: extraIds } } });
+      if (taken.length > 0) {
+        throw new BadRequestException(
+          `${copy.brand} already has a show with the id ${taken.map((e) => e.id).join(', ')} — untick that season`,
+        );
+      }
+      if (copy.end < copy.start) throw new BadRequestException('A show cannot end before it starts');
+    }
 
     return this.prisma.$transaction(async (tx) => {
-      const updated = await tx.event.update({ where: { id }, data, include: { city: true } });
-      await this.audit.log(
-        {
-          actorId: actor.id,
-          action: 'CATALOG_EVENT_UPDATED',
-          detail: `Show updated: ${event.brand} ${event.name}`,
-          payload: { eventId: id, before, after },
-        },
-        tx,
-      );
+      let updated = await tx.event.findUniqueOrThrow({ where: { id }, include: { city: true } });
+      if (Object.keys(after).length) {
+        updated = await tx.event.update({ where: { id }, data, include: { city: true } });
+        await this.audit.log(
+          {
+            actorId: actor.id,
+            action: 'CATALOG_EVENT_UPDATED',
+            detail: `Show updated: ${event.brand} ${event.name}`,
+            payload: { eventId: id, before, after },
+          },
+          tx,
+        );
+      }
+      for (const [i, season] of extraSeasons.entries()) {
+        await this.writeEvent(tx, { ...copy, id: extraIds[i]!, season }, actor);
+      }
       return updated;
     });
   }

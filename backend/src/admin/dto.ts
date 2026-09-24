@@ -364,6 +364,19 @@ export class UpdateEventDto {
   @MaxLength(40)
   season?: string;
 
+  /**
+   * Every season this show should run in. This show keeps its own season if it
+   * is listed (otherwise it moves to the first one); each other season adds a
+   * copy of the show, filed under that season's id. Takes the place of `season`.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsString({ each: true })
+  @MinLength(1, { each: true })
+  @MaxLength(40, { each: true })
+  seasons?: string[];
+
   @IsOptional()
   @IsString()
   cityId?: string;
