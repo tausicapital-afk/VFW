@@ -9,7 +9,7 @@ import { ConfigService } from '../config/config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { avatarUrl } from '../profile/avatar';
-import { AttendanceQueryDto, ClockDto, DATE_RE, TeamQueryDto, UpsertAttendanceDto } from './dto';
+import { AttendanceQueryDto, DATE_RE, TeamQueryDto, UpsertAttendanceDto } from './dto';
 
 /** The statuses that mean work happened. Everything else is a day away. */
 export const WORKING_STATUSES: AttendanceStatus[] = [
@@ -20,7 +20,6 @@ export const WORKING_STATUSES: AttendanceStatus[] = [
 /** Nobody works more than a day in a day. */
 const MAX_HOURS = new Decimal(24);
 
-const MINUTES_PER_DAY = 24 * 60;
 
 /**
  * A calendar day as a UTC-midnight instant, which is what Postgres `DATE` round-
@@ -53,24 +52,6 @@ export function currentMonth(now = new Date()): string {
   return now.toISOString().slice(0, 7);
 }
 
-/**
- * Hours between two wall-clock times, to the minute.
- *
- * An end before the start is read as crossing midnight rather than as an error:
- * a shift that runs 22:00–06:00 is a real shift, and the alternative — refusing
- * it — would push night work into being recorded as two days it did not span.
- */
-export function hoursBetween(checkIn: string, checkOut: string): Decimal {
-  const minutes = (t: string) => {
-    const [h, m] = t.split(':').map(Number);
-    return h * 60 + m;
-  };
-  const start = minutes(checkIn);
-  const end = minutes(checkOut);
-  const span = end >= start ? end - start : end + MINUTES_PER_DAY - start;
-  return new Decimal(span).div(60).toDecimalPlaces(2);
-}
-
 type EntryRow = Prisma.AttendanceEntryGetPayload<{
   include: { updatedBy: { select: { id: true; name: true } } };
 }>;
@@ -87,8 +68,6 @@ function shape(entry: EntryRow, subjectId: string) {
     date: dayKey(entry.date),
     status: entry.status,
     hours: entry.hours.toString(),
-    checkIn: entry.checkIn,
-    checkOut: entry.checkOut,
     note: entry.note,
     isTestData: entry.isTestData,
     // Surfaced rather than left to the client to work out, because "your manager
@@ -197,7 +176,7 @@ export class AttendanceService {
         avatarUrl: await avatarUrl(this.storage, user.avatarKey),
       },
       // Whether the caller is looking at their own sheet decides what the screen
-      // may offer — you clock in on yours, you correct someone else's.
+      // may offer — you record yours, you correct someone else's.
       self: userId === actor.id,
       entries: rows,
       summary: summarise(rows),
@@ -269,15 +248,15 @@ export class AttendanceService {
     const date = parseDay(dateIso);
 
     const status = dto.status ?? AttendanceStatus.PRESENT;
-    const checkIn = dto.checkIn ?? null;
-    const checkOut = dto.checkOut ?? null;
-    const hours = this.resolveHours(dto, checkIn, checkOut);
+    const hours = this.resolveHours(dto);
 
     const data = {
       status,
       hours: new Prisma.Decimal(hours.toFixed(2)),
-      checkIn,
-      checkOut,
+      // Start/finish times are no longer recorded; a rewrite clears any left
+      // over from before, so the row cannot carry times that disagree with it.
+      checkIn: null,
+      checkOut: null,
       note: dto.note?.trim() || null,
       updatedById: actor.id,
     };
@@ -296,21 +275,8 @@ export class AttendanceService {
     return shape(entry, userId);
   }
 
-  /**
-   * What the row's `hours` should say.
-   *
-   * The times win over a supplied total whenever both are present. That ordering
-   * is the only one that cannot produce a row contradicting itself, and the form
-   * sends both — it fills the total in as you pick the times, so a stale number
-   * left in the field must not be able to override the times you just changed.
-   */
-  private resolveHours(
-    dto: UpsertAttendanceDto,
-    checkIn: string | null,
-    checkOut: string | null,
-  ): Decimal {
-    if (checkIn && checkOut) return hoursBetween(checkIn, checkOut);
-
+  /** What the row's `hours` should say: the number typed, bounded to a day. */
+  private resolveHours(dto: UpsertAttendanceDto): Decimal {
     if (dto.hours === undefined) return new Decimal(0);
 
     const hours = new Decimal(dto.hours);
@@ -332,69 +298,6 @@ export class AttendanceService {
 
     await this.record(subject, actor, dateIso, 'cleared the day');
     return { ok: true };
-  }
-
-  /**
-   * Start the day. Idempotent in the way that matters: clocking in twice keeps
-   * the first time, because the honest answer to "when did you start?" does not
-   * change because you reloaded the page.
-   */
-  async clockIn(dto: ClockDto, actor: AuthUser) {
-    const userId = await this.subject(dto.userId, actor);
-    const date = parseDay(dto.date);
-
-    const existing = await this.prisma.attendanceEntry.findUnique({
-      where: { userId_date: { userId, date } },
-    });
-    if (existing?.checkIn) {
-      throw new BadRequestException(`Already clocked in at ${existing.checkIn}`);
-    }
-
-    const entry = await this.prisma.attendanceEntry.upsert({
-      where: { userId_date: { userId, date } },
-      create: {
-        userId,
-        date,
-        status: AttendanceStatus.PRESENT,
-        checkIn: dto.time,
-        updatedById: actor.id,
-        isTestData: this.config.testDataMode,
-      },
-      update: { checkIn: dto.time, updatedById: actor.id },
-      include: ENTRY_INCLUDE,
-    });
-
-    await this.record(userId, actor, dto.date, `clocked in at ${dto.time}`);
-    return shape(entry, userId);
-  }
-
-  /**
-   * End the day, and let the two times settle the hours. Clocking out again is
-   * allowed and simply moves the end — staying later than you meant to is normal,
-   * and the alternative is a row that permanently understates the day.
-   */
-  async clockOut(dto: ClockDto, actor: AuthUser) {
-    const userId = await this.subject(dto.userId, actor);
-    const date = parseDay(dto.date);
-
-    const existing = await this.prisma.attendanceEntry.findUnique({
-      where: { userId_date: { userId, date } },
-    });
-    if (!existing?.checkIn) throw new BadRequestException('Clock in first');
-
-    const hours = hoursBetween(existing.checkIn, dto.time);
-    const entry = await this.prisma.attendanceEntry.update({
-      where: { userId_date: { userId, date } },
-      data: {
-        checkOut: dto.time,
-        hours: new Prisma.Decimal(hours.toFixed(2)),
-        updatedById: actor.id,
-      },
-      include: ENTRY_INCLUDE,
-    });
-
-    await this.record(userId, actor, dto.date, `clocked out at ${dto.time} · ${hours.toFixed(2)}h`);
-    return shape(entry, userId);
   }
 
   /**

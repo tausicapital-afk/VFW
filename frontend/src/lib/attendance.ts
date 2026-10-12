@@ -19,12 +19,6 @@ export function monthKey(d: Date): string {
   return dayKey(d).slice(0, 7);
 }
 
-/** "HH:MM" on the wall clock in front of the person, which is what we record. */
-export function timeNow(d = new Date()): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
 /** Step a "YYYY-MM" by whole months, without ever touching a Date. */
 export function shiftMonth(month: string, by: number): string {
   const [y, m] = month.split('-').map(Number);
@@ -89,16 +83,3 @@ export const STATUS_PILL: Record<AttendanceStatus, string> = {
 };
 
 export const STATUSES = Object.keys(STATUS_LABEL) as AttendanceStatus[];
-
-/** Hours implied by a pair of times, mirroring the server so the form can preview it. */
-export function hoursBetween(checkIn: string, checkOut: string): string {
-  const minutes = (t: string) => {
-    const [h, m] = t.split(':').map(Number);
-    return h * 60 + m;
-  };
-  const start = minutes(checkIn);
-  const end = minutes(checkOut);
-  // An end before the start crosses midnight, exactly as the API reads it.
-  const span = end >= start ? end - start : end + 24 * 60 - start;
-  return (span / 60).toFixed(2);
-}

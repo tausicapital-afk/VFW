@@ -270,8 +270,7 @@ update QuickBooks — someone has to fix the QuickBooks side separately.
 ### Attendance
 
 Your monthly timesheet — a calendar where each day can be marked with a
-status, clock-in/clock-out times, or a note, plus quick Clock In / Clock Out
-buttons for today.
+status, the number of hours worked, and an optional note.
 
 **Everyone can see and mark their own attendance.** Accounting, Sales
 Managers, and Administrators additionally get a **Team** tab showing every
@@ -283,9 +282,8 @@ themself is recorded and clearly labeled as a correction, not a self-report.
 
 **A couple of details worth knowing:**
 
-- If you enter both a start and finish time, your hours are calculated from
-  those times automatically — a typed total is only used when times aren't
-  given, so your record can never contradict itself.
+- You record hours worked directly (for example 7.5); start and finish
+  times are not recorded.
 - Each day can only have one record. Re-entering a day overwrites what was
   there before, rather than adding a second entry.
 

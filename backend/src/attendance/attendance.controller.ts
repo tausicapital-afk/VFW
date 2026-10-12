@@ -1,7 +1,7 @@
-import { Body, Controller, Delete, Get, Module, Param, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Module, Param, Put, Query } from '@nestjs/common';
 import { AuthUser, Can, CurrentUser } from '../common/auth.guard';
 import { AttendanceService } from './attendance.service';
-import { AttendanceQueryDto, ClockDto, TeamQueryDto, UpsertAttendanceDto } from './dto';
+import { AttendanceQueryDto, TeamQueryDto, UpsertAttendanceDto } from './dto';
 
 /**
  * Timesheets: which days someone worked, and for how long.
@@ -30,18 +30,6 @@ export class AttendanceController {
   @Can('attendance.mark')
   list(@Query() query: AttendanceQueryDto, @CurrentUser() user: AuthUser) {
     return this.attendance.list(query, user);
-  }
-
-  @Post('clock-in')
-  @Can('attendance.mark')
-  clockIn(@Body() dto: ClockDto, @CurrentUser() user: AuthUser) {
-    return this.attendance.clockIn(dto, user);
-  }
-
-  @Post('clock-out')
-  @Can('attendance.mark')
-  clockOut(@Body() dto: ClockDto, @CurrentUser() user: AuthUser) {
-    return this.attendance.clockOut(dto, user);
   }
 
   @Put(':date')

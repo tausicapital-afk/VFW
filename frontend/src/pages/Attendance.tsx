@@ -5,7 +5,7 @@ import { api } from '../lib/api';
 import { can } from '../lib/acl';
 import {
   STATUSES, STATUS_LABEL, STATUS_PILL, WEEKDAYS,
-  dayKey, hoursBetween, isWeekend, monthGrid, monthKey, monthLabel, shiftMonth, timeNow,
+  dayKey, isWeekend, monthGrid, monthKey, monthLabel, shiftMonth,
 } from '../lib/attendance';
 import type {
   AttendanceEntry, AttendanceSheet, AttendanceStatus, AttendanceTeam,
@@ -50,7 +50,6 @@ function MySheet({ userId }: { userId?: string } = {}) {
   const qc = useQueryClient();
   const [month, setMonth] = useState(() => monthKey(new Date()));
   const [editing, setEditing] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
   const { data: sheet } = useQuery({
     queryKey: qk.sheet(month, userId),
@@ -64,24 +63,8 @@ function MySheet({ userId }: { userId?: string } = {}) {
     void qc.invalidateQueries({ queryKey: ['attendance'] });
   }
 
-  const clock = useMutation({
-    mutationFn: (which: 'in' | 'out') =>
-      api.post(`/api/attendance/clock-${which}`, {
-        date: dayKey(new Date()),
-        time: timeNow(),
-        ...(userId ? { userId } : {}),
-      }),
-    onSuccess: () => { setError(null); refresh(); },
-    onError: (e) => setError(e instanceof Error ? e.message : 'Could not record that'),
-  });
-
   const today = dayKey(new Date());
   const byDate = new Map((sheet?.entries ?? []).map((e) => [e.date, e]));
-  const todayEntry = byDate.get(today);
-  // Clocking in only makes sense on today, and only on the month that contains
-  // it — the buttons are hidden rather than disabled on other months, because a
-  // greyed control invites a click that could never have worked.
-  const onCurrentMonth = month === monthKey(new Date());
 
   return (
     <>
@@ -91,28 +74,8 @@ function MySheet({ userId }: { userId?: string } = {}) {
         <button className="btn sm" onClick={() => setMonth((m) => shiftMonth(m, 1))}>›</button>
         <div className="sp" style={{ flex: 1 }} />
 
-        {onCurrentMonth && sheet?.self && (
-          <div className="rowflex" style={{ gap: 8 }}>
-            <button
-              className="btn sm"
-              disabled={clock.isPending || !!todayEntry?.checkIn}
-              onClick={() => clock.mutate('in')}
-            >
-              {todayEntry?.checkIn ? `In ${todayEntry.checkIn}` : 'Clock in'}
-            </button>
-            <button
-              className="btn sm primary"
-              disabled={clock.isPending || !todayEntry?.checkIn}
-              onClick={() => clock.mutate('out')}
-            >
-              {todayEntry?.checkOut ? `Out ${todayEntry.checkOut}` : 'Clock out'}
-            </button>
-          </div>
-        )}
         <ExportMenu dataset="attendance" params={{ month, ...(userId ? { userId } : {}) }} />
       </div>
-
-      {error && <div className="errbox" style={{ marginBottom: 12 }}>{error}</div>}
 
       {sheet && (
         <>
@@ -225,24 +188,15 @@ function DayModal({
   onSaved: () => void;
 }) {
   const [status, setStatus] = useState<AttendanceStatus>(entry?.status ?? 'PRESENT');
-  const [checkIn, setCheckIn] = useState(entry?.checkIn ?? '');
-  const [checkOut, setCheckOut] = useState(entry?.checkOut ?? '');
   const [hours, setHours] = useState(entry ? Number(entry.hours).toFixed(2) : '');
   const [note, setNote] = useState(entry?.note ?? '');
   const [error, setError] = useState<string | null>(null);
-
-  // Times win over a typed total, exactly as the server resolves it — showing
-  // anything else here would mean the form previewed a number the save discards.
-  const derived = checkIn && checkOut ? hoursBetween(checkIn, checkOut) : null;
-  const effectiveHours = derived ?? (hours || '0');
 
   const save = useMutation({
     mutationFn: () =>
       api.put(`/api/attendance/${date}`, {
         status,
-        hours: effectiveHours,
-        checkIn: checkIn || null,
-        checkOut: checkOut || null,
+        hours: hours || '0',
         note: note.trim() || null,
         ...(userId ? { userId } : {}),
       }),
@@ -290,29 +244,15 @@ function DayModal({
 
           <div className="fields">
             <div className="f">
-              <label>Started</label>
-              <input type="time" value={checkIn} onChange={(e) => setCheckIn(e.target.value)} />
-            </div>
-            <div className="f">
-              <label>Finished</label>
-              <input type="time" value={checkOut} onChange={(e) => setCheckOut(e.target.value)} />
-            </div>
-            <div className="f">
-              <label>Hours</label>
+              <label>Hours worked</label>
               <input
                 type="number"
                 step="0.25"
                 min="0"
                 max="24"
-                value={derived ?? hours}
-                readOnly={derived !== null}
+                value={hours}
                 onChange={(e) => setHours(e.target.value)}
               />
-              <div className="help">
-                {derived !== null
-                  ? 'Worked out from the times above.'
-                  : 'Fill this in directly if you did not track the times.'}
-              </div>
             </div>
           </div>
 

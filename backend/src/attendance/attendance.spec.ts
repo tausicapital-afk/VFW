@@ -57,7 +57,7 @@ describe('attendance', () => {
     await http(app)
       .put(`/api/attendance/${DAY}`)
       .set('Cookie', sales)
-      .send({ status: 'PRESENT', checkIn: '09:00', checkOut: '17:30' })
+      .send({ status: 'PRESENT', hours: '8.5' })
       .expect(200);
 
     const res = await http(app)
@@ -73,18 +73,15 @@ describe('attendance', () => {
     expect(res.body.summary.hours).toBe('8.50');
   });
 
-  it('lets the times override a stale total rather than contradicting them', async () => {
-    const res = await http(app)
+  it('no longer accepts start and finish times — hours only', async () => {
+    await http(app)
       .put(`/api/attendance/${DAY}`)
       .set('Cookie', sales)
-      // A form that still holds yesterday's 3 hours while the times say 8.
-      .send({ status: 'PRESENT', hours: '3', checkIn: '09:00', checkOut: '17:00' })
-      .expect(200);
-
-    expect(res.body.hours).toBe('8');
+      .send({ status: 'PRESENT', hours: '8', checkIn: '09:00', checkOut: '17:00' })
+      .expect(400);
   });
 
-  it('takes a typed total when there are no times to work it out from', async () => {
+  it('takes the typed number of hours', async () => {
     const res = await http(app)
       .put(`/api/attendance/${DAY}`)
       .set('Cookie', sales)
@@ -92,7 +89,6 @@ describe('attendance', () => {
       .expect(200);
 
     expect(res.body.hours).toBe('6.25');
-    expect(res.body.checkIn).toBeNull();
   });
 
   it('keeps one row per day — marking the same day again rewrites it', async () => {
@@ -117,26 +113,9 @@ describe('attendance', () => {
       .send({ status: 'PRESENT', hours: '8' }).expect(400);
   });
 
-  // --- Clocking ------------------------------------------------------------
-
-  it('clocks in, then out, and settles the hours from the pair', async () => {
+  it('has no clock-in route any more', async () => {
     await http(app).post('/api/attendance/clock-in').set('Cookie', sales)
-      .send({ date: DAY, time: '08:45' }).expect(201);
-
-    // Clocking in twice must not quietly move the start time.
-    await http(app).post('/api/attendance/clock-in').set('Cookie', sales)
-      .send({ date: DAY, time: '10:00' }).expect(400);
-
-    const out = await http(app).post('/api/attendance/clock-out').set('Cookie', sales)
-      .send({ date: DAY, time: '17:15' }).expect(201);
-
-    expect(out.body.checkIn).toBe('08:45');
-    expect(out.body.hours).toBe('8.5');
-  });
-
-  it('will not clock out of a day that was never started', async () => {
-    await http(app).post('/api/attendance/clock-out').set('Cookie', sales)
-      .send({ date: DAY, time: '17:00' }).expect(400);
+      .send({ date: DAY, time: '08:45' }).expect(404);
   });
 
   // --- Scoping -------------------------------------------------------------
@@ -236,7 +215,7 @@ describe('attendance', () => {
 
   it('exports the month a caller may see, and only that', async () => {
     await http(app).put(`/api/attendance/${DAY}`).set('Cookie', sales)
-      .send({ status: 'PRESENT', checkIn: '09:00', checkOut: '17:00' }).expect(200);
+      .send({ status: 'PRESENT', hours: '8' }).expect(200);
 
     const own = await http(app)
       .get(`/api/export/attendance?format=csv&month=${MONTH}`)

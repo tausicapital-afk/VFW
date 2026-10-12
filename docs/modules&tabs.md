@@ -144,26 +144,25 @@ is connected, and connecting one makes the same button start posting for real. F
 
 ### Attendance — `/attendance`
 **All roles.** The timesheet: which days you worked and for how long. A month calendar where each day
-opens an editor (status, start/finish, hours, note), plus a Clock in / Clock out pair for today and a
-KPI strip totalling the month.
+opens an editor (status, hours worked, note), plus a KPI strip totalling the month. There are no
+start/finish times and no clock in / clock out — a day records hours worked only.
 
 **Two tabs, but only for `ACCT`, `MGR` and `ADMIN`** — a rep sees the single screen with no tab bar,
 because "My timesheet" and nothing else is not a choice worth rendering.
 
 | Tab | Who | What |
 | --- | --- | --- |
-| My timesheet | all roles | Your own month, with the clock buttons. |
+| My timesheet | all roles | Your own month. |
 | Team | `attendance.viewTeam` | Every active account rolled up for the month — days worked, hours, average, days away — and **including people who recorded nothing**, which is the point of the screen. Opening a person swaps the panel for their calendar, where a manager can correct a day. |
 
 Three things about the data model that the screen depends on:
 
-- **A day is a calendar day, not an instant** (`@db.Date`), and the times are wall-clock `"HH:MM"`
-  strings. The browser sends both, because the API runs in UTC and has no idea what time it is where
-  the person is standing.
+- **A day is a calendar day, not an instant** (`@db.Date`), so it cannot shift with the reader's
+  timezone.
 - **One row per person per day**, enforced by a unique constraint. Marking the same day twice rewrites
   it rather than adding a second answer.
-- **Times beat a typed total.** If start and finish are both set, `hours` is derived from them —
-  otherwise the row could contradict itself.
+- **Hours only.** The legacy `checkIn`/`checkOut` columns are still in the table but are no longer
+  written or shown; saving a day clears them.
 
 Attendance is deliberately *not* derived from the `UserSession` telemetry behind Logs: a socket being
 connected is a different claim from a day being worked.

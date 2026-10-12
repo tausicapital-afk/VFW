@@ -62,8 +62,6 @@ export interface AttendanceEntry extends TestFlagged {
   status: AttendanceStatus;
   /** Decimal string, like money — total it with care, display it freely. */
   hours: string;
-  checkIn: string | null;
-  checkOut: string | null;
   note: string | null;
   /** Set when somebody other than the subject last wrote the row. */
   correctedBy: { id: string; name: string } | null;
@@ -90,7 +88,7 @@ export interface AttendancePerson {
 export interface AttendanceSheet {
   month: string;
   user: AttendancePerson | null;
-  /** Whether this is the caller's own sheet — decides clock-in vs correction. */
+  /** Whether this is the caller's own sheet — decides self-report vs correction. */
   self: boolean;
   entries: AttendanceEntry[];
   summary: AttendanceSummary;

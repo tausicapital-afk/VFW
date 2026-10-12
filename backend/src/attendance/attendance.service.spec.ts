@@ -1,34 +1,14 @@
 import { AttendanceStatus } from '@prisma/client';
-import { currentMonth, dayKey, hoursBetween, monthRange, parseDay, summarise } from './attendance.service';
+import { currentMonth, dayKey, monthRange, parseDay, summarise } from './attendance.service';
 
 /**
  * The arithmetic and the calendar, in isolation. Everything here is the part of
  * attendance that has no database in it — which is deliberately most of it, and
  * is why these run in milliseconds while attendance.spec.ts covers the wiring.
  *
- * Two of these are here because they are the classic ways a timesheet goes
- * quietly wrong: a night shift recorded as negative hours, and a day that moves
- * because the server is in a different timezone from the person.
+ * The calendar tests guard the classic way a timesheet goes quietly wrong: a
+ * day that moves because the server is in a different timezone from the person.
  */
-
-describe('hoursBetween', () => {
-  it('measures an ordinary day', () => {
-    expect(hoursBetween('09:00', '17:30').toString()).toBe('8.5');
-  });
-
-  it('counts a shift across midnight forwards, not backwards', () => {
-    // 22:00 → 06:00 is eight hours of work, not minus sixteen.
-    expect(hoursBetween('22:00', '06:00').toString()).toBe('8');
-  });
-
-  it('resolves to the minute', () => {
-    expect(hoursBetween('09:10', '09:25').toString()).toBe('0.25');
-  });
-
-  it('reads identical times as no time at all, not as a 24-hour shift', () => {
-    expect(hoursBetween('08:00', '08:00').toString()).toBe('0');
-  });
-});
 
 describe('parseDay / dayKey', () => {
   it('round-trips a date without moving it', () => {

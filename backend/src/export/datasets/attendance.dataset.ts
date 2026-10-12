@@ -23,8 +23,6 @@ const dayColumns: ExportColumn<DayRow>[] = [
   // to be visible in the file and not only on the calendar.
   { header: 'Test data', value: (r) => (r.isTestData ? 'TEST' : ''), width: 10 },
   { header: 'Status', value: (r) => STATUS_LABEL[r.status], width: 12 },
-  { header: 'In', value: (r) => r.checkIn, width: 8 },
-  { header: 'Out', value: (r) => r.checkOut, width: 8 },
   // Not `money`, but the same reason applies: keep it a real number so the
   // spreadsheet this lands in can total a month without being retyped.
   { header: 'Hours', value: (r) => Number(r.hours), width: 9 },
