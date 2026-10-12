@@ -102,11 +102,11 @@ export function Dashboard() {
   const outstanding = approved.reduce((t, s) => t + toCAD(s.balance, s.currency), 0);
   const paymentsMade = approved.reduce((t, s) => t + s.payments.length, 0);
 
-  const isAccounting = can('submission.approve', user?.role);
+  const isAccounting = can('submission.approve', user);
   // Same row-scoping /api/submissions already applies server-side (scopeFor in
   // submissions.service.ts): ACCT/MGR/ADMIN get every rep's rows, everyone else
   // gets only their own. This just decides how the charts below are labelled.
-  const seesAll = can('submission.viewAll', user?.role);
+  const seesAll = can('submission.viewAll', user);
 
   // Upcoming debt collection: approved sales still owing, soonest show first so
   // the money that has to be chased before its show sits at the top.
@@ -155,7 +155,7 @@ export function Dashboard() {
       crumb="Console"
       title="Dashboard"
       actions={
-        can('submission.create', user?.role) ? (
+        can('submission.create', user) ? (
           <Link className="btn primary" to="/new">New submission</Link>
         ) : null
       }

@@ -26,7 +26,6 @@ import { drawLogo, formatDate, formatMoney, INK, LINE, MUTED, newPdfDoc } from '
  * import graph — the same trade `InvoicePdfData.brand` makes.
  */
 export type PayslipPayType = 'SALARY' | 'HOURLY' | 'COMMISSION_ONLY';
-export type PayslipRole = 'SALES' | 'INTERN' | 'ACCT' | 'MGR' | 'ADMIN';
 export type PayslipInvoiceStatus = 'SUBMITTED' | 'APPROVED' | 'REJECTED';
 
 /** One bracket's contribution to the tier bonus below — restated from
@@ -50,7 +49,8 @@ export interface PayslipPdfData {
   person: {
     name: string;
     employeeId: string | null;
-    role: PayslipRole;
+    /** The role's display label (RoleDef.label), not its key. */
+    role: string;
     title: string | null;
     department: string | null;
     email: string;
@@ -107,14 +107,6 @@ export interface PayslipPdfData {
 }
 
 /** The wording the Payroll screen and the run export use, so the three agree. */
-const ROLE_LABEL: Record<PayslipRole, string> = {
-  SALES: 'Sales Representative',
-  INTERN: 'Intern',
-  ACCT: 'Accounting',
-  MGR: 'Sales Manager',
-  ADMIN: 'Administrator',
-};
-
 const PAY_TYPE_LABEL: Record<PayslipPayType, string> = {
   SALARY: 'Salary',
   HOURLY: 'Hourly',
@@ -278,7 +270,7 @@ export function buildPayslipPdf(d: PayslipPdfData): Promise<Buffer> {
     .font('Helvetica')
     .fontSize(10)
     .fillColor(MUTED)
-    .text(d.person.title ?? ROLE_LABEL[d.person.role], left, nameBottom + 1, { width: half });
+    .text(d.person.title ?? d.person.role, left, nameBottom + 1, { width: half });
   const leftBottom = doc.y;
 
   doc
@@ -300,7 +292,7 @@ export function buildPayslipPdf(d: PayslipPdfData): Promise<Buffer> {
   y = grid(
     [
       { label: 'Employee ID', value: d.person.employeeId ?? '—' },
-      { label: 'Role', value: ROLE_LABEL[d.person.role] },
+      { label: 'Role', value: d.person.role },
       { label: 'Department', value: d.person.department ?? '—' },
       {
         label: 'Base rate',

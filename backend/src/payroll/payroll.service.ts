@@ -93,6 +93,7 @@ const PERSON_FIELDS = {
   email: true,
   phone: true,
   role: true,
+  roleDef: { select: { label: true } },
   title: true,
   department: true,
   employeeId: true,
@@ -247,7 +248,7 @@ export class PayrollService {
   private async subject(userId: string | undefined, actor: AuthUser): Promise<string> {
     if (!userId || userId === actor.id) return actor.id;
 
-    if (!can('payroll.viewAll', actor.role)) {
+    if (!can('payroll.viewAll', actor)) {
       throw new ForbiddenException("Your role cannot open someone else's pay");
     }
 
@@ -606,7 +607,7 @@ export class PayrollService {
       person: {
         name: sheet.user.name,
         employeeId: sheet.user.employeeId,
-        role: sheet.user.role,
+        role: sheet.user.roleDef.label,
         title: sheet.user.title,
         department: sheet.user.department,
         email: sheet.user.email,
@@ -700,7 +701,7 @@ export class PayrollService {
    * notices until a person is not paid.
    */
   async run(query: PayrollQueryDto, actor: AuthUser) {
-    if (!can('payroll.viewAll', actor.role)) {
+    if (!can('payroll.viewAll', actor)) {
       throw new ForbiddenException('Your role cannot view the earnings run');
     }
 
@@ -784,7 +785,7 @@ export class PayrollService {
    * that invoice is approved, because approved pay is not edited from here.
    */
   async setReimbursement(dto: SetReimbursementDto, actor: AuthUser) {
-    if (!can('payroll.approve', actor.role)) {
+    if (!can('payroll.approve', actor)) {
       throw new ForbiddenException('Your role cannot set reimbursements');
     }
     periodRange(dto.from, dto.to);
@@ -1001,12 +1002,12 @@ export class PayrollService {
 
   /** Everyone's invoices awaiting review, oldest first — the payroll Queue. */
   async pending(actor: AuthUser) {
-    if (!can('payroll.approve', actor.role)) {
+    if (!can('payroll.approve', actor)) {
       throw new ForbiddenException('Your role cannot review earnings submissions');
     }
     const invoices = await this.prisma.payrollInvoice.findMany({
       where: { status: PayrollInvoiceStatus.SUBMITTED },
-      include: { user: { select: { id: true, name: true, colour: true, avatarKey: true, role: true } } },
+      include: { user: { select: { id: true, name: true, colour: true, avatarKey: true, role: true, roleDef: { select: { label: true } } } } },
       orderBy: { submittedAt: 'asc' },
     });
     return Promise.all(
@@ -1025,7 +1026,7 @@ export class PayrollService {
    * month.
    */
   async editInvoice(id: string, dto: EditPayrollInvoiceDto, actor: AuthUser) {
-    if (!can('payroll.approve', actor.role)) {
+    if (!can('payroll.approve', actor)) {
       throw new ForbiddenException('Your role cannot edit an earnings submission');
     }
     const invoice = await this.prisma.payrollInvoice.findUnique({ where: { id } });
@@ -1073,7 +1074,7 @@ export class PayrollService {
   }
 
   async approveInvoice(id: string, actor: AuthUser) {
-    if (!can('payroll.approve', actor.role)) {
+    if (!can('payroll.approve', actor)) {
       throw new ForbiddenException('Your role cannot approve earnings');
     }
     const invoice = await this.prisma.payrollInvoice.findUnique({ where: { id } });
@@ -1106,7 +1107,7 @@ export class PayrollService {
   }
 
   async rejectInvoice(id: string, dto: RejectPayrollInvoiceDto, actor: AuthUser) {
-    if (!can('payroll.approve', actor.role)) {
+    if (!can('payroll.approve', actor)) {
       throw new ForbiddenException('Your role cannot reject earnings');
     }
     const invoice = await this.prisma.payrollInvoice.findUnique({ where: { id } });

@@ -1,6 +1,11 @@
-import { Role } from '@prisma/client';
-
 /**
+ * Roles are rows (RoleDef) that an admin can create, rename, re-permission and
+ * delete, so what a role may do is read from the database on every request —
+ * see verifySession, which loads the caller's `permissions` with their role.
+ * The matrix below is the DEFAULT for the five built-in roles: the migration
+ * that introduced RoleDef seeded them from it, and the comments on each line
+ * are still the reasoning behind those defaults.
+ *
  * The permission matrix, originally ported from vfw-console.html (line 481) and
  * since tightened where the mockup was silent:
  *
@@ -127,10 +132,81 @@ export const ACL = {
   // alone; ACCT now holds it too, so Accounting and Admin carry an identical,
   // full set of permissions.
   'activity.view': ['ACCT', 'ADMIN'],
-} as const satisfies Record<string, readonly Role[]>;
+} as const satisfies Record<string, readonly BuiltInRole[]>;
 
 export type Permission = keyof typeof ACL;
 
-export function can(permission: Permission, role: Role): boolean {
-  return (ACL[permission] as readonly string[]).includes(role);
+/** A role key — one of the built-ins below, or one an admin created. */
+export type Role = string;
+
+/** The roles the system ships with. They can be renamed and re-permissioned but not deleted. */
+export const BUILT_IN_ROLES = ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] as const;
+export type BuiltInRole = (typeof BUILT_IN_ROLES)[number];
+
+/**
+ * The role that can never be locked out: it cannot be deleted and always holds
+ * every permission, whatever an edit asks for, so there is always someone who
+ * can put a broken role back.
+ */
+export const ADMIN_ROLE: BuiltInRole = 'ADMIN';
+
+export const ALL_PERMISSIONS = Object.keys(ACL) as Permission[];
+
+export function isPermission(p: string): p is Permission {
+  return Object.prototype.hasOwnProperty.call(ACL, p);
+}
+
+/** The default permission set of a built-in role, from the matrix above. */
+export function defaultPermissions(role: BuiltInRole): Permission[] {
+  return ALL_PERMISSIONS.filter((p) => (ACL[p] as readonly string[]).includes(role));
+}
+
+/**
+ * What each permission means, for the role editor in Administration. Grouped
+ * so the checklist reads by area rather than as one long list.
+ */
+export const PERMISSION_INFO: Record<Permission, { group: string; label: string }> = {
+  'submission.create': { group: 'Submissions', label: 'Create submissions' },
+  'submission.editOwn': { group: 'Submissions', label: 'Edit their own submissions' },
+  'submission.editAny': { group: 'Submissions', label: "Edit anyone's submissions" },
+  'submission.viewAll': { group: 'Submissions', label: 'See every submission, not just their own' },
+  'submission.queueView': { group: 'Submissions', label: 'See the approval queue' },
+  'submission.approve': { group: 'Submissions', label: 'Approve submissions' },
+  'submission.reject': { group: 'Submissions', label: 'Reject submissions' },
+  'submission.return': { group: 'Submissions', label: 'Return submissions to sales' },
+  'submission.void': { group: 'Submissions', label: 'Void and restore submissions' },
+  'accounting.fields': { group: 'Accounting', label: 'Edit accounting fields (GL, cost centre, department)' },
+  'quickbooks.export': { group: 'Accounting', label: 'Export to QuickBooks' },
+  'invoice.generate': { group: 'Accounting', label: 'Generate invoices' },
+  'installment.plan': { group: 'Payments', label: 'Set up payment plans' },
+  'installment.mark': { group: 'Payments', label: 'Mark installments paid' },
+  'reports.view': { group: 'Insight', label: 'See reports and the audit trail' },
+  'leaderboard.view': { group: 'Insight', label: 'See the leaderboard' },
+  'contacts.view': { group: 'Contacts', label: 'See contacts' },
+  'contacts.create': { group: 'Contacts', label: 'Add contacts' },
+  'feedback.view': { group: 'People', label: 'See designer feedback' },
+  'feedback.record': { group: 'People', label: 'Record designer feedback' },
+  'internal.comment': { group: 'People', label: 'Write internal notes' },
+  'internal.view': { group: 'People', label: 'See internal notes' },
+  'messaging.use': { group: 'Messages & email', label: 'Use messages' },
+  'email.viewOwn': { group: 'Messages & email', label: 'See emails they sent' },
+  'email.viewAll': { group: 'Messages & email', label: 'See all emails' },
+  'email.send': { group: 'Messages & email', label: 'Send invoices, portal links and documents for signature' },
+  'attendance.mark': { group: 'Attendance', label: 'Record their own attendance' },
+  'attendance.viewTeam': { group: 'Attendance', label: "See and correct everyone's attendance" },
+  'payroll.viewOwn': { group: 'Earnings', label: 'See their own earnings' },
+  'payroll.viewAll': { group: 'Earnings', label: "See everyone's earnings" },
+  'payroll.submit': { group: 'Earnings', label: 'Submit their earnings for approval' },
+  'payroll.approve': { group: 'Earnings', label: 'Approve earnings and reimbursements' },
+  'payroll.manageTiers': { group: 'Earnings', label: 'Manage commission tiers' },
+  'admin.manage': { group: 'System', label: 'Administration: users, roles, catalogue, settings' },
+  'activity.view': { group: 'System', label: 'See activity logs' },
+};
+
+/**
+ * Whether someone holds a permission. `who` is the signed-in user as
+ * verifySession built it, carrying their role's permissions from the database.
+ */
+export function can(permission: Permission, who: { permissions: readonly string[] } | undefined): boolean {
+  return !!who && who.permissions.includes(permission);
 }

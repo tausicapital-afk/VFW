@@ -21,12 +21,30 @@ real, is offered at signup, and is enforced in the ACL; it simply has no demo
 user. This matches the inspiration mockup, which also declares all five
 (`vfw-console.html:475`).
 
-Roles are declared in four places that must agree:
+## Roles are editable
 
-- `backend/prisma/schema.prisma` — the `Role` enum (source of truth)
-- `backend/src/common/acl.ts` — the permission matrix (**the** security boundary)
-- `frontend/src/lib/types.ts` — the `Role` union
-- `frontend/src/lib/acl.ts` — a render-only mirror of the matrix
+Roles are rows in the `RoleDef` table, managed under **Administration → Roles**:
+an admin can add a role, rename any role, choose which permissions it grants, and
+delete a custom role once no account or open invitation uses it.
+
+- **What a role may do is read from the database on every request.**
+  `verifySession` (`backend/src/common/auth.guard.ts`) loads the caller's role
+  permissions alongside the role, and `can(permission, user)` checks that list.
+  Editing a role takes effect for everyone holding it on their next request.
+- **The five built-ins** above are seeded by the `editable_roles` migration with
+  exactly the permissions the old hard-coded matrix gave them, so deploying it
+  changes nobody's access. They can be renamed and re-permissioned but not
+  deleted — system accounts (DocuSign, Stripe) and a few rules (the leaderboard
+  ranks `SALES`) refer to them by key.
+- **`ADMIN` always holds every permission**, whatever its row says, and an
+  admin cannot remove Administration from their own role — so nobody is locked out.
+- A role's **key** (`SALES`, `FIELD_REP`, …) is what accounts hold and never
+  changes; its **label** is what every screen shows.
+- The matrix in `backend/src/common/acl.ts` is now the list of permissions and
+  the defaults for the built-ins; the frontend's `lib/acl.ts` only lists the
+  permission keys and reads the user's permissions from `/api/auth/me`.
+
+The tables below describe the **default** permissions of the built-in roles.
 
 `INTERN` is a **restricted rep**, not a synonym for `SALES`. It drafts and edits
 its own submissions and sees the dashboard, leaderboard and messages — but it does

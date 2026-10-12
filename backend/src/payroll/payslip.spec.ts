@@ -3,6 +3,7 @@ import type { Test } from 'supertest';
 import { createTestApp, http, loginCookie } from '../../test/app';
 import { PrismaService } from '../prisma/prisma.service';
 import { PayrollService } from './payroll.service';
+import { defaultPermissions } from '../common/acl';
 import type { AuthUser } from '../common/auth.guard';
 import { buildPayslipPdf, type PayslipPdfData } from './payslip-pdf';
 
@@ -148,12 +149,16 @@ describe('payslip', () => {
     const accounting = await prisma.user.findUniqueOrThrow({ where: { email: ACCT } });
     salesId = marielle.id;
     otherId = diego.id;
-    salesActor = { id: marielle.id, email: marielle.email, name: marielle.name, role: marielle.role };
+    salesActor = {
+      id: marielle.id, email: marielle.email, name: marielle.name, role: marielle.role,
+      permissions: defaultPermissions('SALES'),
+    };
     acctActor = {
       id: accounting.id,
       email: accounting.email,
       name: accounting.name,
       role: accounting.role,
+      permissions: defaultPermissions('ACCT'),
     };
 
     const tiers = await prisma.commissionTier.findMany();

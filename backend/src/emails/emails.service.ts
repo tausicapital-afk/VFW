@@ -54,7 +54,7 @@ export class EmailsService {
 
   /** The scope predicate: viewAll sees everything, everyone else their own sends. */
   private scope(user: AuthUser): Prisma.EmailMessageWhereInput {
-    return can('email.viewAll', user.role) ? {} : { triggeredById: user.id };
+    return can('email.viewAll', user) ? {} : { triggeredById: user.id };
   }
 
   async list(user: AuthUser, query: EmailsQueryDto) {

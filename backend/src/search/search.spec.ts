@@ -1,5 +1,5 @@
 import type { INestApplication } from '@nestjs/common';
-import type { Role } from '@prisma/client';
+import type { Role } from '../common/acl';
 import { createTestApp, http, loginCookie } from '../../test/app';
 import { PrismaService } from '../prisma/prisma.service';
 

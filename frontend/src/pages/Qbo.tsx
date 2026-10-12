@@ -157,7 +157,7 @@ export function Qbo() {
           <b>QuickBooks is not connected.</b> Exporting still moves a submission to Exported and
           allocates an invoice number, but nothing is posted to QuickBooks until a company is
           connected.
-          {can('admin.manage', user?.role) && (
+          {can('admin.manage', user) && (
             <> <a href="/admin?tab=config">Connect it under Administration → Configuration.</a></>
           )}
         </div>

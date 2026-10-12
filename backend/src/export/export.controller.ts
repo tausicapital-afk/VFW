@@ -68,7 +68,7 @@ export class ExportController {
 
     // The global guard enforces @Can() on the *route*, and this route serves
     // every dataset — so a dataset's own permission has to be checked here.
-    if (dataset.permission && !can(dataset.permission, user.role)) {
+    if (dataset.permission && !can(dataset.permission, user)) {
       throw new ForbiddenException(`Your role cannot ${dataset.permission}`);
     }
 

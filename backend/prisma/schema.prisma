@@ -20,12 +20,23 @@ datasource db {
 // People & access
 // ---------------------------------------------------------------------------
 
-enum Role {
-  SALES
-  INTERN
-  ACCT
-  MGR
-  ADMIN
+// A role is a row an admin maintains (Administration -> Roles): a label and the
+// permissions it grants. The key is what User.role and Invitation.role hold, so
+// it never changes once created — renaming a role changes its label only. The
+// five built-ins (SALES, INTERN, ACCT, MGR, ADMIN) are seeded by the migration
+// that introduced this table, from the defaults in common/acl.ts. They can be
+// relabelled and re-permissioned but not deleted, because system accounts and
+// a few rules name them; ADMIN additionally always holds every permission.
+model RoleDef {
+  key         String   @id
+  label       String
+  permissions String[] @default([])
+  builtIn     Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users       User[]
+  invitations Invitation[]
 }
 
 // How someone's base pay is worked out, before commission.
@@ -56,7 +67,8 @@ model User {
   email         String     @unique
   phone         String?
   passwordHash  String
-  role          Role
+  role          String
+  roleDef       RoleDef    @relation(fields: [role], references: [key], onUpdate: Cascade)
   department    String?
   status        UserStatus @default(PENDING)
   // Operational-only accounts (demo / test logins) that must keep working but
@@ -194,7 +206,8 @@ model User {
 model Invitation {
   id         String    @id @default(cuid())
   code       String    @unique
-  role       Role
+  role       String
+  roleDef    RoleDef   @relation(fields: [role], references: [key], onUpdate: Cascade)
   department String?
   email      String?
   expiresAt  DateTime

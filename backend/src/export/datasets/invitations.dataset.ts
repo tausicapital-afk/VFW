@@ -1,17 +1,7 @@
-import { Role } from '@prisma/client';
 import { AdminService } from '../../admin/admin.service';
 import { ExportDataset } from '../export.types';
 
 type InvitationRow = Awaited<ReturnType<AdminService['listInvitations']>>['invitations'][number];
-
-/** The wording the screen uses, so an export never disagrees with the table it came from. */
-const ROLE_LABEL: Record<Role, string> = {
-  SALES: 'Sales Representative',
-  INTERN: 'Intern',
-  ACCT: 'Accounting',
-  MGR: 'Sales Manager',
-  ADMIN: 'Administrator',
-};
 
 /**
  * Invitation codes, as the Invitations card lists them — `listInvitations` already
@@ -32,7 +22,7 @@ export function invitationsDataset(admin: AdminService): ExportDataset<Invitatio
     load: async () => (await admin.listInvitations()).invitations,
     columns: [
       { header: 'Code', value: (i) => i.code, width: 12 },
-      { header: 'Role', value: (i) => ROLE_LABEL[i.role], width: 20 },
+      { header: 'Role', value: (i) => i.roleLabel, width: 20 },
       // The table prints "Open code" where there is no address, and the file says
       // the same — a blank cell reads as missing data rather than as a decision.
       { header: 'Email', value: (i) => i.email ?? 'Open code', width: 28 },

@@ -9,10 +9,10 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
-import { Role, UserStatus } from '@prisma/client';
+import { UserStatus } from '@prisma/client';
 import { Request } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
-import { Permission, can } from './acl';
+import { ADMIN_ROLE, ALL_PERMISSIONS, Permission, Role, can } from './acl';
 import { SESSION_COOKIE } from './cookie';
 
 export const PUBLIC_KEY = 'vfw:public';
@@ -53,11 +53,31 @@ export interface AuthUser {
   email: string;
   name: string;
   role: Role;
+  /**
+   * What the role grants, read from RoleDef on every request — never from the
+   * token, so editing a role takes effect on everyone holding it at once.
+   */
+  permissions: string[];
 }
 
-/** What we actually sign. `tv` pins the token to a User.tokenVersion. */
-export interface SessionClaims extends AuthUser {
+/**
+ * What we actually sign. `tv` pins the token to a User.tokenVersion. No
+ * permissions: those are looked up per request, not frozen into a 30-day token.
+ */
+export interface SessionClaims {
+  id: string;
+  email: string;
+  name: string;
+  role: Role;
   tv: number;
+}
+
+/**
+ * A role's effective permissions. ADMIN always has all of them, whatever its
+ * row says, so a bad edit can never lock every administrator out.
+ */
+export function effectivePermissions(role: Role, stored: readonly string[]): string[] {
+  return role === ADMIN_ROLE ? [...ALL_PERMISSIONS] : [...stored];
 }
 
 export const CurrentUser = createParamDecorator(
@@ -108,6 +128,7 @@ export async function verifySession(
     select: {
       id: true, email: true, name: true, role: true,
       status: true, deletedAt: true, tokenVersion: true,
+      roleDef: { select: { permissions: true } },
     },
   });
 
@@ -122,9 +143,12 @@ export async function verifySession(
     throw new UnauthorizedException('Session expired');
   }
 
-  // Note the role comes from `user`, not `claims`: a role change takes effect on
-  // the very next request.
-  return { id: user.id, email: user.email, name: user.name, role: user.role };
+  // Note the role comes from `user`, not `claims`: a role change — or an edit
+  // to what the role grants — takes effect on the very next request.
+  return {
+    id: user.id, email: user.email, name: user.name, role: user.role,
+    permissions: effectivePermissions(user.role, user.roleDef.permissions),
+  };
 }
 
 /**
@@ -164,7 +188,7 @@ export class AuthGuard implements CanActivate {
       ctx.getHandler(),
       ctx.getClass(),
     ]);
-    if (permission && !can(permission, payload.role)) {
+    if (permission && !can(permission, payload)) {
       throw new ForbiddenException(`Your role cannot ${permission}`);
     }
 

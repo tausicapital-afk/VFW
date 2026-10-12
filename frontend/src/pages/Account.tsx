@@ -5,7 +5,8 @@ import { api, ApiError } from '../lib/api';
 import { fmtDate, fmtDateTime, money } from '../lib/format';
 import type { Profile } from '../lib/types';
 import { Avatar } from '../shell/Avatar';
-import { Page, ROLE_LABEL } from '../shell/Shell';
+import { useRoles } from '../lib/roles';
+import { Page } from '../shell/Shell';
 
 /**
  * The departments the console knows about, mirroring the admin form. A select
@@ -48,6 +49,7 @@ export function Account() {
 // ---------------------------------------------------------------------------
 
 function ProfileCard({ profile }: { profile: Profile }) {
+  const { label: roleLabel } = useRoles();
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -179,7 +181,7 @@ function ProfileCard({ profile }: { profile: Profile }) {
           <Avatar name={profile.name} colour={form.colour} src={profile.avatarUrl} size={64} />
           <div style={{ minWidth: 0 }}>
             <div className="b" style={{ fontSize: 16 }}>{profile.name}</div>
-            <div className="mut sm">{ROLE_LABEL[profile.role]}</div>
+            <div className="mut sm">{roleLabel(profile.role)}</div>
             <div className="rowflex" style={{ gap: 8, marginTop: 8 }}>
               <button
                 className="btn sm"
@@ -292,7 +294,7 @@ function ProfileCard({ profile }: { profile: Profile }) {
         </div>
         <div className="fields">
           <ReadOnly label="Work email" value={profile.email} />
-          <ReadOnly label="Role" value={ROLE_LABEL[profile.role]} />
+          <ReadOnly label="Role" value={roleLabel(profile.role)} />
           <ReadOnly label="Employee ID" value={profile.employeeId ?? '—'} />
           <ReadOnly label="Joined" value={fmtDate(profile.createdAt)} />
           <ReadOnly label="Total earned since joining" value={money(profile.lifetimeEarned, 'CAD')} />

@@ -31,8 +31,8 @@ export function InstallmentsCard({ sub, onChanged }: { sub: Submission; onChange
   const [clearing, setClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const canPlan = can('installment.plan', user?.role);
-  const canMark = can('installment.mark', user?.role);
+  const canPlan = can('installment.plan', user);
+  const canMark = can('installment.mark', user);
   const settled = sub.status === 'REJECTED' || sub.status === 'VOIDED';
 
   const plan = sub.installments ?? [];

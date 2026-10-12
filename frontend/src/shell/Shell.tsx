@@ -6,59 +6,41 @@ import { useTheme } from '../theme/ThemeContext';
 import { can, type Permission } from '../lib/acl';
 import { api } from '../lib/api';
 import { messagingApi, qk, useMessagingRealtime, type Conversation } from '../lib/messaging';
-import type { Role, Submission, User } from '../lib/types';
+import { useRoles } from '../lib/roles';
+import type { Submission, User } from '../lib/types';
 import { Avatar } from './Avatar';
 import { CommandPalette } from './CommandPalette';
 
-/**
- * What each role is CALLED. Display only — the permission grant is the `Role`
- * itself, and nothing here changes what anyone may do.
- *
- * SALES reads "User" rather than "Sales Representative" because the role stopped
- * being sales-only: it is what everyone who is not an intern, an accountant, a
- * manager or an administrator is given, salespeople and other staff alike. The
- * enum is still SALES on the wire and in the database, where renaming it would
- * mean a migration, a data backfill and every ACL entry — this map is the whole
- * of the rename, and it is the only place the name is written.
- */
-export const ROLE_LABEL: Record<Role, string> = {
-  SALES: 'User',
-  INTERN: 'Intern',
-  ACCT: 'Accounting',
-  MGR: 'Sales Manager',
-  ADMIN: 'Administrator',
-};
-
-// Mirrors NAV in vfw-console.html (line 1333). Only the routes in the current
-// slice are enabled; the rest land as they are built.
+// Mirrors NAV in vfw-console.html (line 1333). Each link shows when the user's
+// role grants the permission its route is guarded by (App.tsx); `perm: null`
+// is open to everyone signed in. Roles are editable, so this is by permission,
+// never by role name.
 type NavItem =
   | { grp: string }
-  | { to: string; label: string; ic: string; roles: Role[]; badge?: 'queue' | 'messages' };
+  | { to: string; label: string; ic: string; perm: Permission | null; badge?: 'queue' | 'messages' };
 
 const NAV: NavItem[] = [
   { grp: 'Work' },
-  { to: '/', label: 'Dashboard', ic: '◧', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
-  { to: '/new', label: 'New submission', ic: '+', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
-  { to: '/submissions', label: 'Submissions', ic: '▤', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
-  { to: '/contacts', label: 'Contacts', ic: '◈', roles: ['SALES', 'ACCT', 'MGR', 'ADMIN'] },
-  { to: '/messages', label: 'Messages', ic: '✉', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'], badge: 'messages' },
-  { to: '/emails', label: 'Emails', ic: '@', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
-  { to: '/queue', label: 'Approval queue', ic: '⚑', roles: ['SALES', 'ACCT', 'ADMIN'], badge: 'queue' },
-  { to: '/qbo', label: 'QuickBooks', ic: '⇪', roles: ['ACCT', 'ADMIN'] },
+  { to: '/', label: 'Dashboard', ic: '◧', perm: null },
+  { to: '/new', label: 'New submission', ic: '+', perm: 'submission.create' },
+  { to: '/submissions', label: 'Submissions', ic: '▤', perm: null },
+  { to: '/contacts', label: 'Contacts', ic: '◈', perm: 'contacts.view' },
+  { to: '/messages', label: 'Messages', ic: '✉', perm: 'messaging.use', badge: 'messages' },
+  { to: '/emails', label: 'Emails', ic: '@', perm: 'email.viewOwn' },
+  { to: '/queue', label: 'Approval queue', ic: '⚑', perm: 'submission.queueView', badge: 'queue' },
+  { to: '/qbo', label: 'QuickBooks', ic: '⇪', perm: 'quickbooks.export' },
   { grp: 'People' },
-  { to: '/attendance', label: 'Attendance', ic: '◷', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
-  { to: '/earnings', label: 'Earnings', ic: '◎', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
-  { to: '/board', label: 'Leaderboard', ic: '★', roles: ['ADMIN'] },
-  { to: '/feedback', label: 'Designer feedback', ic: '☆', roles: ['ACCT', 'MGR', 'ADMIN'] },
-  { to: '/internal', label: 'Internal notes', ic: '✎', roles: ['ACCT', 'MGR', 'ADMIN'] },
+  { to: '/attendance', label: 'Attendance', ic: '◷', perm: 'attendance.mark' },
+  { to: '/earnings', label: 'Earnings', ic: '◎', perm: 'payroll.viewOwn' },
+  { to: '/board', label: 'Leaderboard', ic: '★', perm: 'leaderboard.view' },
+  { to: '/feedback', label: 'Designer feedback', ic: '☆', perm: 'feedback.view' },
+  { to: '/internal', label: 'Internal notes', ic: '✎', perm: 'internal.view' },
   { grp: 'Insight' },
-  { to: '/reports', label: 'Reports', ic: '▦', roles: ['ACCT', 'MGR', 'ADMIN'] },
-  { to: '/audit', label: 'Audit trail', ic: '◷', roles: ['ACCT', 'MGR', 'ADMIN'] },
+  { to: '/reports', label: 'Reports', ic: '▦', perm: 'reports.view' },
+  { to: '/audit', label: 'Audit trail', ic: '◷', perm: 'reports.view' },
   { grp: 'System' },
-  { to: '/admin', label: 'Administration', ic: '⚙', roles: ['ACCT', 'ADMIN'] },
-  // ACCT holds `activity.view` too (the route guard has always read the
-  // permission); the rail was the stale copy that still said ADMIN-only.
-  { to: '/logs', label: 'Logs', ic: '❈', roles: ['ACCT', 'ADMIN'] },
+  { to: '/admin', label: 'Administration', ic: '⚙', perm: 'admin.manage' },
+  { to: '/logs', label: 'Logs', ic: '❈', perm: 'activity.view' },
 ];
 
 /** The human label for a path, for the activity log line ("Opened Messages"). */
@@ -79,6 +61,7 @@ function UserAvatar({ user, size }: { user: User; size?: number }) {
 
 export function Shell() {
   const { user, logout } = useAuth();
+  const { label: roleLabel } = useRoles();
   const location = useLocation();
 
   // On mobile the rail is an off-canvas drawer toggled from the top bar; on
@@ -144,7 +127,7 @@ export function Shell() {
   // Only a role that can read the queue may ask for its depth — otherwise this
   // fires a request that is guaranteed to 403. For a rep the count is their own
   // pending rows, since the queue read is row-scoped.
-  const showQueue = can('submission.queueView', user?.role);
+  const showQueue = can('submission.queueView', user);
   const { data: queue } = useQuery({
     queryKey: ['queue'],
     queryFn: () => api.get<Submission[]>('/api/submissions/queue'),
@@ -220,11 +203,11 @@ export function Shell() {
               const until = NAV.slice(i + 1).findIndex((n) => 'grp' in n);
               const members = NAV.slice(i + 1, until === -1 ? undefined : i + 1 + until);
               const visible = members.some(
-                (n) => !('grp' in n) && n.roles.includes(user.role),
+                (n) => !('grp' in n) && (n.perm === null || can(n.perm, user)),
               );
               return visible ? <div className="grp" key={`g${i}`}>{item.grp}</div> : null;
             }
-            if (!item.roles.includes(user.role)) return null;
+            if (item.perm !== null && !can(item.perm, user)) return null;
             const badge =
               item.badge === 'queue' ? pending : item.badge === 'messages' ? unreadMessages : 0;
             return (
@@ -248,7 +231,7 @@ export function Shell() {
             <UserAvatar user={user} size={30} />
             <div>
               <div className="nm">{user.name}</div>
-              <div className="rl">{ROLE_LABEL[user.role]}</div>
+              <div className="rl">{user.roleLabel ?? roleLabel(user.role)}</div>
             </div>
           </div>
           <button
@@ -382,7 +365,7 @@ export function Page({
 
 export function Guard({ permission, children }: { permission: Permission; children: React.ReactNode }) {
   const { user } = useAuth();
-  if (!can(permission, user?.role)) {
+  if (!can(permission, user)) {
     return (
       <Page crumb="Console" title="Restricted">
         <div className="empty">

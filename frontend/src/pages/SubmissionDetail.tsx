@@ -55,7 +55,7 @@ export function SubmissionDetail() {
     queryKey: ['catalog'],
     queryFn: () => api.get<Catalog>('/api/catalog'),
     staleTime: Infinity,
-    enabled: !!sub && can('accounting.fields', user?.role),
+    enabled: !!sub && can('accounting.fields', user),
   });
 
   const [payOpen, setPayOpen] = useState(false);
@@ -106,7 +106,7 @@ export function SubmissionDetail() {
     );
   }
 
-  const isAcct = can('accounting.fields', user?.role);
+  const isAcct = can('accounting.fields', user);
   const isVoided = sub.status === 'VOIDED';
   // Mirrors the status rule in SubmissionsService.update(). Before a decision,
   // whoever owns the sale may correct it; after one, only Accounting/Admin may
@@ -114,13 +114,13 @@ export function SubmissionDetail() {
   const openForEdit = ['DRAFT', 'RETURNED', 'PENDING'].includes(sub.status);
   const decided = ['APPROVED', 'EXPORTED'].includes(sub.status);
   const canEditSales =
-    sub.rep.id === user?.id && openForEdit && can('submission.editOwn', user?.role);
+    sub.rep.id === user?.id && openForEdit && can('submission.editOwn', user);
   // Admin/Accounting may correct anyone's editable submission — the same right
   // the server grants (submission.editAny) — and are the only ones who may amend
   // one that has already been approved.
   const canEditAny =
-    !canEditSales && (openForEdit || decided) && can('submission.editAny', user?.role);
-  const canVoid = can('submission.void', user?.role);
+    !canEditSales && (openForEdit || decided) && can('submission.editAny', user);
+  const canVoid = can('submission.void', user);
 
   const actions = (
     <>
@@ -130,23 +130,23 @@ export function SubmissionDetail() {
           {decided ? 'Amend' : canEditAny ? 'Edit' : sub.status === 'PENDING' ? 'Edit' : 'Edit & resubmit'}
         </button>
       )}
-      {sub.status === 'APPROVED' && can('invoice.generate', user?.role) && !sub.invoiceNo && (
+      {sub.status === 'APPROVED' && can('invoice.generate', user) && !sub.invoiceNo && (
         <button className="btn" disabled={invoice.isPending} onClick={() => invoice.mutate()}>
           {invoice.isPending ? 'Generating…' : 'Generate invoice'}
         </button>
       )}
-      {sub.invoiceNo && can('invoice.generate', user?.role) && (
+      {sub.invoiceNo && can('invoice.generate', user) && (
         <button className="btn" disabled={invoicePdf.isPending} onClick={() => invoicePdf.mutate()}>
           {invoicePdf.isPending ? 'Preparing…' : 'Download invoice (PDF)'}
         </button>
       )}
-      {sub.invoiceNo && can('email.send', user?.role) && (
+      {sub.invoiceNo && can('email.send', user) && (
         <button className="btn" onClick={() => setSendOpen(true)}>
           Send invoice
         </button>
       )}
       {(sub.status === 'APPROVED' || sub.status === 'EXPORTED') &&
-        can('quickbooks.export', user?.role) && (
+        can('quickbooks.export', user) && (
           <Link className="btn blue" to="/qbo">
             {sub.status === 'EXPORTED' ? 'View export' : 'Export to QuickBooks'}
           </Link>
@@ -386,16 +386,16 @@ export function SubmissionDetail() {
           {/* Confidential. Rendered only for internal.view roles — and the server
               refuses it outright for the rep on this record, whatever their role.
               The submission payload itself carries no comments at all. */}
-          {can('internal.view', user?.role) && (
+          {can('internal.view', user) && (
             <InternalCard
               submissionId={sub.id}
-              canComment={can('internal.comment', user?.role)}
+              canComment={can('internal.comment', user)}
             />
           )}
 
           <InvoiceCard sub={sub} onSaved={refresh} />
 
-          {can('feedback.view', user?.role) && <FeedbackCard sub={sub} />}
+          {can('feedback.view', user) && <FeedbackCard sub={sub} />}
 
           {isAcct ? (
             <AccountingCard sub={sub} catalog={catalog} onSaved={refresh} />
@@ -465,7 +465,7 @@ function FeedbackCard({ sub }: { sub: Submission }) {
       <div className="hd">
         <h3>Designer feedback</h3>
         <div className="sp" />
-        {can('feedback.record', user?.role) && (
+        {can('feedback.record', user) && (
           <button className="btn sm" onClick={() => setOpen(true)}>+ Record</button>
         )}
       </div>
@@ -601,9 +601,9 @@ function InvoiceCard({ sub, onSaved }: { sub: Submission; onSaved: () => void })
   const dead = sub.status === 'REJECTED' || sub.status === 'VOIDED';
 
   const mayEditSale =
-    can('submission.editAny', user?.role) ||
-    (can('submission.editOwn', user?.role) && sub.rep.id === user?.id);
-  const mayEdit = dead ? false : decided ? can('invoice.generate', user?.role) : mayEditSale;
+    can('submission.editAny', user) ||
+    (can('submission.editOwn', user) && sub.rep.id === user?.id);
+  const mayEdit = dead ? false : decided ? can('invoice.generate', user) : mayEditSale;
 
   const save = useMutation({
     mutationFn: () =>

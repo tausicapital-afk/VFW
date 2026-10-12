@@ -1,4 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { defaultPermissions } from '../common/acl';
 import type { AuthUser } from '../common/auth.guard';
 import { EmailNotConfiguredError } from '../common/email';
 import { PortalService } from './portal.service';
@@ -11,7 +12,7 @@ import { PortalService } from './portal.service';
  * portal.spec.ts, driven through the real HTTP surface.
  */
 
-const acct: AuthUser = { id: 'u-acct', email: 'a@x.com', name: 'A', role: 'ACCT' };
+const acct: AuthUser = { id: 'u-acct', email: 'a@x.com', name: 'A', role: 'ACCT', permissions: defaultPermissions('ACCT') };
 
 function make() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

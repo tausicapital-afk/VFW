@@ -78,7 +78,7 @@ export class SubmissionsService {
    * be a second, subtly different definition of "whose deals can I see".
    */
   scopeFor(user: AuthUser): Prisma.SubmissionWhereInput {
-    return can('submission.viewAll', user.role) ? {} : { repId: user.id };
+    return can('submission.viewAll', user) ? {} : { repId: user.id };
   }
 
   async list(user: AuthUser) {
@@ -121,7 +121,7 @@ export class SubmissionsService {
 
   /** The soft-deleted sales, for the roles that can restore them. */
   async listVoided(user: AuthUser) {
-    if (!can('submission.void', user.role)) throw new ForbiddenException();
+    if (!can('submission.void', user)) throw new ForbiddenException();
     return this.prisma.submission.findMany({
       where: { status: SubmissionStatus.VOIDED },
       include: DETAIL,
@@ -135,7 +135,7 @@ export class SubmissionsService {
       include: DETAIL,
     });
     if (!submission) throw new NotFoundException('Submission not found');
-    if (!can('submission.viewAll', user.role) && submission.repId !== user.id) {
+    if (!can('submission.viewAll', user) && submission.repId !== user.id) {
       // Same shape as a genuine miss: a rep must not be able to probe for the
       // existence of another rep's deals.
       throw new NotFoundException('Submission not found');
@@ -150,7 +150,7 @@ export class SubmissionsService {
    * exactly what `scopeFor` exists to prevent.
    */
   async queue(user: AuthUser) {
-    if (!can('submission.queueView', user.role)) throw new ForbiddenException();
+    if (!can('submission.queueView', user)) throw new ForbiddenException();
     return this.prisma.submission.findMany({
       where: {
         ...this.scopeFor(user),
@@ -224,7 +224,7 @@ export class SubmissionsService {
     }
 
     const mayEdit =
-      can('submission.viewAll', user.role) ||
+      can('submission.viewAll', user) ||
       existing.createdById === user.id ||
       (await tx.submission.count({ where: { contactId: existing.id, repId: user.id } })) > 0;
 
@@ -1026,7 +1026,7 @@ export class SubmissionsService {
         submission.status === SubmissionStatus.EXPORTED;
 
       if (approved) {
-        if (!can('invoice.generate', user.role)) {
+        if (!can('invoice.generate', user)) {
           throw new ForbiddenException(
             'This sale is approved — only Accounting or an administrator can change its invoice number now',
           );
@@ -1040,8 +1040,8 @@ export class SubmissionsService {
         );
       } else {
         const mayEdit =
-          can('submission.editAny', user.role) ||
-          (can('submission.editOwn', user.role) && submission.repId === user.id);
+          can('submission.editAny', user) ||
+          (can('submission.editOwn', user) && submission.repId === user.id);
         if (!mayEdit) throw new NotFoundException('Submission not found');
       }
 
@@ -1194,7 +1194,7 @@ export class SubmissionsService {
   async invoicePdf(id: string, user: AuthUser): Promise<{ buffer: Buffer; filename: string }> {
     const s = await this.loadForInvoicePdf(id);
     // Same row scope as findOne: a rep can pull their own invoice, no one else's.
-    if (!can('submission.viewAll', user.role) && s.repId !== user.id) {
+    if (!can('submission.viewAll', user) && s.repId !== user.id) {
       throw new NotFoundException('Submission not found');
     }
     return this.renderInvoicePdf(s);
@@ -1450,8 +1450,8 @@ export class SubmissionsService {
     if (!existing) throw new NotFoundException('Submission not found');
 
     const mayEdit =
-      can('submission.editAny', user.role) ||
-      (can('submission.editOwn', user.role) && existing.repId === user.id);
+      can('submission.editAny', user) ||
+      (can('submission.editOwn', user) && existing.repId === user.id);
     if (!mayEdit) throw new NotFoundException('Submission not found');
 
     const decided =
@@ -1462,7 +1462,7 @@ export class SubmissionsService {
       existing.status === SubmissionStatus.DRAFT ||
       existing.status === SubmissionStatus.RETURNED;
 
-    if (decided && !can('submission.editAny', user.role)) {
+    if (decided && !can('submission.editAny', user)) {
       throw new ForbiddenException(
         'This sale is approved — only Accounting or an administrator can amend it now',
       );

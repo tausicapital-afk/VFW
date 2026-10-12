@@ -33,6 +33,7 @@ import { ProfileModule } from './profile/profile.controller';
 import { FxModule } from './fx/fx.controller';
 import { QboModule } from './qbo/qbo.controller';
 import { ReportsModule } from './reports/reports.controller';
+import { RolesModule } from './roles/roles.controller';
 import { SearchModule } from './search/search.controller';
 import { StorageModule } from './storage/storage.service';
 import { SubmissionsModule } from './submissions/submissions.controller';
@@ -65,6 +66,7 @@ import { TestDataModule } from './testdata/test-data.controller';
     DocumentsModule,
     ReportsModule,
     FxModule,
+    RolesModule,
     AdminModule,
     MessagingModule,
     EmailsModule,

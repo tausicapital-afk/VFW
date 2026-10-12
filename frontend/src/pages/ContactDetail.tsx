@@ -65,7 +65,7 @@ export function ContactDetail() {
       // customer never sees the Contacts table that would have told them.
       title={<>{contact.brand}<TestTag on={contact.isTestData} /></>}
       actions={
-        can('email.send', user?.role) && (
+        can('email.send', user) && (
           <button
             className="btn"
             disabled={sendPortalLink.isPending || !contact.email}

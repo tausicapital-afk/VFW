@@ -137,7 +137,7 @@ export class AttendanceService {
   private async subject(userId: string | undefined, actor: AuthUser): Promise<string> {
     if (!userId || userId === actor.id) return actor.id;
 
-    if (!can('attendance.viewTeam', actor.role)) {
+    if (!can('attendance.viewTeam', actor)) {
       throw new ForbiddenException("Your role cannot open someone else's attendance");
     }
 
@@ -191,7 +191,7 @@ export class AttendanceService {
    * person a manager opened it to find.
    */
   async team(query: TeamQueryDto, actor: AuthUser) {
-    if (!can('attendance.viewTeam', actor.role)) {
+    if (!can('attendance.viewTeam', actor)) {
       throw new ForbiddenException('Your role cannot view team attendance');
     }
 

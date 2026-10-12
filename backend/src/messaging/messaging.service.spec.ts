@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { defaultPermissions } from '../common/acl';
 import { MessagingService } from './messaging.service';
 
 // A hand-rolled Prisma mock — only the delegate methods each test touches. This
@@ -24,7 +25,7 @@ function makeService(overrides: Record<string, any> = {}) {
   return { service: new MessagingService(prisma, storage), prisma };
 }
 
-const me = { id: 'me', email: 'me@x', name: 'Me', role: 'SALES' as const };
+const me = { id: 'me', email: 'me@x', name: 'Me', role: 'SALES', permissions: defaultPermissions('SALES') };
 
 describe('membership boundary', () => {
   it('returns 404 (not 403) when a non-member opens a conversation', async () => {

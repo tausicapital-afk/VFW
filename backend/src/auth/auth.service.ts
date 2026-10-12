@@ -5,7 +5,7 @@ import * as argon2 from 'argon2';
 import { randomBytes, randomInt } from 'crypto';
 import { ActivityService, ActivityContext } from '../activity/activity.service';
 import { AuditService } from '../audit/audit.service';
-import { AuthUser, SessionClaims } from '../common/auth.guard';
+import { AuthUser, SessionClaims, effectivePermissions } from '../common/auth.guard';
 import { EmailNotConfiguredError, EmailService } from '../common/email';
 import { decryptSecret } from '../config/config.crypto';
 import { PrismaService } from '../prisma/prisma.service';
@@ -187,7 +187,7 @@ export class AuthService {
     // Best-effort — a logging hiccup must never turn a valid login into a 500.
     await this.activity.recordLogin(user.id, user.name, ctx).catch(() => undefined);
 
-    const authUser: AuthUser = { id: user.id, email: user.email, name: user.name, role: user.role };
+    const authUser = await this.sessionUser(user);
     return { user: authUser, token: await this.sign(authUser, user.tokenVersion) };
   }
 
@@ -223,7 +223,7 @@ export class AuthService {
     await this.prisma.loginAttempt.deleteMany({ where: { email: user.email } });
     await this.activity.recordLogin(user.id, user.name, ctx).catch(() => undefined);
 
-    const authUser: AuthUser = { id: user.id, email: user.email, name: user.name, role: user.role };
+    const authUser = await this.sessionUser(user);
     return { token: await this.sign(authUser, user.tokenVersion), user: authUser };
   }
 
@@ -238,8 +238,18 @@ export class AuthService {
    * Mint a session. `tv` pins the token to the user's current tokenVersion, so
    * bumping that column invalidates every session already handed out.
    */
-  private async sign(user: AuthUser, tokenVersion: number): Promise<string> {
-    return this.jwt.signAsync({ ...user, tv: tokenVersion } satisfies SessionClaims);
+  private async sign(user: Omit<AuthUser, 'permissions'>, tokenVersion: number): Promise<string> {
+    const { id, email, name, role } = user;
+    return this.jwt.signAsync({ id, email, name, role, tv: tokenVersion } satisfies SessionClaims);
+  }
+
+  /** The signed-in user as the client sees it: who, and what their role grants. */
+  private async sessionUser(user: { id: string; email: string; name: string; role: string }): Promise<AuthUser> {
+    const roleDef = await this.prisma.roleDef.findUnique({ where: { key: user.role } });
+    return {
+      id: user.id, email: user.email, name: user.name, role: user.role,
+      permissions: effectivePermissions(user.role, roleDef?.permissions ?? []),
+    };
   }
 
   /** Record a sign-out for the Logs screen. Best-effort, like login. */
@@ -270,12 +280,18 @@ export class AuthService {
         id: true, name: true, email: true, phone: true, role: true, department: true,
         title: true, employeeId: true, commissionPct: true, target: true, colour: true,
         avatarKey: true,
+        roleDef: { select: { label: true, permissions: true } },
       },
     });
     if (!user) return null;
 
-    const { avatarKey, ...rest } = user;
-    return { ...rest, avatarUrl: await avatarUrl(this.storage, avatarKey) };
+    const { avatarKey, roleDef, ...rest } = user;
+    return {
+      ...rest,
+      roleLabel: roleDef.label,
+      permissions: effectivePermissions(user.role, roleDef.permissions),
+      avatarUrl: await avatarUrl(this.storage, avatarKey),
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -473,14 +489,14 @@ export class AuthService {
           email: activated.email,
           name: activated.name,
           role: activated.role,
-        } satisfies AuthUser,
+        },
         tokenVersion: activated.tokenVersion,
       };
     });
 
     return {
       token: await this.sign(authUser.user, authUser.tokenVersion),
-      user: authUser.user,
+      user: await this.sessionUser(authUser.user),
     };
   }
 

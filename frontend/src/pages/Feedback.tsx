@@ -28,7 +28,7 @@ export function Feedback() {
   });
 
   const rows = data?.feedback ?? [];
-  const canRecord = can('feedback.record', user?.role);
+  const canRecord = can('feedback.record', user);
 
   // Averaged for display only. It does not reach the leaderboard: the score has
   // no field for it (see backend/src/reports/score.ts).

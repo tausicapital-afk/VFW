@@ -1,17 +1,7 @@
-import { Role } from '@prisma/client';
 import { AdminService } from '../../admin/admin.service';
 import { ExportColumn, ExportDataset } from '../export.types';
 
 type UserRow = Awaited<ReturnType<AdminService['listUsers']>>['users'][number];
-
-/** The wording the screen uses, so an export never disagrees with the table it came from. */
-const ROLE_LABEL: Record<Role, string> = {
-  SALES: 'Sales Representative',
-  INTERN: 'Intern',
-  ACCT: 'Accounting',
-  MGR: 'Sales Manager',
-  ADMIN: 'Administrator',
-};
 
 /**
  * The pay basis in one phrase. It is two fields on the account — how base pay is
@@ -34,7 +24,7 @@ const payBasis = (u: Pick<UserRow, 'payType' | 'earnsCommission'>): string => {
 const columns: ExportColumn<UserRow>[] = [
   { header: 'Name', value: (u) => u.name, width: 22 },
   { header: 'Email', value: (u) => u.email, width: 28 },
-  { header: 'Role', value: (u) => ROLE_LABEL[u.role], width: 20 },
+  { header: 'Role', value: (u) => u.roleDef.label, width: 20 },
   { header: 'Department', value: (u) => u.department, width: 16 },
   { header: 'Phone', value: (u) => u.phone, width: 16, spreadsheetOnly: true },
   { header: 'Employee ID', value: (u) => u.employeeId, width: 12, spreadsheetOnly: true },

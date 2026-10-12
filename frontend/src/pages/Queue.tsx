@@ -57,7 +57,7 @@ export function Queue() {
   // A rep reads this screen to track their own submissions; deciding on one is
   // Accounting's job. The server enforces it either way — this only keeps a rep
   // from being offered a button that would 403.
-  const canDecide = can('submission.approve', user?.role);
+  const canDecide = can('submission.approve', user);
 
   const { data: queue, isLoading } = useQuery({
     queryKey: ['queue'],

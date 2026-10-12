@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Currency, Prisma, Role, SubmissionStatus, UserStatus } from '@prisma/client';
+import { Currency, Prisma, SubmissionStatus, UserStatus } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { Decimal } from 'decimal.js';
 import Stripe from 'stripe';
@@ -373,7 +373,7 @@ export class PaymentsService {
           name: 'Stripe',
           email: SYSTEM_USER_EMAIL,
           passwordHash,
-          role: Role.ACCT,
+          role: 'ACCT',
           status: UserStatus.ACTIVE,
           hidden: true,
         },

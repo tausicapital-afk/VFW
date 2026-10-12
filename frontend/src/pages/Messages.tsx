@@ -17,6 +17,7 @@ import {
   type AttachmentInput,
 } from '../lib/messaging';
 import { getSocket } from '../lib/socket';
+import { RoleName } from '../shell/RoleName';
 import { Page } from '../shell/Shell';
 import '../styles/messaging.css';
 
@@ -354,7 +355,7 @@ function NewChatModal({ onClose, onOpen }: { onClose: () => void; onOpen: (id: s
                 <Avatar name={u.name} colour={u.colour} online={u.online} sm />
                 <div className="meta">
                   <div className="nm">{u.name}</div>
-                  <div className="prev">{u.role}{u.department ? ` · ${u.department}` : ''}</div>
+                  <div className="prev"><RoleName role={u.role} />{u.department ? ` · ${u.department}` : ''}</div>
                 </div>
                 {selected.includes(u.id) && <span style={{ color: 'var(--blue)' }}>✓</span>}
               </div>

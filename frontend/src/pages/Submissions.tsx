@@ -209,7 +209,7 @@ export function Submissions() {
 
   // Voided sales are hidden from the main list; the roles that can restore them
   // get a toggle to review them and open one to restore.
-  const canVoid = can('submission.void', user?.role);
+  const canVoid = can('submission.void', user);
   const [showVoided, setShowVoided] = useState(false);
   const { data: voided, isLoading: voidedLoading } = useQuery({
     queryKey: ['submissions', 'voided'],
@@ -217,7 +217,7 @@ export function Submissions() {
     enabled: canVoid && showVoided,
   });
 
-  const scope = can('submission.viewAll', user?.role)
+  const scope = can('submission.viewAll', user)
     ? 'Every submission across all shows.'
     : 'Your own customers only.';
 

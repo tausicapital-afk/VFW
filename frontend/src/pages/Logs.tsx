@@ -8,6 +8,7 @@ import type {
   SessionPage,
 } from '../lib/types';
 import { ExportMenu } from '../shell/ExportMenu';
+import { RoleName } from '../shell/RoleName';
 import { Page } from '../shell/Shell';
 
 /**
@@ -161,7 +162,7 @@ function UsersTab() {
                       {u.online && <span className="pill APPROVED" style={{ marginLeft: 8 }}>Online</span>}
                       <div className="sm mut">{u.email}</div>
                     </td>
-                    <td className="sm">{u.role}</td>
+                    <td className="sm"><RoleName role={u.role} /></td>
                     <td className="sm">
                       {u.neverLoggedIn
                         ? <span className="pill DRAFT">Never</span>

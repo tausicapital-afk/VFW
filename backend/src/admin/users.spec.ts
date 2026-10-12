@@ -1,5 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import { createTestApp, http, loginCookie } from '../../test/app';
+import { defaultPermissions } from '../common/acl';
 import { AdminService } from './admin.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -421,7 +422,7 @@ describe('users & roles — edit and soft delete', () => {
       const service = app.get(AdminService);
       const theAdmin = await prisma.user.findUniqueOrThrow({ where: { email: ADMIN } });
       const rep = await prisma.user.findUniqueOrThrow({ where: { email: SALES } });
-      const actor = { id: rep.id, email: rep.email, name: rep.name, role: rep.role };
+      const actor = { id: rep.id, email: rep.email, name: rep.name, role: rep.role, permissions: defaultPermissions('SALES') };
 
       // Sanity: the seed really does have exactly one admin, or this proves nothing.
       const admins = await prisma.user.count({

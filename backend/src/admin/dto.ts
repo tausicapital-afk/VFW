@@ -1,4 +1,4 @@
-import { Currency, PayType, Role, UserStatus } from '@prisma/client';
+import { Currency, PayType, UserStatus } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
@@ -21,8 +21,10 @@ import {
 } from 'class-validator';
 
 export class CreateInvitationDto {
-  @IsEnum(Role)
-  role: Role;
+  // A RoleDef key; AdminService checks it exists.
+  @IsString()
+  @MaxLength(40)
+  role: string;
 
   @IsOptional()
   @IsString()
@@ -52,8 +54,10 @@ export class CreateInvitationDto {
  */
 export class UpdateInvitationDto {
   @IsOptional()
-  @IsEnum(Role)
-  role?: Role;
+  // A RoleDef key; AdminService checks it exists.
+  @IsString()
+  @MaxLength(40)
+  role?: string;
 
   @IsOptional()
   @IsString()
@@ -94,8 +98,10 @@ export class UpdateUserDto {
   phone?: string | null;
 
   @IsOptional()
-  @IsEnum(Role)
-  role?: Role;
+  // A RoleDef key; AdminService checks it exists.
+  @IsString()
+  @MaxLength(40)
+  role?: string;
 
   @IsOptional()
   @IsEnum(UserStatus)

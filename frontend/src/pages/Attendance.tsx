@@ -12,7 +12,8 @@ import type {
 } from '../lib/types';
 import { Avatar } from '../shell/Avatar';
 import { ExportMenu } from '../shell/ExportMenu';
-import { Page, ROLE_LABEL } from '../shell/Shell';
+import { RoleName } from '../shell/RoleName';
+import { Page } from '../shell/Shell';
 
 const qk = {
   sheet: (month: string, userId?: string) => ['attendance', month, userId ?? 'me'] as const,
@@ -22,7 +23,7 @@ const qk = {
 export function Attendance() {
   const { user } = useAuth();
   const [tab, setTab] = useState<'mine' | 'team'>('mine');
-  const showTeam = can('attendance.viewTeam', user?.role);
+  const showTeam = can('attendance.viewTeam', user);
 
   return (
     <Page crumb="People" title="Attendance">
@@ -355,7 +356,7 @@ function TeamSheet() {
                         <Avatar name={user.name} colour={user.colour} src={user.avatarUrl} size={28} />
                         <div style={{ minWidth: 0 }}>
                           <div className="b">{user.name}</div>
-                          <div className="mut sm">{ROLE_LABEL[user.role]}</div>
+                          <div className="mut sm"><RoleName role={user.role} /></div>
                         </div>
                       </div>
                     </td>

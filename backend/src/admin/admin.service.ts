@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { Invitation, PayType, Prisma, Role, UserStatus } from '@prisma/client';
+import { Invitation, PayType, Prisma, UserStatus } from '@prisma/client';
 import { randomInt } from 'crypto';
 import { Decimal } from 'decimal.js';
 import { AuditService } from '../audit/audit.service';
@@ -9,6 +9,7 @@ import { EmailService } from '../common/email';
 import { ConfigService } from '../config/config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { seasonParts } from '../common/season';
+import { ADMIN_ROLE } from '../common/acl';
 import {
   CreateAddonDto,
   CreateEventDto,
@@ -120,6 +121,8 @@ export class AdminService {
       throw new BadRequestException('An account already exists for that email');
     }
 
+    await this.assertRole(dto.role);
+
     const code = await this.uniqueCode();
     const expiresAt = new Date(
       Date.now() + (dto.expiresInDays ?? DEFAULT_EXPIRY_DAYS) * 86_400_000,
@@ -171,9 +174,9 @@ export class AdminService {
     const rows = await this.prisma.invitation.findMany({
       where: { deletedAt: null },
       orderBy: { createdAt: 'desc' },
-      include: { createdBy: { select: { name: true } } },
+      include: { createdBy: { select: { name: true } }, roleDef: { select: { label: true } } },
     });
-    return { invitations: rows.map((i) => this.shape(i, i.createdBy.name)) };
+    return { invitations: rows.map((i) => this.shape(i, i.createdBy.name, i.roleDef.label)) };
   }
 
   /**
@@ -205,9 +208,10 @@ export class AdminService {
     const data: Prisma.InvitationUpdateInput = {};
 
     if (dto.role !== undefined && dto.role !== invitation.role) {
+      await this.assertRole(dto.role);
       before.role = invitation.role;
       after.role = dto.role;
-      data.role = dto.role;
+      data.roleDef = { connect: { key: dto.role } };
     }
     if (dto.department !== undefined && dto.department !== invitation.department) {
       before.department = invitation.department;
@@ -289,11 +293,12 @@ export class AdminService {
     });
   }
 
-  private shape(i: Invitation, createdBy: string) {
+  private shape(i: Invitation, createdBy: string, roleLabel?: string) {
     return {
       id: i.id,
       code: i.code,
       role: i.role,
+      roleLabel: roleLabel ?? i.role,
       department: i.department,
       email: i.email,
       status: invitationStatus(i),
@@ -310,6 +315,7 @@ export class AdminService {
 
   private readonly userFields = {
     id: true, name: true, email: true, phone: true, role: true, department: true,
+    roleDef: { select: { label: true } },
     status: true, employeeId: true, commissionPct: true, target: true, colour: true,
     title: true, payType: true, baseRate: true, earnsCommission: true, createdAt: true,
   } satisfies Prisma.UserSelect;
@@ -347,11 +353,18 @@ export class AdminService {
    * it does not stop it authenticating, so a hidden ADMIN really can still get
    * in. Deleted and non-ACTIVE ones cannot, so they do not count.
    */
+  /** A role key someone is being given must be a role that exists. */
+  private async assertRole(key: string) {
+    if (!(await this.prisma.roleDef.findUnique({ where: { key } }))) {
+      throw new BadRequestException(`Unknown role "${key}"`);
+    }
+  }
+
   private async otherActiveAdmins(excluding: string, tx?: Prisma.TransactionClient) {
     return (tx ?? this.prisma).user.count({
       where: {
         id: { not: excluding },
-        role: Role.ADMIN,
+        role: ADMIN_ROLE,
         status: UserStatus.ACTIVE,
         deletedAt: null,
       },
@@ -382,7 +395,7 @@ export class AdminService {
     if (!user) throw new NotFoundException('User not found');
 
     const isSelf = user.id === actor.id;
-    const demoting = dto.role !== undefined && dto.role !== user.role && user.role === Role.ADMIN;
+    const demoting = dto.role !== undefined && dto.role !== user.role && user.role === ADMIN_ROLE;
     const suspending = dto.status === UserStatus.DISABLED && user.status !== UserStatus.DISABLED;
 
     if (isSelf && dto.role !== undefined && dto.role !== user.role) {
@@ -430,8 +443,9 @@ export class AdminService {
       data.phone = dto.phone;
     }
     if (dto.role !== undefined && dto.role !== user.role) {
+      await this.assertRole(dto.role);
       set('role', user.role, dto.role);
-      data.role = dto.role;
+      data.roleDef = { connect: { key: dto.role } };
     }
     if (dto.department !== undefined && dto.department !== user.department) {
       set('department', user.department, dto.department);
@@ -524,7 +538,7 @@ export class AdminService {
     const user = await this.prisma.user.findFirst({ where: { id, deletedAt: null } });
     if (!user) throw new NotFoundException('User not found');
     if (user.id === actor.id) throw new BadRequestException('You cannot delete your own account');
-    if (user.role === Role.ADMIN && !(await this.otherActiveAdmins(user.id))) {
+    if (user.role === ADMIN_ROLE && !(await this.otherActiveAdmins(user.id))) {
       throw new BadRequestException('That is the last administrator — promote someone else first');
     }
 

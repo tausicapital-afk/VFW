@@ -97,7 +97,7 @@ export function Emails() {
     queryFn: () => api.get<EmailRow[]>(`/api/emails?${qs.toString()}`),
   });
 
-  const scope = can('email.viewAll', user?.role)
+  const scope = can('email.viewAll', user)
     ? 'Every message the system has sent and received.'
     : 'Emails you have sent.';
 

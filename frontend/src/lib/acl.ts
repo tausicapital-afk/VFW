@@ -1,53 +1,52 @@
-import type { Role } from './types';
+import type { User } from './types';
 
 /**
- * A mirror of the server's matrix (backend/src/common/acl.ts). This copy exists
- * only to decide what to *show* — hiding a button the user cannot use. It is
- * not a security boundary: the server re-checks every one of these, and an API
- * call made without permission fails there regardless of what this file says.
- * If the two ever disagree, the server wins.
+ * The permission keys, mirroring the server (backend/src/common/acl.ts). What a
+ * role grants is no longer fixed here: roles are edited under Administration ->
+ * Roles, and the signed-in user arrives with their role's `permissions` from
+ * the server. This file only decides what to *show* — the server re-checks
+ * every call, and if the two ever disagree, the server wins.
  */
-export const ACL = {
-  'submission.create': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
-  'submission.editOwn': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
-  'submission.editAny': ['ACCT', 'ADMIN'],
-  'submission.viewAll': ['ACCT', 'MGR', 'ADMIN'],
-  'submission.queueView': ['SALES', 'ACCT', 'ADMIN'],
-  'submission.approve': ['ACCT', 'ADMIN'],
-  'submission.reject': ['ACCT', 'ADMIN'],
-  'submission.return': ['ACCT', 'ADMIN'],
-  'submission.void': ['ACCT', 'ADMIN'],
-  'accounting.fields': ['ACCT', 'ADMIN'],
-  'quickbooks.export': ['ACCT', 'ADMIN'],
-  'invoice.generate': ['ACCT', 'ADMIN'],
-  'installment.plan': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
-  'installment.mark': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
-  'reports.view': ['ACCT', 'MGR', 'ADMIN'],
-  'leaderboard.view': ['ADMIN'],
-  'contacts.view': ['SALES', 'ACCT', 'MGR', 'ADMIN'],
-  'contacts.create': ['SALES', 'ACCT', 'ADMIN'],
-  'feedback.view': ['MGR', 'ADMIN', 'ACCT'],
-  'feedback.record': ['MGR', 'ADMIN', 'ACCT', 'SALES'],
-  'internal.comment': ['ACCT', 'MGR', 'ADMIN'],
-  'internal.view': ['ACCT', 'MGR', 'ADMIN'],
-  'messaging.use': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
-  'email.viewOwn': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
-  'email.viewAll': ['ACCT', 'MGR', 'ADMIN'],
-  'email.send': ['ACCT', 'ADMIN'],
-  'attendance.mark': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
-  'attendance.viewTeam': ['ACCT', 'MGR', 'ADMIN'],
-  'payroll.viewOwn': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
-  'payroll.viewAll': ['ACCT', 'ADMIN'],
-  'payroll.submit': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
-  'payroll.approve': ['ACCT', 'ADMIN'],
-  'payroll.manageTiers': ['ACCT', 'ADMIN'],
-  'admin.manage': ['ACCT', 'ADMIN'],
-  'activity.view': ['ACCT', 'ADMIN'],
-} as const satisfies Record<string, readonly Role[]>;
+export const PERMISSIONS = [
+  'submission.create',
+  'submission.editOwn',
+  'submission.editAny',
+  'submission.viewAll',
+  'submission.queueView',
+  'submission.approve',
+  'submission.reject',
+  'submission.return',
+  'submission.void',
+  'accounting.fields',
+  'quickbooks.export',
+  'invoice.generate',
+  'installment.plan',
+  'installment.mark',
+  'reports.view',
+  'leaderboard.view',
+  'contacts.view',
+  'contacts.create',
+  'feedback.view',
+  'feedback.record',
+  'internal.comment',
+  'internal.view',
+  'messaging.use',
+  'email.viewOwn',
+  'email.viewAll',
+  'email.send',
+  'attendance.mark',
+  'attendance.viewTeam',
+  'payroll.viewOwn',
+  'payroll.viewAll',
+  'payroll.submit',
+  'payroll.approve',
+  'payroll.manageTiers',
+  'admin.manage',
+  'activity.view',
+] as const;
 
-export type Permission = keyof typeof ACL;
+export type Permission = (typeof PERMISSIONS)[number];
 
-export function can(permission: Permission, role: Role | undefined): boolean {
-  if (!role) return false;
-  return (ACL[permission] as readonly string[]).includes(role);
+export function can(permission: Permission, user: Pick<User, 'permissions'> | null | undefined): boolean {
+  return !!user?.permissions?.includes(permission);
 }

@@ -26,7 +26,7 @@ export function Contacts() {
   });
 
   const rows = data ?? [];
-  const scope = can('submission.viewAll', user?.role)
+  const scope = can('submission.viewAll', user)
     ? 'Every customer across all shows.'
     : 'Your own customers only.';
 
@@ -45,7 +45,7 @@ export function Contacts() {
             file holds their own customers and nobody else's. */}
         <ExportMenu dataset="contacts" params={{ q }} disabled={isLoading || !rows.length} />
         <span className="sm mut">{scope}</span>
-        {can('contacts.create', user?.role) && (
+        {can('contacts.create', user) && (
           <>
             <ImportCsvButton
               endpoint="/api/contacts/import"

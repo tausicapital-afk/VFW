@@ -55,7 +55,7 @@ export class SearchService {
     // The customer book is its own permission — INTERN holds no
     // `contacts.view` at all (see common/acl.ts) — so search must not open a
     // door the Contacts screen itself keeps shut for that role.
-    if (can('contacts.view', user.role)) {
+    if (can('contacts.view', user)) {
       const contacts = await this.contacts.list(user, query);
       for (const c of contacts.slice(0, LIMIT)) {
         results.push({

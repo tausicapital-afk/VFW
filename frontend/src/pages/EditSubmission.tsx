@@ -240,11 +240,11 @@ export function EditSubmission() {
   // returned, and now pending — are correctable by whoever owns them; an approved
   // or exported one is an amendment, and only Accounting/Admin may make it.
   const decided = ['APPROVED', 'EXPORTED'].includes(sub.status);
-  const mine = sub.rep.id === user?.id && can('submission.editOwn', user?.role);
+  const mine = sub.rep.id === user?.id && can('submission.editOwn', user);
   const editable = decided
-    ? can('submission.editAny', user?.role)
+    ? can('submission.editAny', user)
     : ['DRAFT', 'RETURNED', 'PENDING'].includes(sub.status) &&
-      (mine || can('submission.editAny', user?.role));
+      (mine || can('submission.editAny', user));
 
   if (!editable) {
     return (

@@ -15,7 +15,9 @@ import { ImportCsvButton } from '../shell/ImportCsv';
 // screen is where a role is *assigned*, so a label that had drifted from the one
 // shown everywhere else would mislead exactly the person choosing it. The key
 // order is the order the dropdowns here offer, since they are built from it.
-import { Page, ROLE_LABEL } from '../shell/Shell';
+import { RoleName, RoleOptions } from '../shell/RoleName';
+import { Page } from '../shell/Shell';
+import { RolesTab } from './AdminRoles';
 import { ConfigTab } from './AdminConfig';
 import { UserSalesCard } from './UserSalesCard';
 
@@ -53,9 +55,11 @@ const PRICE_CURRENCIES: Currency[] = ['CAD', 'USD', 'GBP', 'EUR', 'JPY'];
 
 // The mockup maps role and status onto the status-pill palette rather than
 // inventing a second one (line 2947). Same here — .pill.{STATUS} already exists.
+// A role an admin created has no colour of its own and reads as DRAFT.
 const ROLE_PILL: Record<Role, string> = {
   ADMIN: 'EXPORTED', ACCT: 'APPROVED', MGR: 'PENDING', INTERN: 'RETURNED', SALES: 'DRAFT',
 };
+const rolePill = (role: Role) => ROLE_PILL[role] ?? 'DRAFT';
 const USER_PILL: Record<string, string> = {
   ACTIVE: 'APPROVED', PENDING: 'PENDING', REJECTED: 'REJECTED', DISABLED: 'RETURNED',
 };
@@ -66,6 +70,7 @@ const INVITE_PILL: Record<string, string> = {
 const TABS = [
   ['invites', 'Invitations & approvals'],
   ['users', 'Users & roles'],
+  ['roles', 'Roles'],
   ['packages', 'Packages & pricing'],
   ['tax', 'Tax rates'],
   ['settings', 'Settings'],
@@ -101,6 +106,7 @@ export function Admin() {
 
       {tab === 'invites' && <InvitesTab />}
       {tab === 'users' && <UsersTab />}
+      {tab === 'roles' && <RolesTab />}
       {tab === 'packages' && <PackagesTab />}
       {tab === 'tax' && <TaxTab />}
       {tab === 'settings' && <SettingsTab />}
@@ -192,7 +198,7 @@ function InvitesTab() {
                     >
                       <td className="b">{u.name}</td>
                       <td className="sm">{u.email}</td>
-                      <td className="sm">{ROLE_LABEL[u.role]}</td>
+                      <td className="sm"><RoleName role={u.role} /></td>
                       <td className="sm">{u.department ?? '—'}</td>
                       <td className="sm mut">{fmtDate(u.createdAt)}</td>
                       {/* The row is a link now, so the buttons inside it have to
@@ -252,7 +258,7 @@ function InvitesTab() {
                       onClick={() => setViewInvite(i.id)}
                     >
                       <td className="mono sm b">{i.code}</td>
-                      <td className="sm">{ROLE_LABEL[i.role]}</td>
+                      <td className="sm"><RoleName role={i.role} /></td>
                       <td className="sm">{i.email ?? 'Open code'}</td>
                       <td><span className={'pill ' + INVITE_PILL[i.status]}>{i.status}</span></td>
                       <td className="sm mut">{fmtDate(i.expiresAt)}</td>
@@ -335,10 +341,8 @@ function InviteModal({ onClose, onDone }: { onClose: () => void; onDone: (i: Inv
           <div className="fields">
             <div className="f">
               <label>Role</label>
-              <select value={role} onChange={(e) => setRole(e.target.value as Role)}>
-                {(Object.keys(ROLE_LABEL) as Role[]).map((r) => (
-                  <option key={r} value={r}>{ROLE_LABEL[r]}</option>
-                ))}
+              <select value={role} onChange={(e) => setRole(e.target.value)}>
+                <RoleOptions />
               </select>
               <div className="help">The account is created with this role — the signup form cannot override it.</div>
             </div>
@@ -410,7 +414,7 @@ function IssuedModal({ invitation, onClose }: { invitation: Invitation; onClose:
           )}
           <div className="totals" style={{ marginTop: 12 }}>
             <div className="r"><span>Code</span><span className="b">{invitation.code}</span></div>
-            <div className="r"><span>Role</span><span>{ROLE_LABEL[invitation.role]}</span></div>
+            <div className="r"><span>Role</span><span><RoleName role={invitation.role} /></span></div>
             <div className="r"><span>Expires</span><span>{fmtDate(invitation.expiresAt)}</span></div>
             <div className="r"><span>Signup link</span><span className="sm">{link}</span></div>
           </div>
@@ -514,11 +518,9 @@ function InvitationDetailModal({
               <select
                 value={role}
                 disabled={locked}
-                onChange={(e) => setRole(e.target.value as Role)}
+                onChange={(e) => setRole(e.target.value)}
               >
-                {(Object.keys(ROLE_LABEL) as Role[]).map((r) => (
-                  <option key={r} value={r}>{ROLE_LABEL[r]}</option>
-                ))}
+                <RoleOptions />
               </select>
             </div>
             <div className="f">
@@ -681,10 +683,8 @@ function PendingUserDetailModal({
             </div>
             <div className="f">
               <label>Role</label>
-              <select value={role} onChange={(e) => setRole(e.target.value as Role)}>
-                {(Object.keys(ROLE_LABEL) as Role[]).map((r) => (
-                  <option key={r} value={r}>{ROLE_LABEL[r]}</option>
-                ))}
+              <select value={role} onChange={(e) => setRole(e.target.value)}>
+                <RoleOptions />
               </select>
               <div className="help">What the account can do once it is approved.</div>
             </div>
@@ -795,7 +795,7 @@ function UsersTab() {
               >
                 <td className="b">{u.name}</td>
                 <td className="sm">{u.email}</td>
-                <td><span className={'pill ' + ROLE_PILL[u.role]}>{ROLE_LABEL[u.role]}</span></td>
+                <td><span className={'pill ' + rolePill(u.role)}><RoleName role={u.role} /></span></td>
                 <td className="sm">{u.department ?? '—'}</td>
                 {/* A rate this account is not on is not a rate. Showing the
                     stored percentage here would read as what they earn. */}
@@ -929,11 +929,9 @@ function UserDetailModal({
               <select
                 value={role}
                 disabled={isSelf}
-                onChange={(e) => setRole(e.target.value as Role)}
+                onChange={(e) => setRole(e.target.value)}
               >
-                {(Object.keys(ROLE_LABEL) as Role[]).map((r) => (
-                  <option key={r} value={r}>{ROLE_LABEL[r]}</option>
-                ))}
+                <RoleOptions />
               </select>
               <div className="help">Takes effect on their next request — no need to sign back in.</div>
             </div>
@@ -2274,9 +2272,8 @@ function TaxTab() {
         </div>
       </div>
       <div className="note" style={{ marginTop: 16 }}>
-        Changing a rate re-prices nothing that already exists. A submission carries the rate it
-        was taxed at; only a deliberate tax-profile change on the submission itself re-prices it,
-        and that is written to the audit trail before and after.
+        Changing a rate re-prices nothing that already exists. A rep picks one of these profiles
+        when creating a submission, and the sale keeps that profile and rate from then on.
       </div>
 
       {adding && (

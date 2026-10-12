@@ -1,16 +1,8 @@
-import { PayType, Role } from '@prisma/client';
+import { PayType } from '@prisma/client';
 import { PayrollService } from '../../payroll/payroll.service';
 import { ExportColumn, ExportDataset } from '../export.types';
 
 /** The wording the screens use, so a file never disagrees with the table it came from. */
-const ROLE_LABEL: Record<Role, string> = {
-  SALES: 'Sales Representative',
-  INTERN: 'Intern',
-  ACCT: 'Accounting',
-  MGR: 'Sales Manager',
-  ADMIN: 'Administrator',
-};
-
 const PAY_TYPE_LABEL: Record<PayType, string> = {
   SALARY: 'Salary',
   HOURLY: 'Hourly',
@@ -45,7 +37,7 @@ type PayrollRow = Awaited<ReturnType<PayrollService['run']>>['rows'][number];
 const columns: ExportColumn<PayrollRow>[] = [
   { header: 'Person', value: (r) => r.user.name, width: 24 },
   { header: 'Employee ID', value: (r) => r.user.employeeId, width: 12, spreadsheetOnly: true },
-  { header: 'Role', value: (r) => ROLE_LABEL[r.user.role], width: 20, spreadsheetOnly: true },
+  { header: 'Role', value: (r) => r.user.roleDef.label, width: 20, spreadsheetOnly: true },
   { header: 'Title', value: (r) => r.user.title, width: 22, spreadsheetOnly: true },
   { header: 'Department', value: (r) => r.user.department, width: 16 },
   { header: 'Pay basis', value: (r) => payBasis(r.pay.payType, r.pay.earnsCommission), width: 22 },
@@ -105,7 +97,7 @@ type PayrollApprovalRow = Awaited<ReturnType<PayrollService['pending']>>[number]
  */
 const approvalColumns: ExportColumn<PayrollApprovalRow>[] = [
   { header: 'Person', value: (r) => r.user.name, width: 24 },
-  { header: 'Role', value: (r) => ROLE_LABEL[r.user.role], width: 20, spreadsheetOnly: true },
+  { header: 'Role', value: (r) => r.user.roleDef.label, width: 20, spreadsheetOnly: true },
   { header: 'Period start', value: (r) => r.periodStart, width: 12 },
   { header: 'Period end', value: (r) => r.periodEnd, width: 12 },
   { header: 'Pay basis', value: (r) => payBasis(r.payType, r.earnsCommission), width: 22 },

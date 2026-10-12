@@ -32,7 +32,7 @@ export class ContactsService {
    * deals a rep can see.
    */
   private scopeFor(user: AuthUser): Prisma.ContactWhereInput {
-    if (can('submission.viewAll', user.role)) return {};
+    if (can('submission.viewAll', user)) return {};
     return {
       OR: [
         { submissions: { some: this.submissions.scopeFor(user) } },

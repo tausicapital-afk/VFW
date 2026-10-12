@@ -1,4 +1,5 @@
 import { NotFoundException } from '@nestjs/common';
+import { defaultPermissions } from '../common/acl';
 import type { AuthUser } from '../common/auth.guard';
 import { EmailsService } from './emails.service';
 
@@ -12,8 +13,8 @@ import { EmailsService } from './emails.service';
  *    it, tags the send INVOICE + attributes it, and audits it.
  */
 
-const acct: AuthUser = { id: 'u-acct', email: 'a@x.com', name: 'A', role: 'ACCT' };
-const rep: AuthUser = { id: 'u-rep', email: 'r@x.com', name: 'R', role: 'SALES' };
+const acct: AuthUser = { id: 'u-acct', email: 'a@x.com', name: 'A', role: 'ACCT', permissions: defaultPermissions('ACCT') };
+const rep: AuthUser = { id: 'u-rep', email: 'r@x.com', name: 'R', role: 'SALES', permissions: defaultPermissions('SALES') };
 
 function make() {
   const prisma = {

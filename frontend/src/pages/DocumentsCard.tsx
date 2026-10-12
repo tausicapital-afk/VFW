@@ -138,7 +138,7 @@ export function DocumentsCard({ submissionId }: { submissionId: string }) {
                   // covers it, and a completed one is done. A DECLINED or
                   // VOIDED one is exactly when a re-send is the point.
                   const canSend =
-                    can('email.send', user?.role) && (!sig || sig.status === 'DECLINED' || sig.status === 'VOIDED');
+                    can('email.send', user) && (!sig || sig.status === 'DECLINED' || sig.status === 'VOIDED');
                   return (
                     <tr key={d.id}>
                       <td className="sm">{TYPE_LABEL[d.type] ?? d.type}</td>

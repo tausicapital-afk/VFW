@@ -1,40 +1,20 @@
-import { ACL, can } from './acl';
-import type { Role } from './types';
+import { describe, expect, it } from 'vitest';
+import { can, PERMISSIONS } from './acl';
 
 describe('can', () => {
-  it('returns false when there is no role at all (signed-out / still loading)', () => {
+  it('denies a signed-out visitor', () => {
     expect(can('submission.create', undefined)).toBe(false);
+    expect(can('submission.create', null)).toBe(false);
   });
 
-  it('allows a role that is listed for the permission', () => {
-    expect(can('submission.create', 'SALES')).toBe(true);
-    expect(can('admin.manage', 'ADMIN')).toBe(true);
+  it('reads the permissions the server sent for the role', () => {
+    const user = { permissions: ['submission.create', 'admin.manage'] };
+    expect(can('submission.create', user)).toBe(true);
+    expect(can('admin.manage', user)).toBe(true);
+    expect(can('activity.view', user)).toBe(false);
   });
 
-  it('denies a role that is not listed for the permission', () => {
-    expect(can('admin.manage', 'SALES')).toBe(false);
-    expect(can('activity.view', 'MGR')).toBe(false);
-  });
-
-  it('scopes editAny to accounting/admin only, distinct from editOwn', () => {
-    expect(can('submission.editOwn', 'SALES')).toBe(true);
-    expect(can('submission.editAny', 'SALES')).toBe(false);
-    expect(can('submission.editAny', 'ACCT')).toBe(true);
-  });
-
-  it('checks every permission against every role without throwing', () => {
-    const roles: Role[] = ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'];
-    for (const permission of Object.keys(ACL) as (keyof typeof ACL)[]) {
-      for (const role of roles) {
-        expect(typeof can(permission, role)).toBe('boolean');
-      }
-    }
-  });
-
-  it('everyone with an account can use messaging', () => {
-    const roles: Role[] = ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'];
-    for (const role of roles) {
-      expect(can('messaging.use', role)).toBe(true);
-    }
+  it('denies everything when the server sent no permissions', () => {
+    for (const p of PERMISSIONS) expect(can(p, {})).toBe(false);
   });
 });

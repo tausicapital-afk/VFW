@@ -1,7 +1,9 @@
 import type { INestApplication } from '@nestjs/common';
-import type { Role } from '@prisma/client';
 import { createTestApp, http, loginCookie } from '../../test/app';
-import { ACL, can, type Permission } from '../common/acl';
+import { ACL, can, defaultPermissions, type BuiltInRole, type Permission, type Role } from '../common/acl';
+
+/** A user holding a built-in role's default permissions, for the unit-level checks below. */
+const as = (role: BuiltInRole) => ({ permissions: defaultPermissions(role) });
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
@@ -67,7 +69,7 @@ describe('ACL boundary (server-side authorization)', () => {
   for (const [key, acc] of Object.entries(ACCOUNTS)) {
     describe(`as ${acc.role}`, () => {
       for (const ep of ENDPOINTS) {
-        const allowed = can(ep.permission, acc.role);
+        const allowed = can(ep.permission, as(acc.role as BuiltInRole));
         it(`${ep.name} -> ${allowed ? 'passes the guard (not 403)' : '403'}`, async () => {
           const req = http(app)[ep.method](ep.path).set('Cookie', cookies[key]);
           const res = await (ep.body ? req.send(ep.body) : req.send());
@@ -143,44 +145,48 @@ describe('ACL boundary (server-side authorization)', () => {
   // ---- INTERN has no seeded login, so assert its matrix at the unit level ----
   describe('INTERN is a restricted rep, not a synonym for SALES', () => {
     it('drafts sales like a rep', () => {
-      expect(can('submission.create', 'INTERN')).toBe(true);
-      expect(can('submission.editOwn', 'INTERN')).toBe(true);
-      expect(can('leaderboard.view', 'INTERN')).toBe(false);
-      expect(can('messaging.use', 'INTERN')).toBe(true);
+      expect(can('submission.create', as('INTERN'))).toBe(true);
+      expect(can('submission.editOwn', as('INTERN'))).toBe(true);
+      expect(can('leaderboard.view', as('INTERN'))).toBe(false);
+      expect(can('messaging.use', as('INTERN'))).toBe(true);
     });
 
     it('does NOT get the customer book or feedback', () => {
-      expect(can('contacts.view', 'INTERN')).toBe(false);
-      expect(can('contacts.create', 'INTERN')).toBe(false);
-      expect(can('feedback.record', 'INTERN')).toBe(false);
+      expect(can('contacts.view', as('INTERN'))).toBe(false);
+      expect(can('contacts.create', as('INTERN'))).toBe(false);
+      expect(can('feedback.record', as('INTERN'))).toBe(false);
     });
 
     it('never gets administration or the logs', () => {
-      expect(can('admin.manage', 'INTERN')).toBe(false);
-      expect(can('activity.view', 'INTERN')).toBe(false);
+      expect(can('admin.manage', as('INTERN'))).toBe(false);
+      expect(can('activity.view', as('INTERN'))).toBe(false);
     });
   });
 
   // ---- ACCT and ADMIN are equals: both hold every permission ----
   describe('Accounting and Admin have identical, full permissions', () => {
     it('can manage users and roles', () => {
-      expect(can('admin.manage', 'ACCT')).toBe(true);
+      expect(can('admin.manage', as('ACCT'))).toBe(true);
     });
 
     it('reads the activity log, like an admin', () => {
-      expect(can('activity.view', 'ACCT')).toBe(true);
+      expect(can('activity.view', as('ACCT'))).toBe(true);
     });
 
-    it('holds every permission the admin holds, and nothing less', () => {
+    it('holds every permission the admin holds except the leaderboard', () => {
       for (const perm of Object.keys(ACL) as Permission[]) {
-        expect(can(perm, 'ACCT')).toBe(can(perm, 'ADMIN'));
-        expect(can(perm, 'ACCT')).toBe(true);
+        if (perm === 'leaderboard.view') continue;
+        expect(can(perm, as('ACCT'))).toBe(can(perm, as('ADMIN')));
+        expect(can(perm, as('ACCT'))).toBe(true);
       }
+      // The leaderboard is admin-only.
+      expect(can('leaderboard.view', as('ACCT'))).toBe(false);
+      expect(can('leaderboard.view', as('ADMIN'))).toBe(true);
     });
 
     it('MGR and the rep roles are unaffected', () => {
       for (const role of ['SALES', 'INTERN', 'MGR'] as const) {
-        expect(can('admin.manage', role)).toBe(false);
+        expect(can('admin.manage', as(role))).toBe(false);
       }
     });
   });

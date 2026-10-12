@@ -13,7 +13,9 @@ import type {
 } from '../lib/types';
 import { Avatar } from '../shell/Avatar';
 import { ExportMenu } from '../shell/ExportMenu';
-import { Page, ROLE_LABEL } from '../shell/Shell';
+import { useRoles } from '../lib/roles';
+import { RoleName } from '../shell/RoleName';
+import { Page } from '../shell/Shell';
 import { UserSalesCard } from './UserSalesCard';
 
 /** Inclusive `YYYY-MM-DD` bounds — see lib/period.ts. */
@@ -48,12 +50,12 @@ const cad = (v: string) => money(v, 'CAD');
 export function Payroll() {
   const { user } = useAuth();
   const [tab, setTab] = useState<'mine' | 'run' | 'approvals' | 'tiers'>('mine');
-  const showRun = can('payroll.viewAll', user?.role);
-  const showApprovals = can('payroll.approve', user?.role);
+  const showRun = can('payroll.viewAll', user);
+  const showApprovals = can('payroll.approve', user);
   // The commission-tier table is company-wide pay policy, so it is gated the
   // same as approving payroll and administering the catalogue, not opened to
   // everyone who can merely view their own pay.
-  const showTiers = can('payroll.manageTiers', user?.role);
+  const showTiers = can('payroll.manageTiers', user);
 
   return (
     <Page crumb="People" title="Earnings">
@@ -425,6 +427,7 @@ function Statement({ statement, period }: { statement: PayrollStatement; period:
 /** The full profile, which is the other half of what a payroll screen is for. */
 function ProfileCard({ statement }: { statement: PayrollStatement }) {
   const u = statement.user;
+  const { label: roleLabel } = useRoles();
   return (
     <div className="card">
       <div className="hd"><h3>{u.name}</h3></div>
@@ -432,13 +435,13 @@ function ProfileCard({ statement }: { statement: PayrollStatement }) {
         <div className="rowflex" style={{ gap: 14, marginBottom: 18 }}>
           <Avatar name={u.name} colour={u.colour} src={u.avatarUrl} size={56} />
           <div style={{ minWidth: 0 }}>
-            <div className="b" style={{ fontSize: 15 }}>{u.title ?? ROLE_LABEL[u.role]}</div>
+            <div className="b" style={{ fontSize: 15 }}>{u.title ?? roleLabel(u.role)}</div>
             <div className="mut sm">{u.department ?? '—'}</div>
           </div>
         </div>
 
         <div className="fields">
-          <Field label="Role" value={ROLE_LABEL[u.role]} />
+          <Field label="Role" value={roleLabel(u.role)} />
           <Field label="Employee ID" value={u.employeeId ?? '—'} />
           <Field label="Email" value={u.email} />
           <Field label="Phone" value={u.phone ?? '—'} />
@@ -493,7 +496,7 @@ function Kpi({ label, value, note, accent }: { label: string; value: string; not
 
 function Run() {
   const { user } = useAuth();
-  const canReimburse = can('payroll.approve', user?.role);
+  const canReimburse = can('payroll.approve', user);
   const [period, setPeriod] = useState<Period>(() => currentMonthPeriod());
   const [open, setOpen] = useState<{ id: string; name: string } | null>(null);
   const validRange = !!period.from && !!period.to && period.to >= period.from;
@@ -570,7 +573,7 @@ function Run() {
                             <Avatar name={row.user.name} colour={row.user.colour} src={row.user.avatarUrl} size={28} />
                             <div style={{ minWidth: 0 }}>
                               <div className="b">{row.user.name}</div>
-                              <div className="mut sm">{row.user.title ?? ROLE_LABEL[row.user.role]}</div>
+                              <div className="mut sm">{row.user.title ?? <RoleName role={row.user.role} />}</div>
                             </div>
                           </div>
                         </td>
@@ -778,7 +781,7 @@ function Approvals() {
                         <Avatar name={inv.user?.name ?? '?'} colour={inv.user?.colour} src={inv.user?.avatarUrl} size={28} />
                         <div style={{ minWidth: 0 }}>
                           <div className="b">{inv.user?.name}<TestTag on={inv.isTestData} /></div>
-                          <div className="mut sm">{inv.user ? ROLE_LABEL[inv.user.role] : ''}</div>
+                          <div className="mut sm">{inv.user ? <RoleName role={inv.user.role} /> : ''}</div>
                         </div>
                       </div>
                     </td>

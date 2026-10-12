@@ -11,7 +11,8 @@ export interface TestFlagged {
   isTestData?: boolean;
 }
 
-export type Role = 'SALES' | 'INTERN' | 'ACCT' | 'MGR' | 'ADMIN';
+/** A role key: a built-in (SALES, INTERN, ACCT, MGR, ADMIN) or one an admin created. */
+export type Role = string;
 export type SubmissionStatus =
   | 'DRAFT' | 'PENDING' | 'RETURNED' | 'APPROVED' | 'REJECTED' | 'EXPORTED' | 'VOIDED';
 export type PayStatus = 'UNPAID' | 'PARTIAL' | 'PAID';
@@ -22,6 +23,10 @@ export interface User {
   name: string;
   email: string;
   role: Role;
+  /** What the role grants, from the server. See lib/acl.ts. */
+  permissions?: string[];
+  /** The role's display name, when the server sends it (GET /api/auth/me). */
+  roleLabel?: string;
   phone?: string | null;
   department?: string | null;
   title?: string | null;
@@ -1021,4 +1026,29 @@ export interface MailAccountInput {
   password: string;
   fromAddress: string;
   fromName: string;
+}
+
+// --- Roles -----------------------------------------------------------------
+
+export interface RoleRow {
+  key: Role;
+  label: string;
+  /** Shipped with the system: editable, not deletable. */
+  builtIn: boolean;
+  /** ADMIN: always holds every permission. */
+  locked: boolean;
+  permissions: string[];
+  /** Accounts (not deleted) holding this role. */
+  users: number;
+}
+
+export interface PermissionInfo {
+  key: string;
+  group: string;
+  label: string;
+}
+
+export interface RolesResponse {
+  roles: RoleRow[];
+  permissions: PermissionInfo[];
 }
