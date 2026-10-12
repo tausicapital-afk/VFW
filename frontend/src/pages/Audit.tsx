@@ -2,7 +2,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
-import { fmtDateTime } from '../lib/format';
+import { actionLabel, fmtDateTime } from '../lib/format';
 import type { AuditPage } from '../lib/types';
 import { ExportMenu } from '../shell/ExportMenu';
 import { Page } from '../shell/Shell';
@@ -65,7 +65,7 @@ export function Audit() {
         />
         <select value={action} onChange={(e) => reset(() => setAction(e.target.value))}>
           <option value="">All actions</option>
-          {(actions ?? []).map((a) => <option key={a} value={a}>{a.replace(/_/g, ' ')}</option>)}
+          {(actions ?? []).map((a) => <option key={a} value={a}>{actionLabel(a)}</option>)}
         </select>
         <button className="btn sm" onClick={() => reset(() => { setQ(''); setAction(''); })}>
           Clear
@@ -109,7 +109,7 @@ export function Audit() {
                     <td className="sm mut mono">{fmtDateTime(e.createdAt)}</td>
                     <td>
                       <span className={`pill ${pillFor(e.action)}`}>
-                        {e.action.replace(/_/g, ' ')}
+                        {actionLabel(e.action)}
                       </span>
                     </td>
                     <td className="sm b">

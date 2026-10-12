@@ -258,7 +258,7 @@ export function buildPayslipPdf(d: PayslipPdfData): Promise<Buffer> {
   const textLeft = left + logoW;
   const leftColW = width * 0.6 - logoW;
   doc.fillColor(INK).font('Helvetica-Bold').fontSize(20).text(d.companyName, textLeft, headTop, { width: leftColW });
-  doc.font('Helvetica').fontSize(10).fillColor(MUTED).text('Payroll statement', textLeft, doc.y + 2, { width: leftColW });
+  doc.font('Helvetica').fontSize(10).fillColor(MUTED).text('Earnings statement', textLeft, doc.y + 2, { width: leftColW });
   const headerLeftBottom = doc.y;
 
   doc.font('Helvetica-Bold').fontSize(16).fillColor(INK).text('PAYSLIP', left, headTop, { width, align: 'right' });
@@ -428,7 +428,7 @@ export function buildPayslipPdf(d: PayslipPdfData): Promise<Buffer> {
   // disagree, a timesheet or a sale moved after the claim was made, and that is
   // precisely what somebody querying their pay has to be able to see.
   if (d.invoice) {
-    y = section('Payroll invoice for this period', y + 2);
+    y = section('Earnings submission for this period', y + 2);
     y = grid(
       [
         { label: 'Status', value: INVOICE_LABEL[d.invoice.status] },
@@ -487,7 +487,7 @@ export function buildPayslipPdf(d: PayslipPdfData): Promise<Buffer> {
         ? `This period was approved on ${d.invoice.reviewedAt ? date(d.invoice.reviewedAt) : 'record'}. ` +
             'The figures above are re-derived from the timesheet and the sales ledger each time this is ' +
             'produced and may have moved since; the approved claim is the figure that was paid.'
-        : 'Not an approved payroll run. This period is worked out fresh from the pay setup, the timesheet ' +
+        : 'Not an approved earnings run. This period is worked out fresh from the pay setup, the timesheet ' +
             'and the sales ledger every time it is opened, so correcting an attendance day or amending a ' +
             'sale changes it.',
       left,

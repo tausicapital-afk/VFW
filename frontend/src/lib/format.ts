@@ -77,3 +77,12 @@ export const PAY_LABEL: Record<PayStatus, string> = {
   PARTIAL: 'Part paid',
   PAID: 'Paid',
 };
+
+/**
+ * An audit/activity action code as a reader sees it ("PAYROLL_APPROVED" →
+ * "EARNINGS APPROVED"). The stored codes keep their original PAYROLL_ prefix so
+ * existing entries and filters still match; only the display says Earnings.
+ */
+export function actionLabel(action: string): string {
+  return action.replace(/^PAYROLL_/, 'EARNINGS_').replace(/_/g, ' ');
+}

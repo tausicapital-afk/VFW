@@ -805,7 +805,7 @@ const COUNT_LABEL: [keyof TestDataSummary['counts'], string][] = [
   ['packages', 'packages'],
   ['addons', 'add-ons'],
   ['attendance', 'timesheet days'],
-  ['payroll', 'payroll invoices'],
+  ['payroll', 'earnings statements'],
 ];
 
 /**

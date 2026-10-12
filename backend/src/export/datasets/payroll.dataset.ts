@@ -85,8 +85,8 @@ const columns: ExportColumn<PayrollRow>[] = [
 export function payrollDataset(payroll: PayrollService): ExportDataset<PayrollRow> {
   return {
     key: 'payroll',
-    title: 'Payroll',
-    filename: 'payroll',
+    title: 'Earnings',
+    filename: 'earnings',
     permission: 'payroll.viewAll',
     load: async (user, filters) => (await payroll.run({ from: filters.from, to: filters.to }, user)).rows,
     columns,
@@ -133,8 +133,8 @@ const approvalColumns: ExportColumn<PayrollApprovalRow>[] = [
 export function payrollApprovalsDataset(payroll: PayrollService): ExportDataset<PayrollApprovalRow> {
   return {
     key: 'payroll-approvals',
-    title: 'Payroll approvals',
-    filename: 'payroll-approvals',
+    title: 'Earnings approvals',
+    filename: 'earnings-approvals',
     permission: 'payroll.approve',
     load: (user) => payroll.pending(user),
     columns: approvalColumns,

@@ -2,7 +2,7 @@
 
 VFW Console is the system Van Fashion Week (and its sister events, VKFW and GFC)
 uses to run the business side of a fashion show: booking a designer's package,
-getting the sale approved and invoiced, tracking payments, running payroll,
+getting the sale approved and invoiced, tracking payments, working out earnings,
 messaging colleagues, and reporting on how the season is going.
 
 This manual is organized the same way the app is organized. Each section below
@@ -287,7 +287,7 @@ themself is recorded and clearly labeled as a correction, not a self-report.
 - Each day can only have one record. Re-entering a day overwrites what was
   there before, rather than adding a second entry.
 
-### Payroll
+### Earnings
 
 What you (or, if you have the right access, everyone) earned in a given
 period, broken down into base pay, commission, and the total.
@@ -300,7 +300,7 @@ period, broken down into base pay, commission, and the total.
 | Approve/reject submitted pay | — | Yes |
 
 **Choosing the period.** The screen opens on the current calendar month and the
-‹ › arrows step a month at a time, which is what most payroll runs are. **Custom
+‹ › arrows step a month at a time, which is what most earnings runs are. **Custom
 range…** swaps those arrows for two date boxes so a period can be anything else:
 a biweekly cycle, someone's final two weeks before they leave, a one-off
 correction window. Everything on the screen follows the period you pick — the
@@ -472,7 +472,7 @@ themselves further, so it's held only by the two most trusted roles.
 | Tab | What it's for |
 | --- | --- |
 | Invitations & approvals | Send an invitation to a new hire (with their role already fixed), cancel an invitation, and approve new sign-ups before they can log in. |
-| Users & roles | See every staff account and change someone's role, pay type, pay rate, and whether they earn commission (so a person can be on commission, on a salary, or on both). Opening an account also shows what they have sold and to whom — the same Sales panel Payroll shows, from the same figures. Here it steps a calendar month at a time (the custom-range picker lives on Payroll), so you can look back over an account's history from the screen where you set their rate. |
+| Users & roles | See every staff account and change someone's role, pay type, pay rate, and whether they earn commission (so a person can be on commission, on a salary, or on both). Opening an account also shows what they have sold and to whom — the same Sales panel Earnings shows, from the same figures. Here it steps a calendar month at a time (the custom-range picker lives on Earnings), so you can look back over an account's history from the screen where you set their rate. |
 | Packages & pricing | Manage the seasons, the shows, the package catalogue, and the add-on catalogue that sales are built from. Seasons are maintained here as a list ("Fall/Winter 26") so a show is picked from it rather than retyped — add one before adding the show that uses it. Renaming or removing a season only changes what the New show form offers next; shows already on the books keep the season they were created with. |
 | Tax rates | Manage the tax rates applied when a sale is priced. |
 | Settings | The discount threshold that triggers extra sign-off, invoice numbering, and the currency exchange rates used everywhere else in the system. |

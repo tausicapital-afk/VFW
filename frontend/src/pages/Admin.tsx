@@ -970,7 +970,7 @@ function UserDetailModal({
                 ))}
               </select>
               <div className="help">
-                How their base pay is worked out on the Payroll screen. Whether they also earn
+                How their base pay is worked out on the Earnings screen. Whether they also earn
                 commission is the setting below.
               </div>
             </div>
@@ -1046,7 +1046,7 @@ function UserDetailModal({
 
           {/* Administration is where a commission rate is decided, and a rate is
               an abstraction until you can see the money it has produced. The
-              card steps months on its own here — unlike Payroll, this modal has
+              card steps months on its own here — unlike Earnings, this modal has
               no month of its own for it to follow. */}
           <div style={{ marginTop: 22 }}>
             <UserSalesCard userId={user.id} />

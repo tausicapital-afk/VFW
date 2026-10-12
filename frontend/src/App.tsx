@@ -100,7 +100,9 @@ function Routed() {
         <Route path="/emails" element={<Guard permission="email.viewOwn"><Emails /></Guard>} />
         <Route path="/queue" element={<Guard permission="submission.queueView"><Queue /></Guard>} />
         <Route path="/attendance" element={<Guard permission="attendance.mark"><Attendance /></Guard>} />
-        <Route path="/payroll" element={<Guard permission="payroll.viewOwn"><Payroll /></Guard>} />
+        <Route path="/earnings" element={<Guard permission="payroll.viewOwn"><Payroll /></Guard>} />
+        {/* Old bookmarks from before Payroll was renamed Earnings. */}
+        <Route path="/payroll" element={<Navigate to="/earnings" replace />} />
         <Route path="/board" element={<Guard permission="leaderboard.view"><Board /></Guard>} />
         <Route path="/feedback" element={<Guard permission="feedback.view"><Feedback /></Guard>} />
         <Route path="/internal" element={<Guard permission="internal.view"><Internal /></Guard>} />

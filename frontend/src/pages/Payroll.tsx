@@ -56,15 +56,15 @@ export function Payroll() {
   const showTiers = can('payroll.manageTiers', user?.role);
 
   return (
-    <Page crumb="People" title="Payroll">
+    <Page crumb="People" title="Earnings">
       {(showRun || showApprovals || showTiers) && (
         <div className="tabs">
           <button className={'tab' + (tab === 'mine' ? ' on' : '')} onClick={() => setTab('mine')}>
-            My pay
+            My earnings
           </button>
           {showRun && (
             <button className={'tab' + (tab === 'run' ? ' on' : '')} onClick={() => setTab('run')}>
-              Payroll run
+              Earnings run
             </button>
           )}
           {showApprovals && (
@@ -743,7 +743,7 @@ function Approvals() {
     <>
       <div className="card">
         <div className="hd">
-          <h3>Payroll awaiting approval</h3>
+          <h3>Earnings awaiting approval</h3>
           <div className="sp" />
           <span className="sm mut">{pending?.length ?? 0} waiting</span>
           <ExportMenu dataset="payroll-approvals" disabled={!pending?.length} />
@@ -754,7 +754,7 @@ function Approvals() {
         ) : !pending || pending.length === 0 ? (
           <div className="empty">
             <h3>Queue is clear</h3>
-            <p>Every submitted payroll has been reviewed.</p>
+            <p>Every submitted earnings statement has been reviewed.</p>
           </div>
         ) : (
           <div className="tbl-wrap">
@@ -844,9 +844,9 @@ function InvoiceActionModal({
   });
 
   const title =
-    kind === 'edit' ? `Edit ${invoice.user?.name}'s payroll — ${label}`
-    : kind === 'approve' ? `Approve ${invoice.user?.name}'s payroll`
-    : `Reject ${invoice.user?.name}'s payroll`;
+    kind === 'edit' ? `Edit ${invoice.user?.name}'s earnings — ${label}`
+    : kind === 'approve' ? `Approve ${invoice.user?.name}'s earnings`
+    : `Reject ${invoice.user?.name}'s earnings`;
 
   const ready = kind === 'approve' || note.trim().length > 0;
 
@@ -973,7 +973,7 @@ function CommissionTiersTab() {
         </div>
       </div>
       <div className="note" style={{ marginTop: 16 }}>
-        Applied progressively at payroll time, like a tax bracket rather than a cliff: the slice of a
+        Applied progressively when earnings are worked out, like a tax bracket rather than a cliff: the slice of a
         period's net revenue between one threshold and the next earns that tier's bonus, on top of the
         ordinary commission struck on each sale. A change here reprices the <b>next</b> read of a
         statement — a period someone has already submitted keeps the tier bonus it was frozen with, the

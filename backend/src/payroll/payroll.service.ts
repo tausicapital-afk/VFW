@@ -282,7 +282,7 @@ export class PayrollService {
       const rate = typeof raw === 'number' || typeof raw === 'string' ? new Decimal(raw) : null;
       if (!rate || rate.lte(0)) {
         throw new BadRequestException(
-          `No FX rate for ${cur} in Settings. Accounting must set one before payroll can be totalled in CAD.`,
+          `No FX rate for ${cur} in Settings. Accounting must set one before earnings can be totalled in CAD.`,
         );
       }
       rates[cur] = rate;
@@ -701,7 +701,7 @@ export class PayrollService {
    */
   async run(query: PayrollQueryDto, actor: AuthUser) {
     if (!can('payroll.viewAll', actor.role)) {
-      throw new ForbiddenException('Your role cannot view the payroll run');
+      throw new ForbiddenException('Your role cannot view the earnings run');
     }
 
     const { from, to } = resolvePeriod(query);
@@ -922,7 +922,7 @@ export class PayrollService {
   async submitMine(dto: SubmitPayrollDto, actor: AuthUser) {
     periodRange(dto.from, dto.to); // validates the bounds before anything else runs
     if (dto.to > dayKey(new Date())) {
-      throw new BadRequestException('You cannot submit payroll for a period that has not finished yet');
+      throw new BadRequestException('You cannot submit earnings for a period that has not finished yet');
     }
 
     const periodStart = parseDay(dto.from);
@@ -982,7 +982,7 @@ export class PayrollService {
         {
           actorId: actor.id,
           action: 'PAYROLL_SUBMITTED',
-          detail: `Payroll submitted for ${dto.from} to ${dto.to}`,
+          detail: `Earnings submitted for ${dto.from} to ${dto.to}`,
           payload: { from: dto.from, to: dto.to, gross: invoice.gross.toString() },
         },
         tx,
@@ -1002,7 +1002,7 @@ export class PayrollService {
   /** Everyone's invoices awaiting review, oldest first — the payroll Queue. */
   async pending(actor: AuthUser) {
     if (!can('payroll.approve', actor.role)) {
-      throw new ForbiddenException('Your role cannot review payroll submissions');
+      throw new ForbiddenException('Your role cannot review earnings submissions');
     }
     const invoices = await this.prisma.payrollInvoice.findMany({
       where: { status: PayrollInvoiceStatus.SUBMITTED },
@@ -1026,10 +1026,10 @@ export class PayrollService {
    */
   async editInvoice(id: string, dto: EditPayrollInvoiceDto, actor: AuthUser) {
     if (!can('payroll.approve', actor.role)) {
-      throw new ForbiddenException('Your role cannot edit a payroll submission');
+      throw new ForbiddenException('Your role cannot edit an earnings submission');
     }
     const invoice = await this.prisma.payrollInvoice.findUnique({ where: { id } });
-    if (!invoice) throw new NotFoundException('Payroll invoice not found');
+    if (!invoice) throw new NotFoundException('Earnings statement not found');
     if (invoice.status === PayrollInvoiceStatus.APPROVED) {
       throw new BadRequestException('This invoice is already approved and cannot be edited');
     }
@@ -1053,7 +1053,7 @@ export class PayrollService {
         {
           actorId: actor.id,
           action: 'PAYROLL_INVOICE_EDITED',
-          detail: `Payroll figures edited for ${dayKey(invoice.periodStart)} to ${dayKey(invoice.periodEnd)}: ${dto.note}`,
+          detail: `Earnings figures edited for ${dayKey(invoice.periodStart)} to ${dayKey(invoice.periodEnd)}: ${dto.note}`,
           payload: {
             from: dayKey(invoice.periodStart),
             to: dayKey(invoice.periodEnd),
@@ -1074,10 +1074,10 @@ export class PayrollService {
 
   async approveInvoice(id: string, actor: AuthUser) {
     if (!can('payroll.approve', actor.role)) {
-      throw new ForbiddenException('Your role cannot approve payroll');
+      throw new ForbiddenException('Your role cannot approve earnings');
     }
     const invoice = await this.prisma.payrollInvoice.findUnique({ where: { id } });
-    if (!invoice) throw new NotFoundException('Payroll invoice not found');
+    if (!invoice) throw new NotFoundException('Earnings statement not found');
     if (invoice.status !== PayrollInvoiceStatus.SUBMITTED) {
       throw new BadRequestException(`Only a submitted invoice can be approved — this one is ${invoice.status}`);
     }
@@ -1091,7 +1091,7 @@ export class PayrollService {
         {
           actorId: actor.id,
           action: 'PAYROLL_APPROVED',
-          detail: `Payroll approved for ${dayKey(invoice.periodStart)} to ${dayKey(invoice.periodEnd)}`,
+          detail: `Earnings approved for ${dayKey(invoice.periodStart)} to ${dayKey(invoice.periodEnd)}`,
           payload: {
             from: dayKey(invoice.periodStart),
             to: dayKey(invoice.periodEnd),
@@ -1107,10 +1107,10 @@ export class PayrollService {
 
   async rejectInvoice(id: string, dto: RejectPayrollInvoiceDto, actor: AuthUser) {
     if (!can('payroll.approve', actor.role)) {
-      throw new ForbiddenException('Your role cannot reject payroll');
+      throw new ForbiddenException('Your role cannot reject earnings');
     }
     const invoice = await this.prisma.payrollInvoice.findUnique({ where: { id } });
-    if (!invoice) throw new NotFoundException('Payroll invoice not found');
+    if (!invoice) throw new NotFoundException('Earnings statement not found');
     if (invoice.status !== PayrollInvoiceStatus.SUBMITTED) {
       throw new BadRequestException(`Only a submitted invoice can be rejected — this one is ${invoice.status}`);
     }
@@ -1124,7 +1124,7 @@ export class PayrollService {
         {
           actorId: actor.id,
           action: 'PAYROLL_REJECTED',
-          detail: `Payroll rejected for ${dayKey(invoice.periodStart)} to ${dayKey(invoice.periodEnd)}: ${dto.reason}`,
+          detail: `Earnings rejected for ${dayKey(invoice.periodStart)} to ${dayKey(invoice.periodEnd)}: ${dto.reason}`,
           payload: { from: dayKey(invoice.periodStart), to: dayKey(invoice.periodEnd), userId: invoice.userId },
         },
         tx,
