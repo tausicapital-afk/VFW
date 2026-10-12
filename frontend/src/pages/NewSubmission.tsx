@@ -214,6 +214,8 @@ export function NewSubmission() {
         // right away, even if attachments below fail.
         void qc.invalidateQueries({ queryKey: ['submissions'] });
         void qc.invalidateQueries({ queryKey: ['queue'] });
+        // A season typed here may have just been added to the catalogue.
+        void qc.invalidateQueries({ queryKey: ['catalog'] });
       }
 
       // Now that we have an id, flush the staged attachments to it. A file that
