@@ -8,7 +8,7 @@ import { Role } from '@prisma/client';
  *   endpoints ungoverned, which meant any signed-in user could hand-enter a
  *   customer, and an INTERN had the full CRM.
  * - INTERN is no longer a synonym for SALES. It keeps submissions, the
- *   dashboard, the leaderboard and messaging, but not the customer book and not
+ *   dashboard and messaging, but not the customer book and not
  *   feedback — a trainee who can draft a sale without holding designer PII.
  *
  * This is the single source of truth for authorization. The frontend has a copy
@@ -51,7 +51,9 @@ export const ACL = {
   'installment.plan': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
   'installment.mark': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
   'reports.view': ['ACCT', 'MGR', 'ADMIN'],
-  'leaderboard.view': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
+  // Strictly admin: the ranking compares people against each other, so it is
+  // a management view, not something every rep (or even ACCT/MGR) reads.
+  'leaderboard.view': ['ADMIN'],
   // The customer book is PII — designers' direct emails and phone numbers. An
   // intern is a supervised trainee who drafts sales; they do not get the CRM.
   'contacts.view': ['SALES', 'ACCT', 'MGR', 'ADMIN'],

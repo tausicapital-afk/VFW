@@ -6,9 +6,9 @@ import { REPORTS, ReportsService } from './reports.service';
 /**
  * Insight. Everything here is read-only; nothing in this module writes a row.
  *
- * The two guards differ on purpose, and they follow the mockup's matrix:
- * reports are financial and are for ACCT/MGR/ADMIN, while the leaderboard is
- * visible to everyone — a rep is meant to see where they stand.
+ * The two guards differ on purpose: reports are financial and are for
+ * ACCT/MGR/ADMIN, while the leaderboard ranks people against each other and is
+ * for ADMIN only.
  */
 @Controller('api/reports')
 export class ReportsController {

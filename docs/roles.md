@@ -45,7 +45,7 @@ From the nav in `frontend/src/shell/Shell.tsx`, enforced server-side by
 | Submissions | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Contacts | ✓ | — | ✓ | ✓ | ✓ |
 | Messages | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Leaderboard | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Leaderboard | — | — | — | — | ✓ |
 | New submission | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Approval queue | ✓ | — | ✓ | — | ✓ |
 | QuickBooks | — | — | ✓ | — | ✓ |
@@ -114,8 +114,8 @@ A rep sees only submissions where they are the rep. `ACCT`/`MGR`/`ADMIN` hold
 Contacts are scoped transitively: a rep sees a brand they have sold to *or*
 entered themselves, and viewing a shared brand shows only their own deals for it.
 
-The Leaderboard is deliberately **not** scoped — showing everyone's numbers to
-everyone is the point of a leaderboard.
+The Leaderboard is **Admin only** — it ranks people against each other, so it is
+a management view rather than something every rep reads.
 
 ## Where the boundary actually is
 

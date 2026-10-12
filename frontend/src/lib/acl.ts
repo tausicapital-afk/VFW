@@ -23,7 +23,7 @@ export const ACL = {
   'installment.plan': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
   'installment.mark': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
   'reports.view': ['ACCT', 'MGR', 'ADMIN'],
-  'leaderboard.view': ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'],
+  'leaderboard.view': ['ADMIN'],
   'contacts.view': ['SALES', 'ACCT', 'MGR', 'ADMIN'],
   'contacts.create': ['SALES', 'ACCT', 'ADMIN'],
   'feedback.view': ['MGR', 'ADMIN', 'ACCT'],

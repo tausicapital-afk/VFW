@@ -48,7 +48,7 @@ const NAV: NavItem[] = [
   { grp: 'People' },
   { to: '/attendance', label: 'Attendance', ic: '◷', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
   { to: '/payroll', label: 'Payroll', ic: '◎', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
-  { to: '/board', label: 'Leaderboard', ic: '★', roles: ['SALES', 'INTERN', 'ACCT', 'MGR', 'ADMIN'] },
+  { to: '/board', label: 'Leaderboard', ic: '★', roles: ['ADMIN'] },
   { to: '/feedback', label: 'Designer feedback', ic: '☆', roles: ['ACCT', 'MGR', 'ADMIN'] },
   { to: '/internal', label: 'Internal notes', ic: '✎', roles: ['ACCT', 'MGR', 'ADMIN'] },
   { grp: 'Insight' },

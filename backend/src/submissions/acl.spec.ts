@@ -145,7 +145,7 @@ describe('ACL boundary (server-side authorization)', () => {
     it('drafts sales like a rep', () => {
       expect(can('submission.create', 'INTERN')).toBe(true);
       expect(can('submission.editOwn', 'INTERN')).toBe(true);
-      expect(can('leaderboard.view', 'INTERN')).toBe(true);
+      expect(can('leaderboard.view', 'INTERN')).toBe(false);
       expect(can('messaging.use', 'INTERN')).toBe(true);
     });
 
