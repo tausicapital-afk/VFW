@@ -346,7 +346,7 @@ describe('payslip', () => {
     expect(data.person.name).toBe('Marielle Fontaine');
     expect(data.person.employeeId).toBe('VFW-1001');
     expect(data.person.department).toBe('Sales');
-    expect(data.person.role).toBe('SALES');
+    expect(data.person.role).toBe('User'); // the role's label, not its key
     expect(data.person.email).toBe(SALES);
     expect(data.preparedBy).toBe('Marielle Fontaine');
   });
