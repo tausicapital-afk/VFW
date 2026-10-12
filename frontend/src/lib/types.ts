@@ -263,6 +263,8 @@ export interface Submission extends TestFlagged {
   packageBlurbOverride: string | null;
   packagePriceOverride: Money | null;
   packageCustomized: boolean;
+  /** The season the rep typed or picked on New submission; null on older sales. */
+  season: string | null;
   packagePrice: Money;
   addonTotal: Money;
   subtotal: Money;

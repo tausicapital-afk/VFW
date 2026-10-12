@@ -522,6 +522,14 @@ model Submission {
   showDate DateTime? @db.Date
   notes    String?
 
+  // The season this sale is for, as the rep typed or picked it on New
+  // submission. Free text, like Event.season, and copied rather than linked:
+  // a season the rep types that is not in the Seasons list is added there at
+  // the same moment (see SubmissionsService.resolveSeason), but renaming or
+  // deleting it later never rewrites a sale already on the books. Any show can
+  // be sold under any season. Null on sales made before the field existed.
+  season String?
+
   // --- Money. All of it is computed server-side by PricingService; the client
   // --- sends inputs (package, addons, discount) and never sends a total.
   currency       Currency

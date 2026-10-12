@@ -8,6 +8,7 @@ import { ImportResult, importCsv } from '../common/csv-import';
 import { EmailService } from '../common/email';
 import { ConfigService } from '../config/config.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { seasonParts } from '../common/season';
 import {
   CreateAddonDto,
   CreateEventDto,
@@ -72,28 +73,6 @@ function decimal(raw: string, field: string): Decimal {
  * Summer 27" -> SS27) are what actually distinguish one show from another —
  * the name alone does not, since "Vancouver Fashion Week" repeats every season.
  */
-/**
- * "Spring/Summer 27" -> { initials: "SS", year: "27" }. Shared by eventId
- * (below) and by Season create/update, so a season is rejected at the moment
- * it is added to the catalogue rather than the moment someone tries to build a
- * show out of it.
- */
-function seasonParts(season: string): { initials: string; year: string } {
-  const year = season.match(/(\d{2,4})\s*$/)?.[1]?.slice(-2) ?? '';
-  const initials = season
-    .replace(/\d+/g, '')
-    .split(/[^A-Za-z]+/)
-    .filter(Boolean)
-    .map((w) => w[0]!.toUpperCase())
-    .join('');
-  if (!initials || !year) {
-    throw new BadRequestException(
-      'Season must look like "Spring/Summer 27" or "Fall/Winter 26" — initials followed by a year',
-    );
-  }
-  return { initials, year };
-}
-
 export function eventId(brand: string, cityId: string, season: string): string {
   const { initials, year } = seasonParts(season);
   return `${brand.toUpperCase()}-${cityId.toUpperCase()}-${initials}${year}`;

@@ -41,8 +41,29 @@ export class CreateSubmissionDto {
   country?: string;
 
   // --- what they bought
+  /**
+   * The season, as the rep typed or picked it. A spelling of a season that
+   * already exists ("fall-winter 2027" for "Fall/Winter 27") is refused unless
+   * `seasonIsNew` says the rep saw the suggestion and wants theirs anyway; a
+   * season not in the list is added to it. Ignored on edit — a sale's season
+   * is set when it is created.
+   */
+  @IsOptional() @IsString() @MaxLength(40)
+  season?: string;
+
+  @IsOptional() @IsBoolean()
+  seasonIsNew?: boolean;
+
   @IsString()
   eventId: string;
+
+  /**
+   * The tax profile the rep picked for this sale. Chosen at creation only:
+   * editing a sale keeps the tax it was created with. Optional on the wire so
+   * an older client still works — it falls back to the package's profile.
+   */
+  @IsOptional() @IsString() @MaxLength(20)
+  taxCode?: string;
 
   @IsString()
   packageId: string;
@@ -175,9 +196,9 @@ export class PaymentDto {
 }
 
 /**
- * Accounting reclassification. Note what is still absent: no total, no tax
- * amount. Changing the tax profile re-prices the sale server-side; the client
- * never sends a figure.
+ * Accounting reclassification. No figures and no tax profile: the tax is
+ * picked when the sale is created (CreateSubmissionDto.taxCode) and fixed
+ * from then on.
  */
 export class PatchSubmissionDto {
   @IsOptional() @IsString() @MaxLength(20)
@@ -185,9 +206,6 @@ export class PatchSubmissionDto {
 
   @IsOptional() @IsString() @MaxLength(60)
   costCentre?: string;
-
-  @IsOptional() @IsString() @MaxLength(20)
-  taxCode?: string;
 
   @IsOptional() @IsString() @MaxLength(60)
   department?: string;

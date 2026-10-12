@@ -2,11 +2,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
-import { money } from '../lib/format';
+import { fmtDate, money } from '../lib/format';
 import {
   generateSchedule, INTERVALS, PAYMENT_METHODS, toCents, today, type Cadence,
 } from '../lib/installments';
 import { discountPctOfPackage, discountPreview } from '../lib/pricing';
+import { matchSeason } from '../lib/season';
 import type { Catalog, Currency, DiscountType, DocumentType, Submission } from '../lib/types';
 import { fmtSize, TYPE_LABEL, uploadDocument } from '../lib/uploads';
 import { Page } from '../shell/Shell';
@@ -39,6 +40,9 @@ export function NewSubmission() {
   const [email, setEmail] = useState('');
   const [country, setCountry] = useState('');
   const [season, setSeason] = useState('');
+  // Set when the rep has seen "did you mean…" and wants their spelling anyway.
+  const [seasonIsNew, setSeasonIsNew] = useState(false);
+  const [taxCode, setTaxCode] = useState('');
   const [eventId, setEventId] = useState('');
   const [packageId, setPackageId] = useState('');
   const [addonIds, setAddonIds] = useState<string[]>([]);
@@ -77,28 +81,22 @@ export function NewSubmission() {
 
   const event = catalog?.events.find((e) => e.id === eventId);
 
-  // Defaults to the first season in the catalogue until the rep picks one —
-  // there is nothing to default to before the catalogue has loaded.
-  const activeSeason = season || catalog?.seasons[0]?.label || '';
+  // The season is typed, with the catalogue's seasons offered as you type. A
+  // different spelling of one that exists is caught here and offered back, so
+  // the list does not fill up with "FW27" next to "Fall/Winter 27".
+  const seasonMatch = matchSeason(season, catalog?.seasons ?? []);
+  const seasonReady =
+    seasonMatch.kind === 'existing' ||
+    (seasonMatch.kind === 'new' && seasonMatch.valid) ||
+    (seasonMatch.kind === 'similar' && seasonIsNew);
 
-  // The Show list is narrowed to the chosen season — drawn from the Seasons
-  // catalogue an admin maintains under Packages & pricing, the same vocabulary
-  // a show's own `season` is copied from when it is added there.
+  // Every show is on offer whatever the season — a show is not tied to one.
   const shows = useMemo(
-    () => catalog?.events.filter((ev) => ev.season === activeSeason) ?? [],
-    [catalog, activeSeason],
+    () => [...(catalog?.events ?? [])].sort(
+      (a, b) => a.name.localeCompare(b.name) || a.start.localeCompare(b.start),
+    ),
+    [catalog],
   );
-
-  // Switching seasons drops a show that no longer belongs — and with it the
-  // package and add-ons that were keyed off that show.
-  function chooseSeason(next: string) {
-    setSeason(next);
-    if (event && event.season !== next) {
-      setEventId('');
-      setPackageId('');
-      setAddonIds([]);
-    }
-  }
 
   // A package is only offered if it belongs to this event's brand AND carries a
   // price for the city the event runs in — the same two rules the server
@@ -167,11 +165,11 @@ export function NewSubmission() {
     const subtotal = base + addonTotal;
     const discount = discountPreview(base, discountType, discountValue);
     const taxable = Math.max(0, subtotal - discount);
-    const rate = Number(catalog.taxes.find((t) => t.code === pkg.taxCode)?.rate ?? 0);
+    const rate = Number(catalog.taxes.find((t) => t.code === taxCode)?.rate ?? 0);
     const tax = Math.round(taxable * (rate / 100) * 100) / 100;
     const total = Math.round((taxable + tax) * 100) / 100;
     return { base, addonTotal, subtotal, discount, taxable, rate, tax, total, balance: total - deposit };
-  }, [pkg, price, catalog, sellable, addonIds, discountType, discountValue, deposit, overridePriceNum]);
+  }, [pkg, price, catalog, sellable, addonIds, discountType, discountValue, deposit, overridePriceNum, taxCode]);
 
   // An indicative schedule shown while the rep builds the plan. Like the total, it
   // is recomputed on the server at submit — this only shows the shape of the terms
@@ -196,7 +194,9 @@ export function NewSubmission() {
           company: company || undefined,
           email: email || undefined,
           country: country || undefined,
-          eventId, packageId, addonIds,
+          season: season.trim(),
+          seasonIsNew: seasonMatch.kind === 'similar' && seasonIsNew ? true : undefined,
+          eventId, packageId, addonIds, taxCode,
           ...(customize ? {
             packageNameOverride: overrideName.trim() || undefined,
             packageLooksOverride: overrideLooks.trim() !== '' ? Number(overrideLooks) : undefined,
@@ -288,7 +288,7 @@ export function NewSubmission() {
     );
   }
 
-  const ready = designer && brand && eventId && packageId && customPackageReady;
+  const ready = designer && brand && seasonReady && eventId && packageId && taxCode && customPackageReady;
 
   return (
     <Page crumb="Work" title="New submission">
@@ -331,16 +331,45 @@ export function NewSubmission() {
             <div className="fields">
               <div className="f">
                 <label>Season <span className="req">*</span></label>
-                {catalog && catalog.seasons.length === 0 ? (
-                  <p className="sm mut" style={{ marginTop: 0 }}>
-                    No seasons yet — ask an admin to add one under Packages &amp; pricing.
-                  </p>
-                ) : (
-                  <select value={activeSeason} onChange={(e) => chooseSeason(e.target.value)}>
-                    {catalog?.seasons.map((s) => (
-                      <option key={s.id} value={s.label}>{s.label}</option>
+                <input
+                  list="season-options"
+                  value={season}
+                  placeholder="e.g. Fall/Winter 27"
+                  maxLength={40}
+                  onChange={(e) => { setSeason(e.target.value); setSeasonIsNew(false); }}
+                  required
+                />
+                <datalist id="season-options">
+                  {catalog?.seasons.map((s) => <option key={s.id} value={s.label} />)}
+                </datalist>
+                {seasonMatch.kind === 'similar' && !seasonIsNew && (
+                  <div className="note" style={{ marginTop: 6 }}>
+                    Did you mean{' '}
+                    {seasonMatch.seasons.map((s, i) => (
+                      <span key={s.id}>
+                        {i > 0 && ' or '}
+                        <button type="button" className="btn sm" onClick={() => setSeason(s.label)}>
+                          {s.label}
+                        </button>
+                      </span>
                     ))}
-                  </select>
+                    ?
+                    <div style={{ marginTop: 6 }}>
+                      <button type="button" className="btn sm" onClick={() => setSeasonIsNew(true)}>
+                        Add &ldquo;{season.trim()}&rdquo; anyway
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {seasonMatch.kind === 'new' && (
+                  <div className="help">
+                    {seasonMatch.valid
+                      ? `"${season.trim()}" is not in the seasons list yet — it will be added.`
+                      : 'Type it like "Fall/Winter 27" or "Spring/Summer 28" — names followed by a year.'}
+                  </div>
+                )}
+                {seasonMatch.kind === 'similar' && seasonIsNew && (
+                  <div className="help">&ldquo;{season.trim()}&rdquo; will be added to the seasons list.</div>
                 )}
               </div>
               <div className="f wide">
@@ -358,7 +387,7 @@ export function NewSubmission() {
                 >
                   <option value="">Select a show…</option>
                   {shows.map((ev) => (
-                    <option key={ev.id} value={ev.id}>{ev.name} — {ev.city.name}</option>
+                    <option key={ev.id} value={ev.id}>{ev.name} — {ev.city.name} · {fmtDate(ev.start)}</option>
                   ))}
                 </select>
                 {event && (
@@ -500,6 +529,33 @@ export function NewSubmission() {
 
           <div className="sect">
             <div className="hd"><h3>Pricing &amp; payment</h3><span className="n">05</span></div>
+            <div className="f" style={{ marginBottom: 14 }}>
+              <label>Tax <span className="req">*</span></label>
+              {catalog && catalog.taxes.length === 0 ? (
+                <p className="sm mut" style={{ marginTop: 0 }}>
+                  No tax profiles yet — ask an admin to add one under Administration.
+                </p>
+              ) : (
+                <div className="checks">
+                  {catalog?.taxes.map((t) => (
+                    <label key={t.code} className={'chk' + (taxCode === t.code ? ' on' : '')}>
+                      <input
+                        type="radio"
+                        name="tax"
+                        checked={taxCode === t.code}
+                        onChange={() => setTaxCode(t.code)}
+                      />
+                      <span className="t">
+                        <b>{t.label}</b>
+                        <div className="sm mut">{t.code}</div>
+                      </span>
+                      <span className="p">{Number(t.rate)}%</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              <div className="help">Set once, here. The tax cannot be changed after the sale is created.</div>
+            </div>
             <div className="fields">
               <div className="f">
                 <label>Discount</label>
@@ -721,7 +777,7 @@ export function NewSubmission() {
                   />
                 )}
                 <Row label="Net revenue" value={money(preview.taxable, currency)} />
-                <Row label={`Tax (${preview.rate}%)`} value={money(preview.tax, currency)} />
+                <Row label={taxCode ? `Tax (${preview.rate}%)` : 'Tax (not picked yet)'} value={money(preview.tax, currency)} />
                 <Row label="Total" value={money(preview.total, currency)} cls="big" />
                 {deposit > 0 && (
                   <>

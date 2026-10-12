@@ -177,7 +177,7 @@ export function EditSubmission() {
   }, [catalog, event, price]);
 
   const preview = useMemo(() => {
-    if (!pkg || !price || !catalog) return null;
+    if (!pkg || !price || !catalog || !sub) return null;
     const base = overridePriceNum ?? Number(price.price);
     const addonTotal = sellable
       .filter((a) => addonIds.includes(a.id))
@@ -185,11 +185,12 @@ export function EditSubmission() {
     const subtotal = base + addonTotal;
     const discount = discountPreview(base, discountType, discountValue);
     const taxable = Math.max(0, subtotal - discount);
-    const rate = Number(catalog.taxes.find((t) => t.code === pkg.taxCode)?.rate ?? 0);
+    // The tax is the one picked when the sale was created; an edit keeps it.
+    const rate = Number(sub.taxRate);
     const tax = Math.round(taxable * (rate / 100) * 100) / 100;
     const total = Math.round((taxable + tax) * 100) / 100;
     return { base, addonTotal, subtotal, discount, taxable, rate, tax, total, balance: total - deposit };
-  }, [pkg, price, catalog, sellable, addonIds, discountType, discountValue, deposit, overridePriceNum]);
+  }, [pkg, price, catalog, sub, sellable, addonIds, discountType, discountValue, deposit, overridePriceNum]);
 
   const resubmit = useMutation({
     mutationFn: () =>

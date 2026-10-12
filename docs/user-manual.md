@@ -80,6 +80,18 @@ your role.*
 This is how a sale gets entered into the system: choose the contact/designer,
 the show, a package, any add-ons, a discount if one applies, and a deposit.
 
+**Season.** Type the season the sale is for (for example *Fall/Winter 27*);
+the seasons already on file are offered as you type. If what you type is a
+different spelling of one that exists — *fall-winter 2027* for *Fall/Winter
+27* — the screen suggests the existing one so you can pick it, or you can
+choose **Add anyway**. A season that is not on file yet is added to the
+Seasons list (Administration → Packages & pricing) when you submit. Every
+show is available whatever season you enter.
+
+**Tax.** Pick one of the tax profiles set up under Administration → Tax rates.
+The tax is chosen once, when the sale is created; editing the sale later, or
+Accounting reclassifying it, does not change it.
+
 **Who can create a submission:** Users, Interns, and Administrators.
 Accounting and Sales Managers do not create sales — they review them.
 
@@ -473,8 +485,8 @@ themselves further, so it's held only by the two most trusted roles.
 | --- | --- |
 | Invitations & approvals | Send an invitation to a new hire (with their role already fixed), cancel an invitation, and approve new sign-ups before they can log in. |
 | Users & roles | See every staff account and change someone's role, pay type, pay rate, and whether they earn commission (so a person can be on commission, on a salary, or on both). Opening an account also shows what they have sold and to whom — the same Sales panel Earnings shows, from the same figures. Here it steps a calendar month at a time (the custom-range picker lives on Earnings), so you can look back over an account's history from the screen where you set their rate. |
-| Packages & pricing | Manage the seasons, the shows, the package catalogue, and the add-on catalogue that sales are built from. Seasons are maintained here as a list ("Fall/Winter 26") so a show is picked from it rather than retyped — add one before adding the show that uses it. Renaming or removing a season only changes what the New show form offers next; shows already on the books keep the season they were created with. |
-| Tax rates | Manage the tax rates applied when a sale is priced. |
+| Packages & pricing | Manage the seasons, the shows, the package catalogue, and the add-on catalogue that sales are built from. Seasons are maintained here as a list ("Fall/Winter 26") so a show is picked from it rather than retyped — add one before adding the show that uses it. A season typed on a new submission that is not yet on file is added here automatically. Renaming or removing a season only changes what the New show form offers next; shows already on the books keep the season they were created with. |
+| Tax rates | Manage the tax rates a rep picks from when creating a sale. |
 | Settings | The discount threshold that triggers extra sign-off, invoice numbering, and the currency exchange rates used everywhere else in the system. |
 | Configuration | System-level settings that take effect immediately, without needing a technical deployment. |
 

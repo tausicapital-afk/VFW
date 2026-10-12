@@ -9,6 +9,7 @@ import { Decimal } from 'decimal.js';
 import { AuditService } from '../audit/audit.service';
 import { AuthUser } from '../common/auth.guard';
 import { can } from '../common/acl';
+import { seasonKey, seasonParts } from '../common/season';
 import { ConfigService } from '../config/config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PricingService } from '../pricing/pricing.service';
@@ -233,6 +234,53 @@ export class SubmissionsService {
   }
 
   /**
+   * The season this sale is for, as stored on the submission.
+   *
+   * A season typed exactly as one in the list (case aside) is the list's own
+   * label. One that only matches by spelling — "fall-winter 2027" against
+   * "Fall/Winter 27" — is refused with the existing name, unless the rep has
+   * already been shown that suggestion and chose to add theirs anyway
+   * (`seasonIsNew`). Anything else is added to the Seasons list right here,
+   * so it shows up under Administration and on the next sale. Omitted (an
+   * older client) stores no season.
+   */
+  private async resolveSeason(
+    tx: Prisma.TransactionClient,
+    dto: CreateSubmissionDto,
+    user: AuthUser,
+  ): Promise<string | null> {
+    const typed = dto.season?.trim();
+    if (!typed) return null;
+
+    const seasons = await tx.season.findMany({ orderBy: { label: 'asc' } });
+    const exact = seasons.find((s) => s.label.toLowerCase() === typed.toLowerCase());
+    if (exact) return exact.label;
+
+    const key = seasonKey(typed);
+    const similar = key ? seasons.filter((s) => seasonKey(s.label) === key) : [];
+    if (similar.length && !dto.seasonIsNew) {
+      throw new BadRequestException(
+        `"${typed}" looks like ${similar.map((s) => `"${s.label}"`).join(' or ')}, which already exists — pick it, or choose to add yours anyway`,
+      );
+    }
+
+    seasonParts(typed); // throws if the shape is wrong, same rule as Administration
+
+    // Upsert, so two reps typing the same new season at once both land on one row.
+    const created = await tx.season.upsert({ where: { label: typed }, update: {}, create: { label: typed } });
+    await this.audit.log(
+      {
+        actorId: user.id,
+        action: 'CATALOG_SEASON_CREATED',
+        detail: `Season added from a new submission: ${typed}`,
+        payload: { seasonId: created.id, label: typed },
+      },
+      tx,
+    );
+    return created.label;
+  }
+
+  /**
    * Validate what was sold and price it. Shared by create and edit/resubmit so
    * the two cannot drift into pricing a sale by two subtly different rules.
    *
@@ -241,8 +289,15 @@ export class SubmissionsService {
    * and department must still come from that rep. Pricing it against the editor
    * would recompute the deal at Accounting's 0% and quietly zero the rep's
    * commission.
+   *
+   * `fixedTax` is the edit path: a sale keeps the tax profile and rate it was
+   * created with, so only creation reads `dto.taxCode`.
    */
-  private async resolveSale(dto: CreateSubmissionDto, repId: string) {
+  private async resolveSale(
+    dto: CreateSubmissionDto,
+    repId: string,
+    fixedTax?: { code: string; rate: Prisma.Decimal },
+  ) {
     const event = await this.prisma.event.findUnique({
       where: { id: dto.eventId },
       include: { city: true },
@@ -290,6 +345,15 @@ export class SubmissionsService {
 
     const rep = await this.prisma.user.findUniqueOrThrow({ where: { id: repId } });
 
+    // The tax the rep picked from the tax profiles an admin maintains, falling
+    // back to the package's own profile for a client that does not send one.
+    let tax: { code: string; rate: Prisma.Decimal } = fixedTax ?? { code: pkg.tax.code, rate: pkg.tax.rate };
+    if (!fixedTax && dto.taxCode) {
+      const picked = await this.prisma.taxProfile.findUnique({ where: { code: dto.taxCode } });
+      if (!picked) throw new BadRequestException(`Unknown tax profile ${dto.taxCode}`);
+      tax = { code: picked.code, rate: picked.rate };
+    }
+
     // A rep may override the package's price and/or its displayed name/looks/
     // description for this one sale. `pkg`/`price` above stay the anchor — its
     // brand, tax profile, GL account and currency are never freeform — but the
@@ -315,7 +379,7 @@ export class SubmissionsService {
       })),
       discountType,
       discountValue: dto.discountValue ?? 0,
-      taxRate: pkg.tax.rate,
+      taxRate: tax.rate,
       // The rep's rate, unless they are not on commission at all — a salaried
       // account is stamped 0% here rather than filtered out further downstream.
       // This is the ONE place the pay basis touches a sale, and it has to be
@@ -329,7 +393,7 @@ export class SubmissionsService {
     });
 
     return {
-      event, pkg, price, addons, discountType, rep, priced,
+      event, pkg, price, addons, discountType, rep, priced, tax,
       packageCustomized,
       packageNameOverride: dto.packageNameOverride?.trim() || null,
       packageLooksOverride: dto.packageLooksOverride ?? null,
@@ -341,13 +405,14 @@ export class SubmissionsService {
   async create(dto: CreateSubmissionDto, user: AuthUser) {
     // On create the caller is the rep — they are selling their own deal.
     const {
-      event, pkg, price, discountType, rep, priced,
+      event, pkg, price, discountType, rep, priced, tax,
       packageCustomized, packageNameOverride, packageLooksOverride,
       packageBlurbOverride, packagePriceOverride,
     } = await this.resolveSale(dto, user.id);
 
     return this.prisma.$transaction(async (tx) => {
       const contact = await this.resolveContact(tx, dto, user);
+      const season = await this.resolveSeason(tx, dto, user);
 
       const ref = await this.nextRef(tx);
 
@@ -368,6 +433,7 @@ export class SubmissionsService {
           packagePriceOverride: packagePriceOverride?.toFixed(2) ?? null,
           showDate: dto.showDate ? new Date(dto.showDate) : null,
           notes: dto.notes,
+          season,
           currency: price.currency,
           packagePrice: priced.packagePrice.toFixed(2),
           addonTotal: priced.addonTotal.toFixed(2),
@@ -376,7 +442,7 @@ export class SubmissionsService {
           discountValue: (dto.discountValue ?? 0).toString(),
           discountAmount: priced.discountAmount.toFixed(2),
           taxable: priced.taxable.toFixed(2),
-          taxCode: pkg.taxCode,
+          taxCode: tax.code,
           taxRate: priced.taxRate.toFixed(3),
           taxAmount: priced.taxAmount.toFixed(2),
           total: priced.total.toFixed(2),
@@ -697,12 +763,10 @@ export class SubmissionsService {
   /**
    * Re-price a submission that already exists, from its stored line items and
    * recorded payments — the same engine used at creation. Used after a payment
-   * lands or the tax profile changes, so no money figure is ever computed
-   * outside PricingService.
+   * lands, so no money figure is ever computed outside PricingService.
    */
   private priceExisting(
     submission: Prisma.SubmissionGetPayload<{ include: { addons: true; payments: true } }>,
-    taxRate?: Prisma.Decimal,
   ) {
     return this.pricing.compute({
       packagePrice: submission.packagePrice,
@@ -714,7 +778,7 @@ export class SubmissionsService {
       })),
       discountType: submission.discountType,
       discountValue: submission.discountValue,
-      taxRate: taxRate ?? submission.taxRate,
+      taxRate: submission.taxRate,
       commissionPct: submission.commissionPct,
       deposit: submission.deposit,
       payments: submission.payments.map((p) => p.amount),
@@ -808,11 +872,9 @@ export class SubmissionsService {
   }
 
   /**
-   * Accounting reclassification: GL account, cost centre, department, tax
-   * profile. Changing the tax profile re-prices the sale (tax sits on top of
-   * net revenue, so the total and balance move), and every change — pricing or
-   * not — writes a before/after payload to the audit trail. This is the most
-   * audit-sensitive write in the system.
+   * Accounting reclassification: GL account, cost centre, department. The tax
+   * profile is not here: it is picked when the sale is created and fixed from
+   * then on. Every change writes a before/after payload to the audit trail.
    */
   async patch(id: string, dto: PatchSubmissionDto, user: AuthUser) {
     const submission = await this.prisma.submission.findUnique({
@@ -839,35 +901,6 @@ export class SubmissionsService {
       before.department = submission.department;
       after.department = dto.department || null;
       data.department = dto.department || null;
-    }
-
-    if (dto.taxCode !== undefined && dto.taxCode !== submission.taxCode) {
-      const tax = await this.prisma.taxProfile.findUnique({ where: { code: dto.taxCode } });
-      if (!tax) throw new BadRequestException(`Unknown tax profile ${dto.taxCode}`);
-
-      const priced = this.priceExisting(submission, tax.rate);
-      before.tax = {
-        taxCode: submission.taxCode,
-        taxRate: submission.taxRate.toString(),
-        taxAmount: submission.taxAmount.toString(),
-        total: submission.total.toString(),
-        balance: submission.balance.toString(),
-        payStatus: submission.payStatus,
-      };
-      after.tax = {
-        taxCode: dto.taxCode,
-        taxRate: priced.taxRate.toFixed(3),
-        taxAmount: priced.taxAmount.toFixed(2),
-        total: priced.total.toFixed(2),
-        balance: priced.balance.toFixed(2),
-        payStatus: priced.payStatus,
-      };
-      data.tax = { connect: { code: dto.taxCode } };
-      data.taxRate = priced.taxRate.toFixed(3);
-      data.taxAmount = priced.taxAmount.toFixed(2);
-      data.total = priced.total.toFixed(2);
-      data.balance = priced.balance.toFixed(2);
-      data.payStatus = priced.payStatus;
     }
 
     if (Object.keys(after).length === 0) {
@@ -1451,7 +1484,7 @@ export class SubmissionsService {
       event, price, discountType, rep, priced,
       packageCustomized, packageNameOverride, packageLooksOverride,
       packageBlurbOverride, packagePriceOverride,
-    } = await this.resolveSale(dto, existing.repId);
+    } = await this.resolveSale(dto, existing.repId, { code: existing.taxCode, rate: existing.taxRate });
 
     return this.prisma.$transaction(async (tx) => {
       const contact = await this.resolveContact(tx, dto, user);

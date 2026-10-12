@@ -233,6 +233,7 @@ export function SubmissionDetail() {
             </div>
             <div className="bd">
               <div className="totals">
+                {sub.season && <Row label="Season" value={sub.season} />}
                 <Row label="Show" value={sub.event.name} />
                 <Row label="City" value={`${sub.event.city.name}, ${sub.event.city.country}`} />
                 <Row label="Runs" value={`${fmtDate(sub.event.start)} – ${fmtDate(sub.event.end)}`} />
@@ -509,19 +510,17 @@ function AccountingCard({
 }) {
   const [glAccount, setGl] = useState(sub.glCode ?? '');
   const [costCentre, setCostCentre] = useState(sub.costCentre ?? '');
-  const [taxCode, setTaxCode] = useState(sub.taxCode);
   const [department, setDepartment] = useState(sub.department ?? '');
   const [error, setError] = useState<string | null>(null);
 
   const dirty =
     glAccount !== (sub.glCode ?? '') ||
     costCentre !== (sub.costCentre ?? '') ||
-    taxCode !== sub.taxCode ||
     department !== (sub.department ?? '');
 
   const save = useMutation({
     mutationFn: () =>
-      api.patch(`/api/submissions/${sub.id}`, { glAccount, costCentre, taxCode, department }),
+      api.patch(`/api/submissions/${sub.id}`, { glAccount, costCentre, department }),
     onSuccess: onSaved,
     onError: (e: Error) => setError(e.message),
   });
@@ -557,17 +556,6 @@ function AccountingCard({
               <option value="">— none —</option>
               {DEPARTMENTS.map((d) => <option key={d}>{d}</option>)}
             </select>
-          </div>
-          <div className="f">
-            <label>Tax profile</label>
-            <select value={taxCode} onChange={(e) => setTaxCode(e.target.value)}>
-              {catalog?.taxes.map((t) => (
-                <option key={t.code} value={t.code}>{t.label}</option>
-              ))}
-            </select>
-            {taxCode !== sub.taxCode && (
-              <div className="help">Changing the tax profile re-prices the sale.</div>
-            )}
           </div>
         </div>
 

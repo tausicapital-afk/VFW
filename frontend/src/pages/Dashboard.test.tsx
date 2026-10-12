@@ -35,7 +35,7 @@ function submission(overrides: Partial<Submission> = {}): Submission {
   return {
     id: 's1', ref: 'VFW-0001', status: 'APPROVED', currency: 'CAD',
     packageNameOverride: null, packageLooksOverride: null, packageBlurbOverride: null,
-    packagePriceOverride: null, packageCustomized: false, packagePrice: '1000.00',
+    packagePriceOverride: null, packageCustomized: false, season: null, packagePrice: '1000.00',
     addonTotal: '0.00', subtotal: '1000.00', discountType: 'AMT', discountValue: '0.00',
     discountAmount: '0.00', taxable: '1000.00', taxCode: 'GST', taxRate: '0.05',
     taxAmount: '50.00', total: '1050.00', deposit: '0.00', paidAmount: '500.00',
