@@ -106,13 +106,6 @@ export interface PayslipPdfData {
   preparedBy: string;
 }
 
-/** The wording the Payroll screen and the run export use, so the three agree. */
-const PAY_TYPE_LABEL: Record<PayslipPayType, string> = {
-  SALARY: 'Salary',
-  HOURLY: 'Hourly',
-  COMMISSION_ONLY: 'Commission only',
-};
-
 const INVOICE_LABEL: Record<PayslipInvoiceStatus, string> = {
   SUBMITTED: 'Submitted — awaiting approval',
   APPROVED: 'Approved',
@@ -124,9 +117,8 @@ const date = formatDate;
 
 /** Whether `from`/`to` is exactly the 1st through the last day of one month —
  *  the range every payroll period was, before a custom one could be anything
- *  else. Restated from PayrollService's own `isCalendarMonth`: this file stays
- *  free of that module's imports, the same trade its other duplicated wording
- *  (`payBasis`) already makes. */
+ *  else. Restated from PayrollService's own `isCalendarMonth` so this file stays
+ *  free of that module's imports. */
 function isCalendarMonth(from: string, to: string): boolean {
   if (!from.endsWith('-01')) return false;
   const [y, m] = from.slice(0, 7).split('-').map(Number);
@@ -161,18 +153,6 @@ function periodLabel(from: string, to: string): string {
   }
   const sameYear = from.slice(0, 4) === to.slice(0, 4);
   return `${shortDate(from, !sameYear)} – ${shortDate(to, true)}`;
-}
-
-/**
- * The pay basis as one phrase, because it is two fields and nobody reading a
- * payslip should have to cross-reference them to learn that the person on
- * $0.00 commission is on a salary and was never going to earn any. Same wording
- * as the run export's `payBasis` — a payslip and the run it came from must not
- * describe the same arrangement in two different ways.
- */
-function payBasis(payType: PayslipPayType, earnsCommission: boolean): string {
-  if (payType === 'COMMISSION_ONLY') return PAY_TYPE_LABEL[payType];
-  return earnsCommission ? `${PAY_TYPE_LABEL[payType]} + commission` : PAY_TYPE_LABEL[payType];
 }
 
 /** One cell of the label/value grid. `span` widens it across adjacent columns. */
@@ -262,7 +242,7 @@ export function buildPayslipPdf(d: PayslipPdfData): Promise<Buffer> {
   rule(y);
   y += 16;
 
-  // --- Who this is for, and how they are paid -------------------------------
+  // --- Who this is for -----------------------------------------------------
   const half = (width - 16) / 2;
   doc.font('Helvetica-Bold').fontSize(15).fillColor(INK).text(d.person.name, left, y, { width: half });
   const nameBottom = doc.y;
@@ -271,147 +251,56 @@ export function buildPayslipPdf(d: PayslipPdfData): Promise<Buffer> {
     .fontSize(10)
     .fillColor(MUTED)
     .text(d.person.title ?? d.person.role, left, nameBottom + 1, { width: half });
-  const leftBottom = doc.y;
-
-  doc
-    .font('Helvetica-Bold')
-    .fontSize(13)
-    .fillColor(INK)
-    .text(payBasis(d.basis.payType, d.basis.earnsCommission), left + half + 16, y + 2, {
-      width: half,
-      align: 'right',
-    });
-  doc
-    .font('Helvetica')
-    .fontSize(10)
-    .fillColor(MUTED)
-    .text(`Pay period ${periodLabel(d.period.from, d.period.to)}`, left + half + 16, doc.y + 1, { width: half, align: 'right' });
-
-  y = Math.max(leftBottom, doc.y) + 12;
+  y = doc.y + 12;
 
   y = grid(
     [
       { label: 'Employee ID', value: d.person.employeeId ?? '—' },
       { label: 'Role', value: d.person.role },
       { label: 'Department', value: d.person.department ?? '—' },
-      {
-        label: 'Base rate',
-        value:
-          d.basis.payType === 'COMMISSION_ONLY'
-            ? '— no base pay'
-            : `${cash(d.basis.baseRate)} / ${d.basis.payType === 'HOURLY' ? 'hour' : 'month'}`,
-      },
-      { label: 'Email', value: d.person.email, span: 2 },
-      {
-        label: 'Commission rate',
-        // The rate is left on the account even when somebody is off commission,
-        // so an administrator gets it back on the way in. Printing it
-        // unqualified would read as a promise, so say plainly it is not in force.
-        value: d.basis.earnsCommission
-          ? `${Number(d.basis.commissionPct).toFixed(2)}%`
-          : `${Number(d.basis.commissionPct).toFixed(2)}% — not in force`,
-      },
-      { label: 'Hours recorded', value: `${d.attendance.hours} h` },
+      { label: 'Email', value: d.person.email, span: 4 },
     ],
     y,
   );
 
-  // --- Earnings: every line shows the arithmetic it came from ---------------
+  // --- Earnings ------------------------------------------------------------
   y = section('Earnings', y + 4);
 
   const amountW = 110;
   const descW = width - amountW - 12;
 
-  /**
-   * One earnings line: what it is, what it was worked out from, and the figure.
-   * The middle line is the whole reason this document is longer than a number —
-   * a gross nobody can take apart is a gross nobody can query, and every payroll
-   * question anyone actually asks is about one of the parts.
-   */
-  const earning = (title: string, derivation: string, amount: string, bold = false) => {
+  /** One earnings line: what it is and the figure. */
+  const earning = (title: string, amount: string, bold = false) => {
     const size = bold ? 12 : 11;
     doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(size).fillColor(INK);
     doc.text(title, left, y, { width: descW });
     const afterTitle = doc.y;
     doc.text(amount, right - amountW, y, { width: amountW, align: 'right' });
-    let bottom = Math.max(afterTitle, doc.y);
-    if (derivation) {
-      doc.font('Helvetica').fontSize(8.5).fillColor(MUTED).text(derivation, left, afterTitle + 1, { width: descW });
-      bottom = Math.max(bottom, doc.y);
-    }
-    y = bottom + 8;
+    y = Math.max(afterTitle, doc.y) + 8;
   };
 
-  const baseDerivation =
-    d.basis.payType === 'HOURLY'
-      ? `${cash(d.basis.baseRate)} per hour × ${d.pay.baseHours ?? d.attendance.hours} hours on the timesheet`
-      : d.basis.payType === 'SALARY'
-        ? 'Monthly salary — not reduced by the hours recorded, because it is not paid by the hour'
-        : 'This account is not paid a base';
-  earning('Base pay', baseDerivation, cash(d.pay.base));
-
-  const commissionDerivation = !d.basis.earnsCommission
-    ? Number(d.pay.commission) > 0
-      ? 'Not on commission — this is what was stamped onto sales closed while they were'
-      : 'Not on commission'
-    : `${d.sales.count} sale${d.sales.count === 1 ? '' : 's'} approved this period · ` +
-      `${cash(d.sales.revenue)} net revenue, at the rate recorded on each sale`;
-  earning('Commission', commissionDerivation, cash(d.pay.commission));
+  // A salaried person's base pay is their salary, which the payslip does not show.
+  if (d.basis.payType !== 'SALARY') earning('Base pay', cash(d.pay.base));
+  earning('Commission', cash(d.pay.commission));
 
   if (Number(d.pay.commissionUnpaid) > 0) {
-    earning(
-      'Of which not yet collected',
-      'Earned on approval, but sitting against invoices the client has not settled. Not deducted — declared.',
-      `(${cash(d.pay.commissionUnpaid)})`,
-    );
+    earning('Of which not yet collected', `(${cash(d.pay.commissionUnpaid)})`);
   }
 
   // Only printed when it is actually nonzero — a rep whose revenue never
   // crossed a tier gets no line at all, not a "Tier bonus $0.00" that reads
-  // like a promise never kept. The derivation names every bracket it earned
-  // from, the same "own arithmetic" rule every other line here follows.
+  // like a promise never kept.
   if (Number(d.pay.tierBonus) > 0) {
-    const tierDerivation = d.pay.tierBonusBreakdown.length
-      ? d.pay.tierBonusBreakdown
-          .map((b) => `${cash(b.portion)} of net revenue above ${cash(b.thresholdRevenue)}, at +${b.bonusPct}%`)
-          .join('; ')
-      : 'Bonus from the commission-tier table';
-    earning('Tier bonus', tierDerivation, cash(d.pay.tierBonus));
+    earning('Tier bonus', cash(d.pay.tierBonus));
   }
 
   if (Number(d.pay.reimbursement) > 0) {
-    earning('Reimbursement', 'Expenses paid back for this period, as entered by Accounting', cash(d.pay.reimbursement));
+    earning('Reimbursement', cash(d.pay.reimbursement));
   }
 
   rule(y, INK);
   y += 8;
-  earning(
-    'Gross pay',
-    [
-      'Base + commission',
-      Number(d.pay.tierBonus) > 0 ? ' + tier bonus' : '',
-      Number(d.pay.reimbursement) > 0 ? ' + reimbursement' : '',
-      `, in ${d.currency}`,
-    ].join(''),
-    cash(d.pay.gross),
-    true,
-  );
-
-  // --- What it was worked out from -----------------------------------------
-  y = section('What it was worked out from', y + 2);
-  y = grid(
-    [
-      { label: 'Days recorded', value: String(d.attendance.days) },
-      { label: 'Days worked', value: String(d.attendance.daysWorked) },
-      { label: 'Hours', value: `${d.attendance.hours} h` },
-      { label: 'Average day', value: `${d.attendance.avgHours} h` },
-      { label: 'Sales approved', value: String(d.sales.count) },
-      { label: 'Net revenue', value: cash(d.sales.revenue) },
-      { label: 'Invoiced total', value: cash(d.sales.invoiced) },
-      { label: 'Commission earned', value: cash(d.pay.commission) },
-    ],
-    y,
-  );
+  earning('Gross pay', cash(d.pay.gross), true);
 
   // --- The payroll invoice, if this period has been claimed -----------------
   //

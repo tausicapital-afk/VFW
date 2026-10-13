@@ -6,7 +6,7 @@ import { can } from '../lib/acl';
 import { api } from '../lib/api';
 import { downloadFile } from '../lib/export';
 import { fmtDate, fmtDateTime, money, PAY_LABEL } from '../lib/format';
-import { effectivePackage } from '../lib/pricing';
+import { effectivePackage, taxLines } from '../lib/pricing';
 import { TestTag, useTestRow } from '../lib/testData';
 import type { AuditEntry, Catalog, DesignerFeedback, SendInvoiceResult, Submission } from '../lib/types';
 import { ConfirmModal } from '../shell/ConfirmModal';
@@ -358,7 +358,9 @@ export function SubmissionDetail() {
                   <Row label="Discount" value={'− ' + money(sub.discountAmount, sub.currency)} />
                 )}
                 <Row label="Net revenue" value={money(sub.taxable, sub.currency)} />
-                <Row label={`Tax (${sub.taxRate}%)`} value={money(sub.taxAmount, sub.currency)} />
+                {taxLines(sub).map((t) => (
+                  <Row key={t.label} label={t.label} value={money(t.amount, sub.currency)} />
+                ))}
                 <Row label="Total" value={money(sub.total, sub.currency)} cls="big" />
                 <Row label="Paid" value={money(sub.paidAmount, sub.currency)} />
                 <Row

@@ -279,7 +279,12 @@ export interface Submission extends TestFlagged {
   taxable: Money;
   taxCode: string;
   taxRate: Money;
+  /** All the tax, package and add-ons together. */
   taxAmount: Money;
+  /** The add-ons' own tax; null rate means they were taxed with the package. */
+  addonTaxCode: string | null;
+  addonTaxRate: Money | null;
+  addonTaxAmount: Money;
   total: Money;
   deposit: Money;
   paidAmount: Money;

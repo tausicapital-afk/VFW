@@ -2,13 +2,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
-import { fmtDate, money } from '../lib/format';
+import { money } from '../lib/format';
 import {
   generateSchedule, INTERVALS, PAYMENT_METHODS, toCents, today, type Cadence,
 } from '../lib/installments';
-import { discountPctOfPackage, discountPreview } from '../lib/pricing';
+import { discountPctOfPackage, discountPreview, taxPreview } from '../lib/pricing';
 import { matchSeason } from '../lib/season';
-import type { Catalog, Currency, DiscountType, DocumentType, Submission } from '../lib/types';
+import type { Catalog, Currency, DiscountType, DocumentType, Submission, TaxProfile } from '../lib/types';
 import { fmtSize, TYPE_LABEL, uploadDocument } from '../lib/uploads';
 import { Page } from '../shell/Shell';
 
@@ -20,6 +20,33 @@ function Row({ label, value, cls }: { label: string; value: string; cls?: string
     <div className={'r' + (cls ? ' ' + cls : '')}>
       <span>{label}</span>
       <span>{value}</span>
+    </div>
+  );
+}
+
+/** The tax profiles as a radio list. Used twice: once for the package, once for the add-ons. */
+function TaxPicker({ name, taxes, value, onChange }: {
+  name: string; taxes: TaxProfile[]; value: string; onChange: (code: string) => void;
+}) {
+  if (taxes.length === 0) {
+    return (
+      <p className="sm mut" style={{ marginTop: 0 }}>
+        No tax profiles yet — ask an admin to add one under Administration.
+      </p>
+    );
+  }
+  return (
+    <div className="checks">
+      {taxes.map((t) => (
+        <label key={t.code} className={'chk' + (value === t.code ? ' on' : '')}>
+          <input type="radio" name={name} checked={value === t.code} onChange={() => onChange(t.code)} />
+          <span className="t">
+            <b>{t.label}</b>
+            <div className="sm mut">{t.code}</div>
+          </span>
+          <span className="p">{Number(t.rate)}%</span>
+        </label>
+      ))}
     </div>
   );
 }
@@ -43,6 +70,7 @@ export function NewSubmission() {
   // Set when the rep has seen "did you mean…" and wants their spelling anyway.
   const [seasonIsNew, setSeasonIsNew] = useState(false);
   const [taxCode, setTaxCode] = useState('');
+  const [addonTaxCode, setAddonTaxCode] = useState('');
   const [eventId, setEventId] = useState('');
   const [packageId, setPackageId] = useState('');
   const [addonIds, setAddonIds] = useState<string[]>([]);
@@ -165,11 +193,18 @@ export function NewSubmission() {
     const subtotal = base + addonTotal;
     const discount = discountPreview(base, discountType, discountValue);
     const taxable = Math.max(0, subtotal - discount);
-    const rate = Number(catalog.taxes.find((t) => t.code === taxCode)?.rate ?? 0);
-    const tax = Math.round(taxable * (rate / 100) * 100) / 100;
+    const rateOf = (code: string) => Number(catalog.taxes.find((t) => t.code === code)?.rate ?? 0);
+    const rate = rateOf(taxCode);
+    // Until an add-on tax is picked the add-ons show untaxed, the same way the
+    // package shows untaxed until its tax is.
+    const addonRate = addonTotal > 0 ? rateOf(addonTaxCode) : null;
+    const { packageTax, addonTax, tax } = taxPreview(Math.max(0, base - discount), addonTotal, rate, addonRate);
     const total = Math.round((taxable + tax) * 100) / 100;
-    return { base, addonTotal, subtotal, discount, taxable, rate, tax, total, balance: total - deposit };
-  }, [pkg, price, catalog, sellable, addonIds, discountType, discountValue, deposit, overridePriceNum, taxCode]);
+    return {
+      base, addonTotal, subtotal, discount, taxable, rate, addonRate, packageTax, addonTax, tax, total,
+      balance: total - deposit,
+    };
+  }, [pkg, price, catalog, sellable, addonIds, discountType, discountValue, deposit, overridePriceNum, taxCode, addonTaxCode]);
 
   // An indicative schedule shown while the rep builds the plan. Like the total, it
   // is recomputed on the server at submit — this only shows the shape of the terms
@@ -197,6 +232,7 @@ export function NewSubmission() {
           season: season.trim(),
           seasonIsNew: seasonMatch.kind === 'similar' && seasonIsNew ? true : undefined,
           eventId, packageId, addonIds, taxCode,
+          addonTaxCode: addonIds.length ? addonTaxCode : undefined,
           ...(customize ? {
             packageNameOverride: overrideName.trim() || undefined,
             packageLooksOverride: overrideLooks.trim() !== '' ? Number(overrideLooks) : undefined,
@@ -290,7 +326,9 @@ export function NewSubmission() {
     );
   }
 
-  const ready = designer && brand && seasonReady && eventId && packageId && taxCode && customPackageReady;
+  const ready =
+    designer && brand && seasonReady && eventId && packageId && taxCode &&
+    (addonIds.length === 0 || addonTaxCode) && customPackageReady;
 
   return (
     <Page crumb="Work" title="New submission">
@@ -389,7 +427,7 @@ export function NewSubmission() {
                 >
                   <option value="">Select a show…</option>
                   {shows.map((ev) => (
-                    <option key={ev.id} value={ev.id}>{ev.name} — {ev.city.name} · {fmtDate(ev.start)}</option>
+                    <option key={ev.id} value={ev.id}>{ev.name} — {ev.city.name}</option>
                   ))}
                 </select>
                 {event && (
@@ -495,6 +533,11 @@ export function NewSubmission() {
                     </div>
                   </>
                 )}
+                <div className="f" style={{ marginTop: 14 }}>
+                  <label>Package tax <span className="req">*</span></label>
+                  <TaxPicker name="tax" taxes={catalog?.taxes ?? []} value={taxCode} onChange={setTaxCode} />
+                  <div className="help">Set once, here. The tax cannot be changed after the sale is created.</div>
+                </div>
               </div>
             )}
           </div>
@@ -527,37 +570,24 @@ export function NewSubmission() {
                 ))}
               </div>
             )}
+            {addonIds.length > 0 && (
+              <div className="f" style={{ marginTop: 14 }}>
+                <label>Add-on tax <span className="req">*</span></label>
+                <TaxPicker
+                  name="addon-tax"
+                  taxes={catalog?.taxes ?? []}
+                  value={addonTaxCode}
+                  onChange={setAddonTaxCode}
+                />
+                <div className="help">
+                  Charged on the add-ons only, apart from the package tax. Set once, here.
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="sect">
             <div className="hd"><h3>Pricing &amp; payment</h3><span className="n">05</span></div>
-            <div className="f" style={{ marginBottom: 14 }}>
-              <label>Tax <span className="req">*</span></label>
-              {catalog && catalog.taxes.length === 0 ? (
-                <p className="sm mut" style={{ marginTop: 0 }}>
-                  No tax profiles yet — ask an admin to add one under Administration.
-                </p>
-              ) : (
-                <div className="checks">
-                  {catalog?.taxes.map((t) => (
-                    <label key={t.code} className={'chk' + (taxCode === t.code ? ' on' : '')}>
-                      <input
-                        type="radio"
-                        name="tax"
-                        checked={taxCode === t.code}
-                        onChange={() => setTaxCode(t.code)}
-                      />
-                      <span className="t">
-                        <b>{t.label}</b>
-                        <div className="sm mut">{t.code}</div>
-                      </span>
-                      <span className="p">{Number(t.rate)}%</span>
-                    </label>
-                  ))}
-                </div>
-              )}
-              <div className="help">Set once, here. The tax cannot be changed after the sale is created.</div>
-            </div>
             <div className="fields">
               <div className="f">
                 <label>Discount</label>
@@ -779,7 +809,19 @@ export function NewSubmission() {
                   />
                 )}
                 <Row label="Net revenue" value={money(preview.taxable, currency)} />
-                <Row label={taxCode ? `Tax (${preview.rate}%)` : 'Tax (not picked yet)'} value={money(preview.tax, currency)} />
+                <Row
+                  label={
+                    (preview.addonRate == null ? 'Tax' : 'Package tax') +
+                    (taxCode ? ` (${preview.rate}%)` : ' (not picked yet)')
+                  }
+                  value={money(preview.packageTax, currency)}
+                />
+                {preview.addonRate != null && (
+                  <Row
+                    label={addonTaxCode ? `Add-on tax (${preview.addonRate}%)` : 'Add-on tax (not picked yet)'}
+                    value={money(preview.addonTax, currency)}
+                  />
+                )}
                 <Row label="Total" value={money(preview.total, currency)} cls="big" />
                 {deposit > 0 && (
                   <>

@@ -65,6 +65,14 @@ export class CreateSubmissionDto {
   @IsOptional() @IsString() @MaxLength(20)
   taxCode?: string;
 
+  /**
+   * The tax profile for the add-ons, picked apart from the package's. Like
+   * `taxCode` it is read at creation only. Absent, the add-ons are taxed with
+   * the package.
+   */
+  @IsOptional() @IsString() @MaxLength(20)
+  addonTaxCode?: string;
+
   @IsString()
   packageId: string;
 

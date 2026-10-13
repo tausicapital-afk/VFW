@@ -5,7 +5,7 @@ import { useAuth } from '../auth/AuthContext';
 import { can } from '../lib/acl';
 import { api } from '../lib/api';
 import { fmtDate, money, STATUS_LABEL } from '../lib/format';
-import { effectivePackage } from '../lib/pricing';
+import { effectivePackage, taxLines } from '../lib/pricing';
 import { TestTag, useTestRow } from '../lib/testData';
 import type { Submission } from '../lib/types';
 import { ExportMenu } from '../shell/ExportMenu';
@@ -167,7 +167,9 @@ function SubmissionQuickLook({ sub, onClose }: { sub: Submission; onClose: () =>
               <Row label="Discount" value={'− ' + money(sub.discountAmount, sub.currency)} />
             )}
             <Row label="Net revenue" value={money(sub.taxable, sub.currency)} />
-            <Row label={`Tax (${sub.taxRate}%)`} value={money(sub.taxAmount, sub.currency)} />
+            {taxLines(sub).map((t) => (
+              <Row key={t.label} label={t.label} value={money(t.amount, sub.currency)} />
+            ))}
             <Row label="Total" value={money(sub.total, sub.currency)} cls="big" />
             <Row label="Paid" value={money(sub.paidAmount, sub.currency)} />
             <Row

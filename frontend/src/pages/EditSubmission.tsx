@@ -5,7 +5,7 @@ import { useAuth } from '../auth/AuthContext';
 import { can } from '../lib/acl';
 import { api } from '../lib/api';
 import { money } from '../lib/format';
-import { discountPctOfPackage, discountPreview } from '../lib/pricing';
+import { discountPctOfPackage, discountPreview, taxPreview } from '../lib/pricing';
 import type { Catalog, Currency, DiscountType, Submission } from '../lib/types';
 import { Page } from '../shell/Shell';
 
@@ -185,11 +185,15 @@ export function EditSubmission() {
     const subtotal = base + addonTotal;
     const discount = discountPreview(base, discountType, discountValue);
     const taxable = Math.max(0, subtotal - discount);
-    // The tax is the one picked when the sale was created; an edit keeps it.
+    // The taxes are the ones picked when the sale was created; an edit keeps them.
     const rate = Number(sub.taxRate);
-    const tax = Math.round(taxable * (rate / 100) * 100) / 100;
+    const addonRate = sub.addonTaxRate != null && addonTotal > 0 ? Number(sub.addonTaxRate) : null;
+    const { packageTax, addonTax, tax } = taxPreview(Math.max(0, base - discount), addonTotal, rate, addonRate);
     const total = Math.round((taxable + tax) * 100) / 100;
-    return { base, addonTotal, subtotal, discount, taxable, rate, tax, total, balance: total - deposit };
+    return {
+      base, addonTotal, subtotal, discount, taxable, rate, addonRate, packageTax, addonTax, tax, total,
+      balance: total - deposit,
+    };
   }, [pkg, price, catalog, sub, sellable, addonIds, discountType, discountValue, deposit, overridePriceNum]);
 
   const resubmit = useMutation({
@@ -591,7 +595,14 @@ export function EditSubmission() {
                   />
                 )}
                 <Row label="Net revenue" value={money(preview.taxable, currency)} />
-                <Row label={`Tax (${preview.rate}%)`} value={money(preview.tax, currency)} />
+                {preview.addonRate == null ? (
+                  <Row label={`Tax (${preview.rate}%)`} value={money(preview.tax, currency)} />
+                ) : (
+                  <>
+                    <Row label={`Package tax (${preview.rate}%)`} value={money(preview.packageTax, currency)} />
+                    <Row label={`Add-on tax (${preview.addonRate}%)`} value={money(preview.addonTax, currency)} />
+                  </>
+                )}
                 <Row label="Total" value={money(preview.total, currency)} cls="big" />
                 {deposit > 0 && (
                   <>

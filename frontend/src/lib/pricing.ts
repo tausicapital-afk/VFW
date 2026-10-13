@@ -1,4 +1,4 @@
-import type { DiscountType } from './types';
+import type { DiscountType, Money } from './types';
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -51,4 +51,44 @@ export function effectivePackage(sub: {
     looks: sub.packageLooksOverride ?? sub.package.looks,
     blurb: sub.packageBlurbOverride ?? sub.package.blurb,
   };
+}
+
+/**
+ * Client-side preview of the tax, mirroring the server's PricingService. With
+ * an add-on rate, the package (after its discount) and the add-ons are taxed
+ * apart and each rounds on its own; without one, everything is taxed together
+ * at the package's rate.
+ */
+export function taxPreview(
+  packageNet: number,
+  addonTotal: number,
+  rate: number,
+  addonRate: number | null,
+): { packageTax: number; addonTax: number; tax: number } {
+  if (addonRate == null) {
+    const tax = r2((packageNet + addonTotal) * (rate / 100));
+    return { packageTax: tax, addonTax: 0, tax };
+  }
+  const packageTax = r2(packageNet * (rate / 100));
+  const addonTax = r2(addonTotal * (addonRate / 100));
+  return { packageTax, addonTax, tax: r2(packageTax + addonTax) };
+}
+
+/**
+ * The tax lines of a saved sale's totals: one when the add-ons were taxed with
+ * the package, two when they carry their own rate.
+ */
+export function taxLines(sub: {
+  taxRate: Money; taxAmount: Money; addonTaxRate: Money | null; addonTaxAmount: Money;
+}): { label: string; amount: number }[] {
+  if (sub.addonTaxRate == null) {
+    return [{ label: `Tax (${Number(sub.taxRate)}%)`, amount: Number(sub.taxAmount) }];
+  }
+  return [
+    {
+      label: `Package tax (${Number(sub.taxRate)}%)`,
+      amount: r2(Number(sub.taxAmount) - Number(sub.addonTaxAmount)),
+    },
+    { label: `Add-on tax (${Number(sub.addonTaxRate)}%)`, amount: Number(sub.addonTaxAmount) },
+  ];
 }

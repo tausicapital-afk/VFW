@@ -69,6 +69,9 @@ export class QboExportService {
   async postSubmission(s: SubmissionForQbo, docType: string, invoiceNo: string): Promise<QboPostResult> {
     const customerId = await this.findOrCreateCustomer(s.contact);
     const taxCodeId = await this.mapping.resolve('TAX', s.taxCode);
+    // Add-ons taxed apart from the package carry their tax code line by line;
+    // otherwise the one transaction-level code covers every line, as before.
+    const addonTaxCodeId = s.addonTaxCode ? await this.mapping.resolve('TAX', s.addonTaxCode) : undefined;
     const departmentId = s.department ? await this.mapping.resolve('DEPARTMENT', s.department) : undefined;
 
     const packageName = s.packageNameOverride ?? s.package.name;
@@ -84,6 +87,7 @@ export class QboExportService {
           ItemRef: { value: packageItemId },
           Qty: 1,
           UnitPrice: Number(s.packagePrice),
+          ...(addonTaxCodeId ? { TaxCodeRef: { value: taxCodeId } } : {}),
         },
       },
     ];
@@ -97,6 +101,7 @@ export class QboExportService {
           ItemRef: { value: itemId },
           Qty: line.qty,
           UnitPrice: Number(line.unitPrice),
+          ...(addonTaxCodeId ? { TaxCodeRef: { value: addonTaxCodeId } } : {}),
         },
       });
     }

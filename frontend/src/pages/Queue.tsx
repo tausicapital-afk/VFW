@@ -5,7 +5,7 @@ import { useAuth } from '../auth/AuthContext';
 import { can } from '../lib/acl';
 import { api } from '../lib/api';
 import { fmtDate, money } from '../lib/format';
-import { effectivePackage } from '../lib/pricing';
+import { effectivePackage, taxLines } from '../lib/pricing';
 import { TestTag, useTestRow } from '../lib/testData';
 import type { Catalog, Submission } from '../lib/types';
 import { Page } from '../shell/Shell';
@@ -327,7 +327,9 @@ function ActionModal({
           <div className="totals" style={{ marginBottom: 16 }}>
             <div className="r"><span>{sub.contact.brand}</span><span>{sub.package.name}</span></div>
             <div className="r"><span>Net revenue</span><span>{money(sub.taxable, sub.currency)}</span></div>
-            <div className="r"><span>Tax ({sub.taxRate}%)</span><span>{money(sub.taxAmount, sub.currency)}</span></div>
+            {taxLines(sub).map((t) => (
+              <div key={t.label} className="r"><span>{t.label}</span><span>{money(t.amount, sub.currency)}</span></div>
+            ))}
             <div className="r big"><span>Total</span><span>{money(sub.total, sub.currency)}</span></div>
           </div>
 
