@@ -36,6 +36,7 @@ export function qboLedgerDataset(submissions: SubmissionsService): ExportDataset
       { header: 'Total', value: (s) => s.total, money: true, width: 13 },
       { header: 'Tax', value: (s) => s.taxAmount, money: true, width: 12, spreadsheetOnly: true },
       { header: 'Tax code', value: (s) => s.taxCode, width: 10, spreadsheetOnly: true },
+      { header: 'Add-on tax code', value: (s) => s.addonTaxCode, width: 14, spreadsheetOnly: true },
       { header: 'GL', value: (s) => s.glCode, width: 10 },
       { header: 'Exported', value: (s) => s.exportedAt, width: 13 },
       { header: 'Rep', value: (s) => s.rep.name, width: 18, spreadsheetOnly: true },

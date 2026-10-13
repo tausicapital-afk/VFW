@@ -290,13 +290,15 @@ export class SubmissionsService {
    * would recompute the deal at Accounting's 0% and quietly zero the rep's
    * commission.
    *
-   * `fixedTax` is the edit path: a sale keeps the tax profile and rate it was
-   * created with, so only creation reads `dto.taxCode`.
+   * `fixedTax` is the edit path: a sale keeps the tax profiles and rates it
+   * was created with, so only creation reads `dto.taxCode` and
+   * `dto.addonTaxCode`. A null `addon` there is a sale whose add-ons are taxed
+   * with the package.
    */
   private async resolveSale(
     dto: CreateSubmissionDto,
     repId: string,
-    fixedTax?: { code: string; rate: Prisma.Decimal },
+    fixedTax?: { code: string; rate: Prisma.Decimal; addon: { code: string; rate: Prisma.Decimal } | null },
   ) {
     const event = await this.prisma.event.findUnique({
       where: { id: dto.eventId },
@@ -354,6 +356,16 @@ export class SubmissionsService {
       tax = { code: picked.code, rate: picked.rate };
     }
 
+    // The add-ons' own tax, when the rep picked one. Only kept while there are
+    // add-ons to tax — a sale without any has nothing for it to describe.
+    let addonTax: { code: string; rate: Prisma.Decimal } | null = fixedTax ? fixedTax.addon : null;
+    if (!fixedTax && dto.addonTaxCode) {
+      const picked = await this.prisma.taxProfile.findUnique({ where: { code: dto.addonTaxCode } });
+      if (!picked) throw new BadRequestException(`Unknown tax profile ${dto.addonTaxCode}`);
+      addonTax = { code: picked.code, rate: picked.rate };
+    }
+    if (!addons.length) addonTax = null;
+
     // A rep may override the package's price and/or its displayed name/looks/
     // description for this one sale. `pkg`/`price` above stay the anchor — its
     // brand, tax profile, GL account and currency are never freeform — but the
@@ -380,6 +392,7 @@ export class SubmissionsService {
       discountType,
       discountValue: dto.discountValue ?? 0,
       taxRate: tax.rate,
+      addonTaxRate: addonTax?.rate ?? null,
       // The rep's rate, unless they are not on commission at all — a salaried
       // account is stamped 0% here rather than filtered out further downstream.
       // This is the ONE place the pay basis touches a sale, and it has to be
@@ -393,7 +406,7 @@ export class SubmissionsService {
     });
 
     return {
-      event, pkg, price, addons, discountType, rep, priced, tax,
+      event, pkg, price, addons, discountType, rep, priced, tax, addonTax,
       packageCustomized,
       packageNameOverride: dto.packageNameOverride?.trim() || null,
       packageLooksOverride: dto.packageLooksOverride ?? null,
@@ -405,7 +418,7 @@ export class SubmissionsService {
   async create(dto: CreateSubmissionDto, user: AuthUser) {
     // On create the caller is the rep — they are selling their own deal.
     const {
-      event, pkg, price, discountType, rep, priced, tax,
+      event, pkg, price, discountType, rep, priced, tax, addonTax,
       packageCustomized, packageNameOverride, packageLooksOverride,
       packageBlurbOverride, packagePriceOverride,
     } = await this.resolveSale(dto, user.id);
@@ -445,6 +458,9 @@ export class SubmissionsService {
           taxCode: tax.code,
           taxRate: priced.taxRate.toFixed(3),
           taxAmount: priced.taxAmount.toFixed(2),
+          addonTaxCode: addonTax?.code ?? null,
+          addonTaxRate: priced.addonTaxRate?.toFixed(3) ?? null,
+          addonTaxAmount: priced.addonTaxAmount.toFixed(2),
           total: priced.total.toFixed(2),
           deposit: (dto.deposit ?? 0).toString(),
           paidAmount: priced.paidAmount.toFixed(2),
@@ -779,6 +795,7 @@ export class SubmissionsService {
       discountType: submission.discountType,
       discountValue: submission.discountValue,
       taxRate: submission.taxRate,
+      addonTaxRate: submission.addonTaxRate,
       commissionPct: submission.commissionPct,
       deposit: submission.deposit,
       payments: submission.payments.map((p) => p.amount),
@@ -1264,6 +1281,9 @@ export class SubmissionsService {
       taxable: s.taxable.toFixed(2),
       taxRatePct: s.taxRate.toFixed(2),
       taxAmount: s.taxAmount.toFixed(2),
+      addonTax: s.addonTaxRate
+        ? { ratePct: s.addonTaxRate.toFixed(2), amount: s.addonTaxAmount.toFixed(2) }
+        : null,
       total: s.total.toFixed(2),
       paidAmount: s.paidAmount.toFixed(2),
       balance: s.balance.toFixed(2),
@@ -1481,10 +1501,16 @@ export class SubmissionsService {
 
     // Price against the rep who OWNS the submission, not whoever is editing it.
     const {
-      event, price, discountType, rep, priced,
+      event, price, discountType, rep, priced, addonTax,
       packageCustomized, packageNameOverride, packageLooksOverride,
       packageBlurbOverride, packagePriceOverride,
-    } = await this.resolveSale(dto, existing.repId, { code: existing.taxCode, rate: existing.taxRate });
+    } = await this.resolveSale(dto, existing.repId, {
+      code: existing.taxCode,
+      rate: existing.taxRate,
+      addon: existing.addonTaxCode && existing.addonTaxRate
+        ? { code: existing.addonTaxCode, rate: existing.addonTaxRate }
+        : null,
+    });
 
     return this.prisma.$transaction(async (tx) => {
       const contact = await this.resolveContact(tx, dto, user);
@@ -1527,6 +1553,9 @@ export class SubmissionsService {
           taxable: priced.taxable.toFixed(2),
           taxRate: priced.taxRate.toFixed(3),
           taxAmount: priced.taxAmount.toFixed(2),
+          addonTaxCode: addonTax?.code ?? null,
+          addonTaxRate: priced.addonTaxRate?.toFixed(3) ?? null,
+          addonTaxAmount: priced.addonTaxAmount.toFixed(2),
           total: priced.total.toFixed(2),
           deposit: (dto.deposit ?? 0).toString(),
           paidAmount: priced.paidAmount.toFixed(2),

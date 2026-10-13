@@ -314,7 +314,8 @@ model TaxProfile {
 
   cities      City[]
   packages    Package[]
-  submissions Submission[]
+  submissions Submission[] @relation("SubmissionTax")
+  addonSales  Submission[] @relation("SubmissionAddonTax")
 }
 
 model City {
@@ -554,7 +555,14 @@ model Submission {
   discountAmount Decimal      @default(0) @db.Decimal(14, 2)
   taxable        Decimal      @db.Decimal(14, 2)
   taxRate        Decimal      @db.Decimal(6, 3)
+  // All the tax on the sale, package and add-ons together.
   taxAmount      Decimal      @db.Decimal(14, 2)
+  // The add-ons' own tax, when the rep picked one apart from the package's.
+  // A null rate means the add-ons were taxed with the package at `taxRate`, as
+  // on every sale made before the two were separated; `addonTaxAmount` is then
+  // 0 and `taxAmount` is one figure.
+  addonTaxRate   Decimal?     @db.Decimal(6, 3)
+  addonTaxAmount Decimal      @default(0) @db.Decimal(14, 2)
   total          Decimal      @db.Decimal(14, 2)
   deposit        Decimal      @default(0) @db.Decimal(14, 2)
   paidAmount     Decimal      @default(0) @db.Decimal(14, 2)
@@ -569,7 +577,10 @@ model Submission {
   paymentTerms  String?
 
   taxCode String
-  tax     TaxProfile @relation(fields: [taxCode], references: [code])
+  tax     TaxProfile @relation("SubmissionTax", fields: [taxCode], references: [code])
+
+  addonTaxCode String?
+  addonTax     TaxProfile? @relation("SubmissionAddonTax", fields: [addonTaxCode], references: [code])
 
   // Accounting classification, set at approval time.
   glCode     String?

@@ -24,6 +24,12 @@ export interface PricingInput {
   discountType: DiscountType;
   discountValue: Decimal.Value;
   taxRate: Decimal.Value;
+  /**
+   * The add-ons' own tax rate. Null or absent taxes the add-ons with the
+   * package at `taxRate`, which is how every sale was priced before the two
+   * were separated.
+   */
+  addonTaxRate?: Decimal.Value | null;
   commissionPct: Decimal.Value;
   deposit?: Decimal.Value;
   payments?: Decimal.Value[];
@@ -50,7 +56,12 @@ export interface PricingResult {
   discountPct: Decimal;
   taxable: Decimal;
   taxRate: Decimal;
+  /** All the tax on the sale, package and add-ons together. */
   taxAmount: Decimal;
+  /** Null when the add-ons were taxed with the package. */
+  addonTaxRate: Decimal | null;
+  /** The part of `taxAmount` charged on the add-ons; 0 when not taxed apart. */
+  addonTaxAmount: Decimal;
   total: Decimal;
   paidAmount: Decimal;
   balance: Decimal;
@@ -132,7 +143,20 @@ export class PricingService {
     const taxable = r2(Decimal.max(0, subtotal.minus(appliedDiscount)));
 
     const taxRate = new Decimal(input.taxRate || 0);
-    const taxAmount = r2(taxable.times(taxRate).dividedBy(100));
+    const addonTaxRate = input.addonTaxRate == null ? null : new Decimal(input.addonTaxRate);
+
+    // With its own rate, each side is taxed on its own net: the package after
+    // the discount (which only ever comes off the package), the add-ons at full
+    // price. Each rounds on its own, as it would on two separate tax lines.
+    let taxAmount: Decimal;
+    let addonTaxAmount = new Decimal(0);
+    if (addonTaxRate) {
+      const packageNet = r2(Decimal.max(0, packagePrice.minus(appliedDiscount)));
+      addonTaxAmount = r2(addonTotal.times(addonTaxRate).dividedBy(100));
+      taxAmount = r2(r2(packageNet.times(taxRate).dividedBy(100)).plus(addonTaxAmount));
+    } else {
+      taxAmount = r2(taxable.times(taxRate).dividedBy(100));
+    }
     const total = r2(taxable.plus(taxAmount));
 
     const paidAmount = r2(
@@ -162,6 +186,8 @@ export class PricingService {
       taxable,
       taxRate,
       taxAmount,
+      addonTaxRate,
+      addonTaxAmount,
       total,
       paidAmount,
       balance,

@@ -31,7 +31,11 @@ export interface InvoicePdfData {
   discountAmount: string;
   taxable: string;
   taxRatePct: string;
+  /** All the tax, package and add-ons together. */
   taxAmount: string;
+  /** Set when the add-ons were taxed apart from the package; the package's
+   *  share of the tax is then `taxAmount` less `addonTaxAmount`. */
+  addonTax?: { ratePct: string; amount: string } | null;
   total: string;
   paidAmount: string;
   balance: string;
@@ -163,7 +167,13 @@ export function buildInvoicePdf(d: InvoicePdfData): Promise<Buffer> {
     totalRow(d.discountLabel, '− ' + money(d.currency, d.discountAmount), { muted: true });
   }
   totalRow('Net revenue', money(d.currency, d.taxable), { muted: true });
-  totalRow(`Tax (${d.taxRatePct}%)`, money(d.currency, d.taxAmount), { muted: true });
+  if (d.addonTax) {
+    const packageTax = (Number(d.taxAmount) - Number(d.addonTax.amount)).toFixed(2);
+    totalRow(`Package tax (${d.taxRatePct}%)`, money(d.currency, packageTax), { muted: true });
+    totalRow(`Add-on tax (${d.addonTax.ratePct}%)`, money(d.currency, d.addonTax.amount), { muted: true });
+  } else {
+    totalRow(`Tax (${d.taxRatePct}%)`, money(d.currency, d.taxAmount), { muted: true });
+  }
 
   // Emphasised total.
   y += 2;

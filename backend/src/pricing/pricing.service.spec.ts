@@ -221,4 +221,37 @@ describe('PricingService', () => {
       expect(high.total.toFixed(2)).not.toBe(low.total.toFixed(2));
     });
   });
+
+  describe('add-on tax', () => {
+    const addon = { addonId: 'a1', qty: 1, unitPrice: 2000, currency: Currency.USD };
+
+    it('taxes the add-ons at their own rate and the package, net of discount, at its own', () => {
+      // Package 10,000 less 10% = 9,000 at 5% = 450. Add-ons 2,000 at 20% = 400.
+      const r = svc.compute({
+        ...base,
+        addons: [addon],
+        discountValue: 10,
+        addonTaxRate: 20,
+      });
+      expect(r.taxable.toFixed(2)).toBe('11000.00');
+      expect(r.addonTaxAmount.toFixed(2)).toBe('400.00');
+      expect(r.taxAmount.toFixed(2)).toBe('850.00');
+      expect(r.total.toFixed(2)).toBe('11850.00');
+      // Commission stays on net revenue, whatever the tax split.
+      expect(r.commissionAmount.toFixed(2)).toBe('1100.00');
+    });
+
+    it('taxes the add-ons with the package when no add-on rate is given', () => {
+      const r = svc.compute({ ...base, addons: [addon] });
+      expect(r.addonTaxRate).toBeNull();
+      expect(r.addonTaxAmount.toFixed(2)).toBe('0.00');
+      expect(r.taxAmount.toFixed(2)).toBe('600.00');
+    });
+
+    it('lets the add-ons be zero-rated while the package is taxed', () => {
+      const r = svc.compute({ ...base, addons: [addon], addonTaxRate: 0 });
+      expect(r.addonTaxAmount.toFixed(2)).toBe('0.00');
+      expect(r.taxAmount.toFixed(2)).toBe('500.00');
+    });
+  });
 });
