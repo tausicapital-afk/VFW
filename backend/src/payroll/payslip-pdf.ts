@@ -283,10 +283,6 @@ export function buildPayslipPdf(d: PayslipPdfData): Promise<Buffer> {
   if (d.basis.payType !== 'SALARY') earning('Base pay', cash(d.pay.base));
   earning('Commission', cash(d.pay.commission));
 
-  if (Number(d.pay.commissionUnpaid) > 0) {
-    earning('Of which not yet collected', `(${cash(d.pay.commissionUnpaid)})`);
-  }
-
   // Only printed when it is actually nonzero — a rep whose revenue never
   // crossed a tier gets no line at all, not a "Tier bonus $0.00" that reads
   // like a promise never kept.
@@ -301,6 +297,22 @@ export function buildPayslipPdf(d: PayslipPdfData): Promise<Buffer> {
   rule(y, INK);
   y += 8;
   earning('Gross pay', cash(d.pay.gross), true);
+
+  // --- What it was worked out from -----------------------------------------
+  y = section('What it was worked out from', y + 2);
+  y = grid(
+    [
+      { label: 'Days recorded', value: String(d.attendance.days) },
+      { label: 'Days worked', value: String(d.attendance.daysWorked) },
+      { label: 'Hours', value: `${d.attendance.hours} h` },
+      { label: 'Average day', value: `${d.attendance.avgHours} h` },
+      { label: 'Sales approved', value: String(d.sales.count) },
+      { label: 'Net revenue', value: cash(d.sales.revenue) },
+      { label: 'Invoiced total', value: cash(d.sales.invoiced) },
+      { label: 'Commission earned', value: cash(d.pay.commission) },
+    ],
+    y,
+  );
 
   // --- The payroll invoice, if this period has been claimed -----------------
   //
