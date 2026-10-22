@@ -36,7 +36,7 @@ jobs:
     env:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # On workflow_run, github.sha is main's tip, which may have moved past
           # what CI tested. Deploy the commit that actually passed.
