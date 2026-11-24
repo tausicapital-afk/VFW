@@ -46,21 +46,16 @@ jobs:
         with:
           node-version: '20'
 
-      # Until the secret exists this workflow warns and no-ops rather than failing
-      # main. Delete this step once RAILWAY_TOKEN is set, if you'd rather a
-      # missing token be a hard error.
+      # Fail loudly without the token. This used to warn and skip, which left
+      # every deploy run green while nothing actually reached Railway.
       - name: Check RAILWAY_TOKEN is configured
-        id: guard
         run: |
           if [ -z "${RAILWAY_TOKEN}" ]; then
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::RAILWAY_TOKEN is not set — skipping deploy. Create a project token in Railway, then run: gh secret set RAILWAY_TOKEN"
-          else
-            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "::error::RAILWAY_TOKEN is not set. Create a project token in Railway, then run: gh secret set RAILWAY_TOKEN"
+            exit 1
           fi
 
       - name: Install Railway CLI
-        if: steps.guard.outputs.configured == 'true'
         run: npm i -g @railway/cli
 
       # Both services have no root directory set in Railway, so the build context
@@ -72,17 +67,14 @@ jobs:
       # migration fails the container never becomes healthy, this step fails, and
       # the frontend is never pointed at a database it doesn't match.
       - name: Deploy backend (applies migrations)
-        if: steps.guard.outputs.configured == 'true'
         working-directory: backend
         run: railway up --service backend --ci
 
       - name: Deploy frontend
-        if: steps.guard.outputs.configured == 'true'
         working-directory: frontend
         run: railway up --service frontend --ci
 
       - name: Verify production is healthy
-        if: steps.guard.outputs.configured == 'true'
         # Hits the frontend's /api proxy, so one call exercises nginx, the
         # backend, and the DB connection behind it. `|| echo 000` keeps a
         # connection failure from aborting the loop on the first attempt.
