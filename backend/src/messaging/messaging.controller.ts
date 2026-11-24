@@ -13,10 +13,13 @@ import { AuthUser, Can, CurrentUser } from '../common/auth.guard';
 import {
   AddParticipantsDto,
   CreateConversationDto,
+  EditMessageDto,
   MessagesQueryDto,
   PresignAttachmentDto,
+  ReactionDto,
   ReadDto,
   RenameConversationDto,
+  SearchMessagesDto,
   SendMessageDto,
 } from './dto';
 import { MessagingGateway } from './messaging.gateway';
@@ -106,6 +109,60 @@ export class MessagingController {
       .catch(() => undefined);
 
     return message;
+  }
+
+  @Patch('conversations/:id/messages/:messageId')
+  async editMessage(
+    @Param('id') id: string,
+    @Param('messageId') messageId: string,
+    @Body() dto: EditMessageDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    const message = await this.messaging.editMessage(id, messageId, user, dto.body);
+    await this.gateway.dispatchMessageEdit(id, message);
+    return message;
+  }
+
+  @Delete('conversations/:id/messages/:messageId')
+  async deleteMessage(
+    @Param('id') id: string,
+    @Param('messageId') messageId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    const message = await this.messaging.deleteMessage(id, messageId, user);
+    await this.gateway.dispatchMessageDelete(id, message);
+    return message;
+  }
+
+  @Post('conversations/:id/messages/:messageId/reactions')
+  async addReaction(
+    @Param('id') id: string,
+    @Param('messageId') messageId: string,
+    @Body() dto: ReactionDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    const reactions = await this.messaging.addReaction(id, messageId, user, dto.emoji);
+    this.gateway.dispatchReactions(id, messageId, reactions);
+    return { messageId, reactions };
+  }
+
+  @Delete('conversations/:id/messages/:messageId/reactions/:emoji')
+  async removeReaction(
+    @Param('id') id: string,
+    @Param('messageId') messageId: string,
+    @Param('emoji') emoji: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    // Express decodes path segments already, so `emoji` here is the raw
+    // character(s) — no further decoding needed (that would double-decode).
+    const reactions = await this.messaging.removeReaction(id, messageId, user, emoji);
+    this.gateway.dispatchReactions(id, messageId, reactions);
+    return { messageId, reactions };
+  }
+
+  @Get('search')
+  search(@Query() dto: SearchMessagesDto, @CurrentUser() user: AuthUser) {
+    return this.messaging.searchMessages(user, dto.q, dto.conversationId);
   }
 
   @Post('conversations/:id/attachments/presign')

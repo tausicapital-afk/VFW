@@ -148,6 +148,7 @@ model User {
   conversationsCreated Conversation[]            @relation("ConvCreator")
   participations       ConversationParticipant[]
   messagesSent         Message[]                 @relation("MsgSender")
+  messageReactions     MessageReaction[]
 
   emailsTriggered EmailMessage[] @relation("EmailTriggeredBy")
 
@@ -1094,8 +1095,27 @@ model Message {
   deletedAt DateTime? // soft delete → "this message was deleted"
 
   attachments MessageAttachment[]
+  reactions   MessageReaction[]
 
   @@index([conversationId, seq])
+}
+
+// One row per (message, user, emoji). "Toggling off" a reaction is just
+// deleting this row — there is no separate "unreact" concept. The unique
+// constraint is the whole rule: a user has at most one of a given emoji on a
+// given message, mirroring the DM-dedupe / receipt-cursor pattern elsewhere in
+// this module (idempotent, not event-sourced).
+model MessageReaction {
+  id        String   @id @default(cuid())
+  messageId String
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  emoji     String
+  createdAt DateTime @default(now())
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
 }
 
 model MessageAttachment {

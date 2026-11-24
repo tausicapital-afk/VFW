@@ -307,6 +307,29 @@ export class MessagingGateway
     }
   }
 
+  /** A message's body was edited — push the updated message to the room. */
+  dispatchMessageEdit(conversationId: string, message: { id: string; seq: number }) {
+    this.server.to(convRoom(conversationId)).emit('message:edited', { conversationId, message });
+  }
+
+  /** A message was (soft-)deleted — push the tombstone to the room. */
+  dispatchMessageDelete(conversationId: string, message: { id: string; seq: number }) {
+    this.server.to(convRoom(conversationId)).emit('message:deleted', { conversationId, message });
+  }
+
+  /** A message's reaction set changed (added or removed) — push the new set. */
+  dispatchReactions(
+    conversationId: string,
+    messageId: string,
+    reactions: { emoji: string; userId: string }[],
+  ) {
+    this.server.to(convRoom(conversationId)).emit('message:reactions', {
+      conversationId,
+      messageId,
+      reactions,
+    });
+  }
+
   /** Push a receipt to a room — used by the REST read fallback. */
   broadcastReceipt(
     conversationId: string,

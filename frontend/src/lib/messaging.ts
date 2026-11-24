@@ -44,6 +44,22 @@ export interface Attachment {
   height?: number | null;
 }
 
+export interface Reaction {
+  emoji: string;
+  userId: string;
+}
+
+// The fixed reaction set (no emoji-picker dependency in frontend/package.json,
+// and an internal chat tool does not need the full Unicode table — see
+// backend/src/messaging/dto.ts REACTION_EMOJIS, which this mirrors and the
+// server enforces).
+export const REACTION_EMOJIS = ['👍', '❤️', '😂', '🎉'] as const;
+
+// Mirrors backend/src/messaging/messaging.service.ts EDIT_WINDOW_MINUTES — the
+// server is the one that actually enforces this; here it only decides when to
+// show the Edit control so a stale button never has to round-trip to 400.
+export const EDIT_WINDOW_MINUTES = 15;
+
 export interface ChatMessage {
   id: string;
   seq: number;
@@ -55,6 +71,7 @@ export interface ChatMessage {
   deletedAt?: string | null;
   sender: { id: string; name: string; colour: string };
   attachments: Attachment[];
+  reactions: Reaction[];
 }
 
 export interface Conversation {
@@ -145,6 +162,24 @@ export const messagingApi = {
     api.post(`/api/messaging/conversations/${id}/participants`, { userIds }),
   removeParticipant: (id: string, userId: string) =>
     api.del(`/api/messaging/conversations/${id}/participants/${userId}`),
+  editMessage: (conversationId: string, messageId: string, body: string) =>
+    api.patch<ChatMessage>(`/api/messaging/conversations/${conversationId}/messages/${messageId}`, { body }),
+  deleteMessage: (conversationId: string, messageId: string) =>
+    api.del<ChatMessage>(`/api/messaging/conversations/${conversationId}/messages/${messageId}`),
+  addReaction: (conversationId: string, messageId: string, emoji: string) =>
+    api.post<{ messageId: string; reactions: Reaction[] }>(
+      `/api/messaging/conversations/${conversationId}/messages/${messageId}/reactions`,
+      { emoji },
+    ),
+  removeReaction: (conversationId: string, messageId: string, emoji: string) =>
+    api.del<{ messageId: string; reactions: Reaction[] }>(
+      `/api/messaging/conversations/${conversationId}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}`,
+    ),
+  search: (q: string, conversationId?: string) =>
+    api.get<ChatMessage[]>(
+      `/api/messaging/search?q=${encodeURIComponent(q)}` +
+        (conversationId ? `&conversationId=${conversationId}` : ''),
+    ),
 };
 
 /** Read an image's natural dimensions so the bubble can reserve space. */
@@ -213,6 +248,25 @@ function upsertMessage(qc: QueryClient, conversationId: string, message: ChatMes
       if (!prev) return prev;
       if (prev.messages.some((m) => m.id === message.id)) return prev;
       return { ...prev, messages: [...prev.messages, message] };
+    },
+  );
+}
+
+/** Merge a partial update (edit, delete, reaction set) into one cached message. */
+function patchMessage(
+  qc: QueryClient,
+  conversationId: string,
+  messageId: string,
+  patch: Partial<ChatMessage>,
+) {
+  qc.setQueryData<{ messages: ChatMessage[]; hasMore: boolean }>(
+    qk.messages(conversationId),
+    (prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        messages: prev.messages.map((m) => (m.id === messageId ? { ...m, ...patch } : m)),
+      };
     },
   );
 }
@@ -298,11 +352,39 @@ export function useMessagingRealtime() {
 
     const onConversation = () => void qc.invalidateQueries({ queryKey: qk.conversations });
 
+    const onMessageEdited = ({ conversationId, message }: { conversationId: string; message: ChatMessage }) => {
+      patchMessage(qc, conversationId, message.id, { body: message.body, editedAt: message.editedAt });
+      void qc.invalidateQueries({ queryKey: qk.conversations });
+    };
+
+    const onMessageDeleted = ({ conversationId, message }: { conversationId: string; message: ChatMessage }) => {
+      patchMessage(qc, conversationId, message.id, {
+        body: null,
+        deletedAt: message.deletedAt,
+        attachments: [],
+        reactions: [],
+      });
+      void qc.invalidateQueries({ queryKey: qk.conversations });
+    };
+
+    const onReactions = ({
+      conversationId,
+      messageId,
+      reactions,
+    }: {
+      conversationId: string;
+      messageId: string;
+      reactions: Reaction[];
+    }) => patchMessage(qc, conversationId, messageId, { reactions });
+
     socket.on('message', onMessage);
     socket.on('receipt', onReceipt);
     socket.on('presence', onPresence);
     socket.on('typing', onTyping);
     socket.on('conversation', onConversation);
+    socket.on('message:edited', onMessageEdited);
+    socket.on('message:deleted', onMessageDeleted);
+    socket.on('message:reactions', onReactions);
 
     return () => {
       socket.off('message', onMessage);
@@ -310,6 +392,9 @@ export function useMessagingRealtime() {
       socket.off('presence', onPresence);
       socket.off('typing', onTyping);
       socket.off('conversation', onConversation);
+      socket.off('message:edited', onMessageEdited);
+      socket.off('message:deleted', onMessageDeleted);
+      socket.off('message:reactions', onReactions);
       typingTimers.forEach((t) => clearTimeout(t));
       // Tear the socket down entirely when the Shell unmounts (i.e. on sign-out),
       // so the next user does not inherit this one's connection.

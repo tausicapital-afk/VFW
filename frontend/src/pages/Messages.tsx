@@ -5,8 +5,10 @@ import {
   Conversation,
   ChatMessage,
   ChatUser,
+  EDIT_WINDOW_MINUTES,
   Participant,
   Presence,
+  REACTION_EMOJIS,
   conversationName,
   isImage,
   messagingApi,
@@ -17,6 +19,7 @@ import {
   type AttachmentInput,
 } from '../lib/messaging';
 import { getSocket } from '../lib/socket';
+import { ConfirmModal } from '../shell/ConfirmModal';
 import { Page } from '../shell/Shell';
 import '../styles/messaging.css';
 
@@ -80,30 +83,120 @@ function AttachmentView({ att, onImage }: { att: ChatMessage['attachments'][numb
 // --- One message bubble ----------------------------------------------------
 
 function Bubble({
-  message, mine, group, participants, onImage,
+  message, mine, myId, group, participants, onImage, onEdit, onDelete, onReact, onUnreact,
 }: {
   message: ChatMessage;
   mine: boolean;
+  myId: string;
   group: boolean;
   participants: Participant[];
   onImage: (url: string) => void;
+  onEdit: (id: string, body: string) => void;
+  onDelete: (message: ChatMessage) => void;
+  onReact: (id: string, emoji: string) => void;
+  onUnreact: (id: string, emoji: string) => void;
 }) {
   const tick = mine ? tickState(message.seq, message.senderId, participants) : null;
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(message.body ?? '');
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  const withinEditWindow =
+    Date.now() - new Date(message.createdAt).getTime() <= EDIT_WINDOW_MINUTES * 60_000;
+  const canEdit = mine && !message.deletedAt && withinEditWindow;
+  const canDelete = mine && !message.deletedAt;
+
+  // Group reactions by emoji for the pill row.
+  const grouped = useMemo(() => {
+    const byEmoji = new Map<string, string[]>();
+    for (const r of message.reactions) {
+      const list = byEmoji.get(r.emoji) ?? [];
+      list.push(r.userId);
+      byEmoji.set(r.emoji, list);
+    }
+    return [...byEmoji.entries()];
+  }, [message.reactions]);
+
+  function startEdit() {
+    setDraft(message.body ?? '');
+    setEditing(true);
+  }
+
+  function saveEdit() {
+    const trimmed = draft.trim();
+    if (!trimmed) return;
+    onEdit(message.id, trimmed);
+    setEditing(false);
+  }
+
+  function toggleReaction(emoji: string) {
+    const already = message.reactions.some((r) => r.userId === myId && r.emoji === emoji);
+    if (already) onUnreact(message.id, emoji);
+    else onReact(message.id, emoji);
+    setPickerOpen(false);
+  }
+
   return (
     <div className={'msg-row' + (mine ? ' mine' : '')}>
+      {!message.deletedAt && !editing && (
+        <div className="msg-actions">
+          <button className="msg-action-btn" title="React" onClick={() => setPickerOpen((v) => !v)}>😊</button>
+          {canEdit && <button className="msg-action-btn" title="Edit" onClick={startEdit}>✎</button>}
+          {canDelete && <button className="msg-action-btn" title="Delete" onClick={() => onDelete(message)}>🗑</button>}
+        </div>
+      )}
+      {pickerOpen && (
+        <div className="msg-react-picker">
+          {REACTION_EMOJIS.map((e) => (
+            <button key={e} onClick={() => toggleReaction(e)}>{e}</button>
+          ))}
+        </div>
+      )}
       <div className="msg-bubble">
         {group && !mine && (
           <div className="msg-sender" style={{ color: message.sender.colour }}>{message.sender.name}</div>
         )}
-        {message.attachments.map((a) => (
+        {!message.deletedAt && message.attachments.map((a) => (
           <AttachmentView key={a.id} att={a} onImage={onImage} />
         ))}
         {message.deletedAt ? (
           <div className="msg-body deleted">This message was deleted</div>
+        ) : editing ? (
+          <div className="msg-edit-box">
+            <textarea
+              autoFocus
+              rows={2}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEdit(); }
+                if (e.key === 'Escape') setEditing(false);
+              }}
+            />
+            <div className="msg-edit-actions">
+              <button className="btn sm" onClick={() => setEditing(false)}>Cancel</button>
+              <button className="btn sm primary" onClick={saveEdit}>Save</button>
+            </div>
+          </div>
         ) : (
           message.body && <div className="msg-body">{message.body}</div>
         )}
+        {!message.deletedAt && grouped.length > 0 && (
+          <div className="msg-reactions">
+            {grouped.map(([emoji, userIds]) => (
+              <span
+                key={emoji}
+                className={'msg-reaction-pill' + (userIds.includes(myId) ? ' mine' : '')}
+                onClick={() => toggleReaction(emoji)}
+                title={`${userIds.length} reacted`}
+              >
+                {emoji} {userIds.length}
+              </span>
+            ))}
+          </div>
+        )}
         <div className="msg-foot">
+          {!message.deletedAt && message.editedAt && <span className="msg-edited-tag">edited</span>}
           <span>{timeShort(message.createdAt)}</span>
           {tick && (
             <span className={'msg-tick' + (tick === 'read' ? ' read' : '')}>
@@ -126,8 +219,13 @@ function ChatPane({ conv, myId, onBack }: { conv: Conversation; myId: string; on
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<ChatMessage | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchInput, setSearchInput] = useState('');
+  const [searchQ, setSearchQ] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
   const typingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { data } = useQuery({
     queryKey: qk.messages(conv.id),
@@ -179,6 +277,45 @@ function ChatPane({ conv, myId, onBack }: { conv: Conversation; myId: string; on
     setPending((p) => [...p, ...Array.from(files).map((file) => ({ file, preview: file.name }))]);
   }
 
+  function patchMsg(id: string, patch: Partial<ChatMessage>) {
+    qc.setQueryData<{ messages: ChatMessage[]; hasMore: boolean }>(qk.messages(conv.id), (prev) =>
+      prev ? { ...prev, messages: prev.messages.map((m) => (m.id === id ? { ...m, ...patch } : m)) } : prev,
+    );
+  }
+
+  const editMut = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: string }) => messagingApi.editMessage(conv.id, id, body),
+    onSuccess: (updated) => patchMsg(updated.id, { body: updated.body, editedAt: updated.editedAt }),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => messagingApi.deleteMessage(conv.id, id),
+    onSuccess: (updated) =>
+      patchMsg(updated.id, { deletedAt: updated.deletedAt, body: null, attachments: [], reactions: [] }),
+  });
+
+  const reactMut = useMutation({
+    mutationFn: ({ id, emoji }: { id: string; emoji: string }) => messagingApi.addReaction(conv.id, id, emoji),
+    onSuccess: (res) => patchMsg(res.messageId, { reactions: res.reactions }),
+  });
+
+  const unreactMut = useMutation({
+    mutationFn: ({ id, emoji }: { id: string; emoji: string }) => messagingApi.removeReaction(conv.id, id, emoji),
+    onSuccess: (res) => patchMsg(res.messageId, { reactions: res.reactions }),
+  });
+
+  function onSearchInput(v: string) {
+    setSearchInput(v);
+    if (searchDebounce.current) clearTimeout(searchDebounce.current);
+    searchDebounce.current = setTimeout(() => setSearchQ(v.trim()), 300);
+  }
+
+  const searchResults = useQuery({
+    queryKey: ['msg-search', conv.id, searchQ],
+    queryFn: () => messagingApi.search(searchQ, conv.id),
+    enabled: searchOpen && searchQ.length > 1,
+  });
+
   async function send() {
     const body = text.trim();
     if (!body && pending.length === 0) return;
@@ -222,33 +359,80 @@ function ChatPane({ conv, myId, onBack }: { conv: Conversation; myId: string; on
             <div className="sub">{otherOnline ? 'online' : lastSeenLabel(otherLastSeen)}</div>
           )}
         </div>
+        <div style={{ flex: 1 }} />
+        <button
+          className="msg-search-btn"
+          title="Search this conversation"
+          onClick={() => setSearchOpen((v) => !v)}
+        >
+          🔍
+        </button>
       </div>
 
-      <div className="msg-scroll" ref={scrollRef}>
-        {messages.map((m) => {
-          const day = dayLabel(m.createdAt);
-          const sep = day !== lastDay;
-          lastDay = day;
-          return (
-            <div key={m.id}>
-              {sep && <div className="msg-daysep">{day}</div>}
-              <Bubble
-                message={m}
-                mine={m.senderId === myId}
-                group={group}
-                participants={conv.participants}
-                onImage={setLightbox}
-              />
+      {searchOpen && (
+        <div className="msg-search-bar">
+          <input
+            autoFocus
+            placeholder="Search messages in this conversation"
+            value={searchInput}
+            onChange={(e) => onSearchInput(e.target.value)}
+          />
+        </div>
+      )}
+
+      {searchOpen ? (
+        <div className="msg-search-results">
+          {searchQ.length <= 1 && (
+            <div className="msg-empty"><div>Type at least 2 characters to search.</div></div>
+          )}
+          {searchQ.length > 1 && searchResults.isFetching && (
+            <div className="msg-empty"><div>Searching…</div></div>
+          )}
+          {searchQ.length > 1 && !searchResults.isFetching && (searchResults.data?.length ?? 0) === 0 && (
+            <div className="msg-empty"><div>No matches.</div></div>
+          )}
+          {(searchResults.data ?? []).map((m) => (
+            <div key={m.id} className="msg-search-hit" onClick={() => setSearchOpen(false)}>
+              <div className="hd">
+                <span>{m.sender.name}</span>
+                <span>{dayLabel(m.createdAt)} · {timeShort(m.createdAt)}</span>
+              </div>
+              <div className="snippet">{m.body}</div>
             </div>
-          );
-        })}
-        {messages.length === 0 && (
-          <div className="msg-empty">
-            <div style={{ fontSize: 32 }}>💬</div>
-            <div>No messages yet. Say hello.</div>
-          </div>
-        )}
-      </div>
+          ))}
+        </div>
+      ) : (
+        <div className="msg-scroll" ref={scrollRef}>
+          {messages.map((m) => {
+            const day = dayLabel(m.createdAt);
+            const sep = day !== lastDay;
+            lastDay = day;
+            return (
+              <div key={m.id}>
+                {sep && <div className="msg-daysep">{day}</div>}
+                <Bubble
+                  message={m}
+                  mine={m.senderId === myId}
+                  myId={myId}
+                  group={group}
+                  participants={conv.participants}
+                  onImage={setLightbox}
+                  onEdit={(id, body) => editMut.mutate({ id, body })}
+                  onDelete={setConfirmDelete}
+                  onReact={(id, emoji) => reactMut.mutate({ id, emoji })}
+                  onUnreact={(id, emoji) => unreactMut.mutate({ id, emoji })}
+                />
+              </div>
+            );
+          })}
+          {messages.length === 0 && (
+            <div className="msg-empty">
+              <div style={{ fontSize: 32 }}>💬</div>
+              <div>No messages yet. Say hello.</div>
+            </div>
+          )}
+        </div>
+      )}
 
       {pending.length > 0 && (
         <div className="msg-pending">
@@ -290,6 +474,21 @@ function ChatPane({ conv, myId, onBack }: { conv: Conversation; myId: string; on
         <div className="msg-lightbox" onClick={() => setLightbox(null)}>
           <img src={lightbox} alt="" />
         </div>
+      )}
+
+      {confirmDelete && (
+        <ConfirmModal
+          title="Delete this message?"
+          message="This can't be undone. Everyone in the conversation will see “This message was deleted” in its place."
+          danger
+          confirmLabel="Delete"
+          pending={deleteMut.isPending}
+          onCancel={() => setConfirmDelete(null)}
+          onConfirm={() => {
+            deleteMut.mutate(confirmDelete.id);
+            setConfirmDelete(null);
+          }}
+        />
       )}
     </div>
   );
@@ -425,7 +624,9 @@ export function Messages() {
                 ? (presence.data?.[other.userId]?.online ?? other.online)
                 : undefined;
               const preview = c.lastMessage
-                ? (c.lastMessage.body || (c.lastMessage.attachments.length ? '📎 Attachment' : ''))
+                ? c.lastMessage.deletedAt
+                  ? 'This message was deleted'
+                  : (c.lastMessage.body || (c.lastMessage.attachments.length ? '📎 Attachment' : ''))
                 : 'No messages yet';
               return (
                 <div key={c.id} className={'msg-conv' + (c.id === activeId ? ' on' : '')} onClick={() => setActiveId(c.id)}>

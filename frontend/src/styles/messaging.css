@@ -143,6 +143,80 @@
 .msg-tick { font-size: 12px; letter-spacing: -2px; }
 .msg-tick.read { color: var(--blue); }
 
+/* ---------- Hover actions (edit / delete / react) ---------- */
+.msg-row { position: relative; }
+.msg-actions {
+  position: absolute; top: -14px;
+  display: none; gap: 2px;
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: 999px; padding: 2px; box-shadow: var(--shadow);
+}
+.msg-row.mine .msg-actions { right: 8px; }
+.msg-row:not(.mine) .msg-actions { left: 8px; }
+.msg-row:hover .msg-actions { display: flex; }
+.msg-action-btn {
+  border: none; background: none; cursor: pointer;
+  width: 24px; height: 24px; border-radius: 50%;
+  font-size: 12.5px; color: var(--muted); display: flex;
+  align-items: center; justify-content: center;
+}
+.msg-action-btn:hover { background: var(--paper); color: var(--text); }
+
+.msg-react-picker {
+  position: absolute; top: -46px; z-index: 5;
+  display: flex; gap: 2px;
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: 999px; padding: 4px; box-shadow: var(--shadow);
+}
+.msg-row.mine .msg-react-picker { right: 8px; }
+.msg-row:not(.mine) .msg-react-picker { left: 8px; }
+.msg-react-picker button {
+  border: none; background: none; cursor: pointer;
+  font-size: 16px; width: 26px; height: 26px; border-radius: 50%;
+}
+.msg-react-picker button:hover { background: var(--paper); }
+
+.msg-reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.msg-reaction-pill {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 11.5px; border: 1px solid var(--line);
+  border-radius: 999px; padding: 1px 7px;
+  background: var(--paper); cursor: pointer;
+}
+.msg-reaction-pill.mine { border-color: var(--blue); background: var(--blue-soft); }
+
+.msg-edit-box { display: flex; flex-direction: column; gap: 6px; min-width: 200px; }
+.msg-edit-box textarea {
+  resize: none; border: 1px solid var(--line); border-radius: 8px;
+  padding: 6px 8px; font: inherit; min-height: 36px;
+}
+.msg-edit-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.msg-edit-actions button { font-size: 11.5px; padding: 3px 9px; }
+.msg-edited-tag { font-style: italic; color: var(--muted); }
+
+/* ---------- Search ---------- */
+.msg-search-btn {
+  border: 1px solid var(--line); background: var(--card);
+  border-radius: var(--r); width: 34px; height: 34px;
+  cursor: pointer; font-size: 14px; color: var(--muted); flex-shrink: 0;
+}
+.msg-search-btn:hover { color: var(--text); }
+.msg-search-bar {
+  padding: 8px 12px; border-bottom: 1px solid var(--line);
+  background: var(--card);
+}
+.msg-search-bar input {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--line);
+  border-radius: var(--r); background: var(--paper);
+}
+.msg-search-results { overflow-y: auto; flex: 1; min-height: 0; }
+.msg-search-hit {
+  padding: 10px 16px; border-bottom: 1px solid var(--line-soft); cursor: pointer;
+}
+.msg-search-hit:hover { background: var(--card); }
+.msg-search-hit .hd { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--muted); margin-bottom: 2px; }
+.msg-search-hit .snippet { font-size: 13px; }
+
 .msg-img {
   display: block;
   max-width: 260px; max-height: 260px;

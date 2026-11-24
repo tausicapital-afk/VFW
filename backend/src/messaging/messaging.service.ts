@@ -17,6 +17,19 @@ import {
   SendMessageDto,
 } from './dto';
 
+/**
+ * How long after sending a message its sender may still edit it.
+ *
+ * No existing numeric-window convention to follow: the closest analogue,
+ * Payroll invoice editing (`payroll.service.ts` `editInvoice`/`approveInvoice`),
+ * gates on *state* (unapproved vs. approved) rather than a clock. Chat has no
+ * equivalent state machine — a message is just sent — so this picks a generous,
+ * chat-appropriate window instead: long enough to fix a typo you notice a few
+ * messages later, short enough that editing does not become a way to quietly
+ * rewrite something other participants already read and reacted to.
+ */
+export const EDIT_WINDOW_MINUTES = 15;
+
 // What the client needs about each participant to render a header and ticks.
 const participantSelect = {
   id: true,
@@ -32,6 +45,7 @@ const participantSelect = {
 const messageInclude = {
   sender: { select: { id: true, name: true, colour: true } },
   attachments: true,
+  reactions: { select: { emoji: true, userId: true } },
 } satisfies Prisma.MessageInclude;
 
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
@@ -297,6 +311,153 @@ export class MessagingService {
     });
 
     return { message, recipientIds: recipients.map((r) => r.userId) };
+  }
+
+  /** Load a message and confirm it belongs to the conversation the caller named. */
+  private async findMessageIn(conversationId: string, messageId: string) {
+    const message = await this.prisma.message.findUnique({ where: { id: messageId } });
+    if (!message || message.conversationId !== conversationId) {
+      throw new NotFoundException('Message not found');
+    }
+    return message;
+  }
+
+  /**
+   * Edit your own message's text. Sender-only, no exceptions — not even an
+   * admin may edit someone else's message, because this is chat, not a
+   * moderated record; see EDIT_WINDOW_MINUTES for the time-limit rationale.
+   */
+  async editMessage(conversationId: string, messageId: string, user: AuthUser, body: string) {
+    await this.assertMember(conversationId, user.id);
+    const message = await this.findMessageIn(conversationId, messageId);
+
+    if (message.senderId !== user.id) {
+      throw new ForbiddenException('You can only edit your own message');
+    }
+    if (message.deletedAt) {
+      throw new BadRequestException('A deleted message cannot be edited');
+    }
+
+    const ageMs = Date.now() - message.createdAt.getTime();
+    if (ageMs > EDIT_WINDOW_MINUTES * 60_000) {
+      throw new BadRequestException(
+        `A message can only be edited within ${EDIT_WINDOW_MINUTES} minutes of sending`,
+      );
+    }
+
+    const trimmed = body.trim();
+    if (!trimmed) throw new BadRequestException('An edited message needs text');
+
+    return this.prisma.message.update({
+      where: { id: messageId },
+      data: { body: trimmed, editedAt: new Date() },
+      include: messageInclude,
+    });
+  }
+
+  /**
+   * Soft-delete your own message. Sender-only, same rule as edit. The row
+   * stays (so the thread keeps its tombstone — "This message was deleted" — in
+   * place rather than leaving a gap in `seq`), but the body and any
+   * attachments/reactions are scrubbed so the content itself does not linger
+   * in the database or go back over the wire to other participants.
+   */
+  async deleteMessage(conversationId: string, messageId: string, user: AuthUser) {
+    await this.assertMember(conversationId, user.id);
+    const message = await this.findMessageIn(conversationId, messageId);
+
+    if (message.senderId !== user.id) {
+      throw new ForbiddenException('You can only delete your own message');
+    }
+    if (message.deletedAt) {
+      // Idempotent: deleting an already-deleted message just returns it.
+      return this.prisma.message.findUniqueOrThrow({ where: { id: messageId }, include: messageInclude });
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.messageAttachment.deleteMany({ where: { messageId } });
+      await tx.messageReaction.deleteMany({ where: { messageId } });
+      return tx.message.update({
+        where: { id: messageId },
+        data: { deletedAt: new Date(), body: null },
+        include: messageInclude,
+      });
+    });
+  }
+
+  // --- Reactions -------------------------------------------------------------
+
+  /**
+   * Add (or, if it already exists, no-op) one of your reactions to a message.
+   * `upsert` on the (messageId, userId, emoji) unique constraint makes a
+   * double-click idempotent rather than a 500 from a duplicate-key error.
+   */
+  async addReaction(conversationId: string, messageId: string, user: AuthUser, emoji: string) {
+    await this.assertMember(conversationId, user.id);
+    const message = await this.findMessageIn(conversationId, messageId);
+    if (message.deletedAt) throw new BadRequestException('Cannot react to a deleted message');
+
+    await this.prisma.messageReaction.upsert({
+      where: { messageId_userId_emoji: { messageId, userId: user.id, emoji } },
+      update: {},
+      create: { messageId, userId: user.id, emoji },
+    });
+    return this.reactionsFor(messageId);
+  }
+
+  /** Remove your own reaction — "toggling off" is just deleting this row. */
+  async removeReaction(conversationId: string, messageId: string, user: AuthUser, emoji: string) {
+    await this.assertMember(conversationId, user.id);
+    await this.findMessageIn(conversationId, messageId);
+
+    await this.prisma.messageReaction.deleteMany({
+      where: { messageId, userId: user.id, emoji },
+    });
+    return this.reactionsFor(messageId);
+  }
+
+  private async reactionsFor(messageId: string) {
+    return this.prisma.messageReaction.findMany({
+      where: { messageId },
+      select: { emoji: true, userId: true },
+    });
+  }
+
+  // --- Search ------------------------------------------------------------
+
+  /**
+   * Search message bodies. Scoped to the caller's own conversations only — the
+   * `in: myConvIds` clause is drawn either from an explicit, membership-checked
+   * `conversationId` or from `conversationIdsFor(user.id)`, so a search can
+   * never surface a message from a conversation the caller isn't in. Plain
+   * `contains`/`insensitive` (Prisma's ILIKE), matching the convention already
+   * used by contacts search (`contacts.service.ts`); message volume in an
+   * internal chat tool does not justify a search index (tsvector/etc. — not
+   * used anywhere else in this codebase either).
+   */
+  async searchMessages(user: AuthUser, q: string, conversationId?: string) {
+    const term = q.trim();
+    if (!term) return [];
+
+    let convIds: string[];
+    if (conversationId) {
+      await this.assertMember(conversationId, user.id);
+      convIds = [conversationId];
+    } else {
+      convIds = await this.conversationIdsFor(user.id);
+    }
+    if (convIds.length === 0) return [];
+
+    return this.prisma.message.findMany({
+      where: {
+        conversationId: { in: convIds },
+        deletedAt: null,
+        body: { contains: term, mode: 'insensitive' },
+      },
+      orderBy: { seq: 'desc' },
+      take: 50,
+      include: messageInclude,
+    });
   }
 
   // --- Receipts ------------------------------------------------------------

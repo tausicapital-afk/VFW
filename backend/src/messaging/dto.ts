@@ -127,3 +127,29 @@ export class MessagesQueryDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100)
   limit?: number;
 }
+
+export class EditMessageDto {
+  @IsString() @MinLength(1) @MaxLength(8000)
+  body: string;
+}
+
+// A whitelist, not a free-text field or an emoji-picker dependency: the app has
+// none installed (see frontend/package.json), and an internal chat tool does not
+// need the full Unicode emoji table — a small, fixed set covers the common
+// reactions (agreement, appreciation, humour, celebration) the way Slack's
+// default "quick reactions" bar does.
+export const REACTION_EMOJIS = ['👍', '❤️', '😂', '🎉'] as const;
+
+export class ReactionDto {
+  @IsIn(REACTION_EMOJIS)
+  emoji: (typeof REACTION_EMOJIS)[number];
+}
+
+export class SearchMessagesDto {
+  @IsString() @MinLength(1) @MaxLength(200)
+  q: string;
+
+  // Omitted → search across every conversation the caller is in.
+  @IsOptional() @IsString()
+  conversationId?: string;
+}
